@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { SymbolView } from 'expo-symbols';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import Animated, { Easing, FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -104,8 +104,8 @@ export function PayoutSetup({ visible, blurTarget, onClose, onConnected }: Payou
           </Animated.View>
 
           <Animated.View
-            entering={SlideInDown.springify().damping(24).stiffness(230)}
-            exiting={SlideOutDown.duration(340)}
+            entering={SlideInDown.duration(460).easing(Easing.out(Easing.cubic))}
+            exiting={SlideOutDown.duration(320).easing(Easing.in(Easing.cubic))}
             style={styles.sheet}>
             <LinearGradient
               colors={['#0B132B', '#030712']}

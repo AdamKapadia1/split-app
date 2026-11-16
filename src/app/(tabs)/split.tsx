@@ -296,7 +296,7 @@ function ConnectBankButton({
   linked: boolean;
   onPress: () => void;
 }) {
-  const snap = useSnapScale(linked);
+  const press = useSnapScale(false, true);
 
   return (
     <SnapPressable
@@ -304,9 +304,9 @@ function ConnectBankButton({
       accessibilityLabel={label}
       accessibilityState={{ selected: linked }}
       onPress={onPress}
-      onPressIn={snap.onPressIn}
-      onPressOut={snap.onPressOut}
-      style={[styles.connectPress, linked && styles.connectGlow, snap.style]}>
+      onPressIn={press.onPressIn}
+      onPressOut={press.onPressOut}
+      style={[styles.connectPress, linked && styles.connectGlow, press.style]}>
       <Frost style={[styles.connect, linked && styles.connectReady]}>
         <WalletIcon color={linked ? ICE : Colors.textSecondary} />
         <Text style={[styles.connectLabel, linked && styles.connectLabelReady]} numberOfLines={1}>

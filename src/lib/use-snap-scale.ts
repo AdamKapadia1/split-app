@@ -3,10 +3,11 @@ import { Pressable } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from 'react-native-reanimated';
 
 const SNAP = { damping: 14, stiffness: 380, mass: 0.45 };
+const FIRM = { damping: 34, stiffness: 520, mass: 0.55 };
 
 export const SnapPressable = Animated.createAnimatedComponent(Pressable);
 
-export function useSnapScale(signal: boolean | string | number = true) {
+export function useSnapScale(signal: boolean | string | number = true, firm = false) {
   const press = useSharedValue(1);
   const pop = useSharedValue(1);
   const seen = useRef(false);
@@ -17,7 +18,7 @@ export function useSnapScale(signal: boolean | string | number = true) {
       return;
     }
 
-    if (signal === false) {
+    if (firm || signal === false) {
       return;
     }
 
@@ -25,7 +26,7 @@ export function useSnapScale(signal: boolean | string | number = true) {
       withTiming(1.045, { duration: 90, easing: Easing.out(Easing.quad) }),
       withSpring(1, SNAP),
     );
-  }, [pop, signal]);
+  }, [firm, pop, signal]);
 
   const style = useAnimatedStyle(() => ({
     transform: [{ scale: press.value * pop.value }],
@@ -34,10 +35,13 @@ export function useSnapScale(signal: boolean | string | number = true) {
   return {
     style,
     onPressIn: () => {
-      press.value = withTiming(0.94, { duration: 70, easing: Easing.out(Easing.quad) });
+      press.value = withTiming(firm ? 0.975 : 0.94, {
+        duration: firm ? 90 : 70,
+        easing: Easing.out(Easing.quad),
+      });
     },
     onPressOut: () => {
-      press.value = withSpring(1, SNAP);
+      press.value = withSpring(1, firm ? FIRM : SNAP);
     },
   };
 }
