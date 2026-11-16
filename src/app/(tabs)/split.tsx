@@ -1,13 +1,15 @@
+import { BlurTargetView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ComponentRef } from 'react';
 import { Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
+import { PayoutSetup, payoutRouteLabel, type PayoutBank } from '@/components/payout-setup';
 import { Colors, Spacing } from '@/constants/theme';
 import { mediumHaptic, successHaptic, tickHaptic } from '@/lib/haptics';
 import { SnapPressable, useSnapScale } from '@/lib/use-snap-scale';
@@ -127,6 +129,9 @@ export default function SplitScreen() {
   const share = shareFor(receipt, claims, selected.id);
   const money = (amount: number) => formatMoney(amount, receipt.currency);
   const scrollAnchor = useRef(0);
+  const blurTarget = useRef<ComponentRef<typeof View>>(null);
+  const [payoutOpen, setPayoutOpen] = useState(false);
+  const [payout, setPayout] = useState<PayoutBank | null>(null);
 
   function onPeopleScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
     const x = event.nativeEvent.contentOffset.x;
@@ -161,6 +166,7 @@ export default function SplitScreen() {
 
   return (
     <NightScreen>
+      <BlurTargetView ref={blurTarget} style={styles.flex}>
       <View
         style={[
           styles.peopleBar,
@@ -231,6 +237,15 @@ export default function SplitScreen() {
             </View>
           </Animated.View>
 
+          <ConnectBankButton
+            label={payout ? payoutRouteLabel(payout) : 'Connect Bank to Receive Funds'}
+            linked={payout !== null}
+            onPress={() => {
+              tickHaptic();
+              setPayoutOpen(true);
+            }}
+          />
+
           <TouchableOpacity
             accessibilityRole="button"
             accessibilityLabel="Share Breakdown"
@@ -250,7 +265,55 @@ export default function SplitScreen() {
           </TouchableOpacity>
         </Frost>
       </View>
+      </BlurTargetView>
+      <PayoutSetup
+        blurTarget={blurTarget}
+        visible={payoutOpen}
+        onClose={() => setPayoutOpen(false)}
+        onConnected={(bank) => {
+          setPayoutOpen(false);
+          setTimeout(() => setPayout(bank), 360);
+        }}
+      />
     </NightScreen>
+  );
+}
+
+function WalletIcon({ color }: { color: string }) {
+  return (
+    <View style={[styles.wallet, { borderColor: color }]}>
+      <View style={[styles.walletClasp, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
+function ConnectBankButton({
+  label,
+  linked,
+  onPress,
+}: {
+  label: string;
+  linked: boolean;
+  onPress: () => void;
+}) {
+  const snap = useSnapScale(linked);
+
+  return (
+    <SnapPressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: linked }}
+      onPress={onPress}
+      onPressIn={snap.onPressIn}
+      onPressOut={snap.onPressOut}
+      style={[styles.connectPress, linked && styles.connectGlow, snap.style]}>
+      <Frost style={[styles.connect, linked && styles.connectReady]}>
+        <WalletIcon color={linked ? ICE : Colors.textSecondary} />
+        <Text style={[styles.connectLabel, linked && styles.connectLabelReady]} numberOfLines={1}>
+          {label}
+        </Text>
+      </Frost>
+    </SnapPressable>
   );
 }
 
@@ -381,6 +444,9 @@ function ReceiptLine({
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   peopleBar: {
     paddingBottom: Spacing.two,
     gap: Spacing.three,
@@ -593,6 +659,52 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
+  },
+  connectPress: {
+    borderRadius: 18,
+  },
+  connectGlow: {
+    shadowColor: ICE,
+    shadowOpacity: 0.55,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 8,
+  },
+  connect: {
+    minHeight: 54,
+    borderRadius: 18,
+    paddingHorizontal: Spacing.three,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+  },
+  connectReady: {
+    borderColor: ICE,
+  },
+  wallet: {
+    width: 18,
+    height: 13,
+    borderRadius: 3,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    paddingRight: 2,
+  },
+  walletClasp: {
+    width: 6,
+    height: 4,
+    borderRadius: 1,
+  },
+  connectLabel: {
+    flexShrink: 1,
+    color: Colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  connectLabelReady: {
+    color: ICE,
   },
   sharePress: {
     borderRadius: 999,

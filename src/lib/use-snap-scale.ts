@@ -41,3 +41,15 @@ export function useSnapScale(signal: boolean | string | number = true) {
     },
   };
 }
+
+export function useHoldScale(held: boolean) {
+  const press = useSharedValue(1);
+
+  useEffect(() => {
+    press.value = withSpring(held ? 0.96 : 1, { damping: 15, stiffness: 340, mass: 0.55 });
+  }, [held, press]);
+
+  return useAnimatedStyle(() => ({
+    transform: [{ scale: press.value }],
+  }));
+}
