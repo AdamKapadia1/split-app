@@ -1,7 +1,10 @@
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
+import { NightScreen } from '@/components/night-screen';
 import { Colors } from '@/constants/theme';
+import { useSupabaseSession } from '@/lib/use-session';
 
 const AppTheme = {
   ...DarkTheme,
@@ -20,12 +23,44 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={AppTheme}>
       <StatusBar style="light" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: Colors.background },
-        }}
-      />
+      <RootNavigator />
     </ThemeProvider>
   );
 }
+
+function RootNavigator() {
+  const { session, ready } = useSupabaseSession();
+
+  if (!ready) {
+    return (
+      <NightScreen>
+        <View style={styles.loading}>
+          <ActivityIndicator color="#38BDF8" />
+        </View>
+      </NightScreen>
+    );
+  }
+
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: Colors.background },
+      }}>
+      <Stack.Protected guard={session !== null}>
+        <Stack.Screen name="(tabs)" />
+      </Stack.Protected>
+      <Stack.Protected guard={session === null}>
+        <Stack.Screen name="sign-in" />
+      </Stack.Protected>
+    </Stack>
+  );
+}
+
+const styles = StyleSheet.create({
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
