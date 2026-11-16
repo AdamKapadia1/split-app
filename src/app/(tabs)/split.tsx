@@ -3,6 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
+  FadeIn,
   useAnimatedStyle,
   useSharedValue,
   withSequence,
@@ -10,7 +11,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Colors, Spacing } from '@/constants/theme';
+import { Surface } from '@/components/surface';
+import { Colors, Radius, Spacing } from '@/constants/theme';
+import { tapHaptic } from '@/lib/haptics';
 import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
 
 const PEOPLE = [
@@ -167,6 +170,7 @@ export default function SplitScreen() {
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.four }]}>
+        <Animated.View entering={FadeIn.duration(360)} style={styles.receipt}>
         {imageUri ? (
           <Image
             accessibilityLabel="Scanned receipt"
@@ -191,9 +195,11 @@ export default function SplitScreen() {
             />
           ))}
         </View>
+        </Animated.View>
       </ScrollView>
 
-      <View style={[styles.totals, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 72 }]}>
+      <View style={[styles.summaryWrap, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 72 }]}>
+        <Surface style={styles.totals}>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Subtotal</Text>
           <Text style={styles.totalValue}>{money(receipt.subtotal)}</Text>
@@ -208,9 +214,8 @@ export default function SplitScreen() {
           <Text style={styles.grandValue}>{money(receipt.total)}</Text>
         </View>
 
-        <Animated.View
-          key={selected.id}
-          style={[styles.owed, { borderColor: selected.color }]}>
+        <Animated.View key={selected.id} entering={FadeIn.duration(220)}>
+          <Surface style={[styles.owed, { borderColor: selected.color }]}>
           <Text style={styles.owedKicker}>Individual Owed</Text>
           <View style={styles.totalRow}>
             <Text style={[styles.owedName, { color: selected.color }]}>{selected.name}</Text>
@@ -224,6 +229,7 @@ export default function SplitScreen() {
             <Text style={styles.totalLabel}>Share of service charge</Text>
             <Text style={styles.totalValue}>{money(share.serviceShare)}</Text>
           </View>
+          </Surface>
         </Animated.View>
 
         <TouchableOpacity
@@ -231,11 +237,13 @@ export default function SplitScreen() {
           accessibilityLabel="Share Breakdown"
           activeOpacity={0.8}
           onPress={() => {
+            tapHaptic();
             void shareBreakdown();
           }}
           style={styles.shareButton}>
           <Text style={styles.shareLabel}>Share Breakdown</Text>
         </TouchableOpacity>
+        </Surface>
       </View>
     </View>
   );
@@ -265,7 +273,10 @@ function PersonAvatar({
       accessibilityRole="button"
       accessibilityLabel={person.name}
       accessibilityState={{ selected }}
-      onPress={onPress}
+      onPress={() => {
+        tapHaptic();
+        onPress();
+      }}
       style={styles.personButton}>
       <Animated.View
         style={[
@@ -319,17 +330,17 @@ function ReceiptLine({
       accessibilityLabel={
         names ? `${item.quantity}x ${item.name}, claimed by ${names}` : `${item.quantity}x ${item.name}, unclaimed`
       }
-      onPress={onPress}>
-      <Animated.View
-        style={[
-          styles.itemRow,
-          primary
-            ? { backgroundColor: `${primary.color}1A`, borderColor: primary.color }
-            : claimants.length > 1
-              ? styles.itemSplit
-              : null,
-          animatedStyle,
-        ]}>
+      onPress={() => {
+        tapHaptic();
+        onPress();
+      }}>
+      <Animated.View style={animatedStyle}>
+        <Surface
+          style={[
+            styles.itemRow,
+            primary ? { borderColor: primary.color } : claimants.length > 1 ? styles.itemSplit : null,
+          ]}>
+          {primary ? <View style={[styles.tint, { backgroundColor: `${primary.color}1A` }]} /> : null}
         {claimants.length > 0 ? (
           <View style={styles.colorStack}>
             {claimants.map((id) => (
@@ -366,6 +377,7 @@ function ReceiptLine({
             </View>
           ) : null}
         </View>
+        </Surface>
       </Animated.View>
     </Pressable>
   );
@@ -414,18 +426,24 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: Spacing.four,
+  },
+  receipt: {
     gap: Spacing.four,
   },
   thumbnail: {
     width: '100%',
     height: 180,
-    borderRadius: 24,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
     backgroundColor: Colors.backgroundElement,
   },
   placeholder: {
     width: '100%',
     height: 180,
-    borderRadius: 24,
+    borderRadius: Radius.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
     backgroundColor: Colors.backgroundElement,
     alignItems: 'center',
     justifyContent: 'center',
@@ -441,15 +459,16 @@ const styles = StyleSheet.create({
   },
   itemRow: {
     flexDirection: 'row',
-    overflow: 'hidden',
-    backgroundColor: Colors.backgroundElement,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'transparent',
   },
   itemSplit: {
-    backgroundColor: Colors.backgroundSelected,
-    borderColor: Colors.backgroundSelected,
+    borderColor: Colors.border,
+  },
+  tint: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
   },
   colorStack: {
     width: 6,
@@ -517,13 +536,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  summaryWrap: {
+    paddingHorizontal: Spacing.four,
+  },
   totals: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
+    paddingBottom: Spacing.three,
     gap: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.backgroundSelected,
-    backgroundColor: Colors.background,
   },
   totalRow: {
     flexDirection: 'row',
@@ -559,9 +579,6 @@ const styles = StyleSheet.create({
   },
   owed: {
     marginTop: Spacing.two,
-    borderWidth: 1,
-    borderRadius: 18,
-    backgroundColor: Colors.backgroundElement,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     gap: Spacing.two,

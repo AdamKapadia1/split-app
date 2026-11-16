@@ -1,17 +1,14 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router, useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Linking,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Skeleton } from '@/components/skeleton';
+import { Surface } from '@/components/surface';
 import { Colors, Spacing } from '@/constants/theme';
+import { tapHaptic } from '@/lib/haptics';
 import { parseReceiptImage } from '@/lib/parse-receipt';
 
 export default function ScannerScreen() {
@@ -60,6 +57,7 @@ export default function ScannerScreen() {
       return;
     }
 
+    tapHaptic();
     setCapturing(true);
     setError(null);
 
@@ -90,9 +88,9 @@ export default function ScannerScreen() {
 
   if (!permission || (!permission.granted && permission.canAskAgain && !didRequest)) {
     return (
-      <View style={styles.fallback}>
+      <Animated.View entering={FadeIn.duration(280)} style={styles.fallback}>
         <ActivityIndicator color={Colors.accent} />
-      </View>
+      </Animated.View>
     );
   }
 
@@ -100,7 +98,7 @@ export default function ScannerScreen() {
     const canAskAgain = permission.canAskAgain;
 
     return (
-      <View style={styles.fallback}>
+      <Animated.View entering={FadeIn.duration(320)} style={styles.fallback}>
         <Text accessibilityRole="header" style={styles.title}>
           Camera access
         </Text>
@@ -112,6 +110,7 @@ export default function ScannerScreen() {
         <Pressable
           accessibilityRole="button"
           onPress={() => {
+            tapHaptic();
             if (canAskAgain) {
               void requestPermission();
               return;
@@ -121,7 +120,7 @@ export default function ScannerScreen() {
           style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
           <Text style={styles.buttonLabel}>{canAskAgain ? 'Allow camera' : 'Open Settings'}</Text>
         </Pressable>
-      </View>
+      </Animated.View>
     );
   }
 
@@ -157,20 +156,33 @@ export default function ScannerScreen() {
         </Pressable>
       </View>
       {processing || error ? (
-        <View accessibilityLiveRegion="polite" accessibilityRole="progressbar" style={styles.processing}>
-          {processing ? <ActivityIndicator color={Colors.accent} size="large" /> : null}
+        <Animated.View
+          entering={FadeIn.duration(280)}
+          accessibilityLiveRegion="polite"
+          accessibilityRole="progressbar"
+          style={styles.processing}>
           <Text style={processing ? styles.processingLabel : styles.errorLabel}>
             {processing ? 'Processing...' : error}
           </Text>
+          {processing ? (
+            <Surface style={styles.skeletonCard}>
+              <Skeleton style={styles.skeletonWide} />
+              <Skeleton style={styles.skeletonLine} />
+              <Skeleton style={styles.skeletonShort} />
+            </Surface>
+          ) : null}
           {error ? (
             <Pressable
               accessibilityRole="button"
-              onPress={() => setError(null)}
+              onPress={() => {
+                tapHaptic();
+                setError(null);
+              }}
               style={({ pressed }) => [styles.button, styles.retryButton, pressed && styles.buttonPressed]}>
               <Text style={styles.buttonLabel}>Try again</Text>
             </Pressable>
           ) : null}
-        </View>
+        </Animated.View>
       ) : null}
     </View>
   );
@@ -193,7 +205,7 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: 28,
     fontWeight: '700',
-    letterSpacing: -0.4,
+    letterSpacing: -0.8,
     textAlign: 'center',
   },
   message: {
@@ -217,7 +229,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: 'rgba(9, 9, 11, 0.82)',
+    backgroundColor: 'rgba(0, 0, 0, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.three,
@@ -227,7 +239,24 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: 22,
     fontWeight: '700',
-    letterSpacing: -0.3,
+    letterSpacing: -0.6,
+  },
+  skeletonCard: {
+    width: '100%',
+    maxWidth: 320,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.four,
+    gap: Spacing.three,
+  },
+  skeletonWide: {
+    width: '72%',
+    height: 18,
+  },
+  skeletonLine: {
+    width: '100%',
+  },
+  skeletonShort: {
+    width: '46%',
   },
   errorLabel: {
     color: Colors.text,

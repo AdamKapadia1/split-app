@@ -10,7 +10,7 @@ const AppTheme = {
     background: Colors.background,
     card: Colors.background,
     text: Colors.text,
-    border: Colors.backgroundSelected,
+    border: Colors.border,
     primary: Colors.accent,
     notification: Colors.accent,
   },
