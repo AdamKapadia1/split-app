@@ -1,4 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -8,10 +9,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
+import { ScanLaser } from '@/components/scan-laser';
 import { Skeleton } from '@/components/skeleton';
 import { Colors, Spacing } from '@/constants/theme';
-import { tapHaptic } from '@/lib/haptics';
+import { mediumHaptic } from '@/lib/haptics';
 import { parseReceiptImage } from '@/lib/parse-receipt';
+
+const ICE = '#38BDF8';
+const NAVY = '#030712';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -23,6 +28,7 @@ export default function ScannerScreen() {
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [frameUri, setFrameUri] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useFocusEffect(
@@ -31,6 +37,7 @@ export default function ScannerScreen() {
         setCameraReady(false);
         setCapturing(false);
         setProcessing(false);
+        setFrameUri(null);
         setError(null);
       };
     }, []),
@@ -59,7 +66,7 @@ export default function ScannerScreen() {
       return;
     }
 
-    tapHaptic();
+    mediumHaptic();
     setCapturing(true);
     setError(null);
 
@@ -70,6 +77,7 @@ export default function ScannerScreen() {
         return;
       }
 
+      setFrameUri(photo.uri);
       setProcessing(true);
       const receipt = await parseReceiptImage(image);
       router.navigate({
@@ -82,6 +90,7 @@ export default function ScannerScreen() {
     } catch (caught) {
       console.error(caught);
       setProcessing(false);
+      setFrameUri(null);
       setError(caught instanceof Error ? caught.message : "Couldn't read this receipt.");
     } finally {
       setCapturing(false);
@@ -92,7 +101,7 @@ export default function ScannerScreen() {
     return (
       <NightScreen>
         <Animated.View entering={FadeIn.duration(280)} style={styles.fallback}>
-          <ActivityIndicator color={Colors.accent} />
+          <ActivityIndicator color={ICE} />
         </Animated.View>
       </NightScreen>
     );
@@ -115,7 +124,7 @@ export default function ScannerScreen() {
           <GradientButton
             label={canAskAgain ? 'Allow camera' : 'Open Settings'}
             onPress={() => {
-              tapHaptic();
+              mediumHaptic();
               if (canAskAgain) {
                 void requestPermission();
                 return;
@@ -130,7 +139,7 @@ export default function ScannerScreen() {
 
   return (
     <NightScreen>
-      {isFocused ? (
+      {isFocused && !processing ? (
         <CameraView
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
@@ -139,6 +148,27 @@ export default function ScannerScreen() {
           onCameraReady={() => setCameraReady(true)}
           onMountError={() => setCameraReady(false)}
         />
+      ) : null}
+      {processing && frameUri ? (
+        <Image accessibilityLabel="Receipt being scanned" contentFit="cover" source={{ uri: frameUri }} style={StyleSheet.absoluteFill} />
+      ) : null}
+      {capturing || processing ? (
+        <View pointerEvents="none" style={styles.scanFrame}>
+          <View style={styles.scanScrim} />
+          <ScanLaser />
+          {processing ? (
+            <View style={styles.processingCopy}>
+              <Text accessibilityLiveRegion="polite" style={styles.processingLabel}>
+                Processing...
+              </Text>
+              <Frost style={styles.skeletonCard}>
+                <Skeleton style={styles.skeletonWide} />
+                <Skeleton style={styles.skeletonLine} />
+                <Skeleton style={styles.skeletonShort} />
+              </Frost>
+            </View>
+          ) : null}
+        </View>
       ) : null}
       <View
         pointerEvents="box-none"
@@ -151,31 +181,16 @@ export default function ScannerScreen() {
           }}
         />
       </View>
-      {processing || error ? (
-        <Animated.View
-          entering={FadeIn.duration(280)}
-          accessibilityLiveRegion="polite"
-          accessibilityRole="progressbar"
-          style={styles.processing}>
-          <Text style={processing ? styles.processingLabel : styles.errorLabel}>
-            {processing ? 'Processing...' : error}
-          </Text>
-          {processing ? (
-            <Frost style={styles.skeletonCard}>
-              <Skeleton style={styles.skeletonWide} />
-              <Skeleton style={styles.skeletonLine} />
-              <Skeleton style={styles.skeletonShort} />
-            </Frost>
-          ) : null}
-          {error ? (
-            <GradientButton
-              label="Try again"
-              onPress={() => {
-                tapHaptic();
-                setError(null);
-              }}
-            />
-          ) : null}
+      {error ? (
+        <Animated.View entering={FadeIn.duration(280)} accessibilityLiveRegion="polite" style={styles.processing}>
+          <Text style={styles.errorLabel}>{error}</Text>
+          <GradientButton
+            label="Try again"
+            onPress={() => {
+              mediumHaptic();
+              setError(null);
+            }}
+          />
         </Animated.View>
       ) : null}
     </NightScreen>
@@ -201,7 +216,7 @@ function GradientButton({
       onPress={onPress}
       style={[styles.sharePress, disabled && styles.buttonDisabled]}>
       <LinearGradient
-        colors={['#F4FFB0', '#D6FF4A', '#A3E635']}
+        colors={['#7DD3FC', '#38BDF8']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.shareButton}>
@@ -237,9 +252,35 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    zIndex: 3,
     alignItems: 'center',
     paddingHorizontal: Spacing.four,
     gap: Spacing.two,
+  },
+  scanFrame: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 2,
+  },
+  scanScrim: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(3, 7, 18, 0.28)',
+  },
+  processingCopy: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 168,
+    alignItems: 'center',
+    gap: Spacing.three,
+    paddingHorizontal: Spacing.four,
   },
   processing: {
     position: 'absolute',
@@ -251,7 +292,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.three,
-    zIndex: 2,
+    zIndex: 4,
   },
   processingLabel: {
     color: Colors.text,
@@ -288,7 +329,7 @@ const styles = StyleSheet.create({
   sharePress: {
     alignSelf: 'stretch',
     borderRadius: 999,
-    shadowColor: '#D6FF4A',
+    shadowColor: ICE,
     shadowOpacity: 0.38,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
@@ -305,7 +346,7 @@ const styles = StyleSheet.create({
     opacity: 0.55,
   },
   buttonLabel: {
-    color: '#071006',
+    color: NAVY,
     fontSize: 17,
     fontWeight: '700',
     letterSpacing: -0.2,

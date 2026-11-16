@@ -1,15 +1,16 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
 import { Colors, Spacing } from '@/constants/theme';
-import { tapHaptic } from '@/lib/haptics';
+import { mediumHaptic, successHaptic, tickHaptic } from '@/lib/haptics';
+import { SnapPressable, useSnapScale } from '@/lib/use-snap-scale';
 import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
 
 const PEOPLE = [
@@ -125,6 +126,17 @@ export default function SplitScreen() {
   const selected = personById(selectedId) ?? PEOPLE[0];
   const share = shareFor(receipt, claims, selected.id);
   const money = (amount: number) => formatMoney(amount, receipt.currency);
+  const scrollAnchor = useRef(0);
+
+  function onPeopleScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    const x = event.nativeEvent.contentOffset.x;
+    if (Math.abs(x - scrollAnchor.current) < 64) {
+      return;
+    }
+
+    scrollAnchor.current = x;
+    tickHaptic();
+  }
 
   async function shareBreakdown() {
     try {
@@ -157,6 +169,8 @@ export default function SplitScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          scrollEventThrottle={32}
+          onScroll={onPeopleScroll}
           contentContainerStyle={styles.peopleRow}>
           {PEOPLE.map((person) => (
             <PersonPill
@@ -222,7 +236,7 @@ export default function SplitScreen() {
             accessibilityLabel="Share Breakdown"
             activeOpacity={0.85}
             onPress={() => {
-              tapHaptic();
+              successHaptic();
               void shareBreakdown();
             }}
             style={styles.sharePress}>
@@ -260,16 +274,22 @@ function PersonPill({
   totalLabel: string;
   onPress: () => void;
 }) {
+  const snap = useSnapScale(selected);
+
   return (
-    <Pressable
+    <SnapPressable
       accessibilityRole="button"
       accessibilityLabel={`${person.name}, ${totalLabel}`}
       accessibilityState={{ selected }}
+      onPressIn={snap.onPressIn}
+      onPressOut={snap.onPressOut}
       onPress={() => {
-        tapHaptic();
+        if (!selected) {
+          tickHaptic();
+        }
         onPress();
       }}
-      style={styles.pillPress}>
+      style={[styles.pillPress, snap.style]}>
       <Frost
         style={[
           styles.pill,
@@ -295,7 +315,7 @@ function PersonPill({
           </Text>
         </View>
       </Frost>
-    </Pressable>
+    </SnapPressable>
   );
 }
 
@@ -314,20 +334,23 @@ function ReceiptLine({
     const name = personById(id)?.name;
     return name ? [name] : [];
   });
+  const snap = useSnapScale(names.join('|'));
 
   return (
-    <Pressable
+    <SnapPressable
       accessibilityRole="button"
       accessibilityLabel={
         names.length > 0
           ? `${item.quantity}x ${item.name}, claimed by ${names.join(', ')}`
           : `${item.quantity}x ${item.name}, unclaimed`
       }
+      onPressIn={snap.onPressIn}
+      onPressOut={snap.onPressOut}
       onPress={() => {
-        tapHaptic();
+        mediumHaptic();
         onPress();
       }}
-      style={styles.line}>
+      style={[styles.line, snap.style]}>
       <View style={styles.lineCopy}>
         <Text style={styles.lineName}>
           <Text style={styles.lineQty}>{item.quantity}× </Text>
@@ -353,7 +376,7 @@ function ReceiptLine({
         ) : null}
       </View>
       <Text style={styles.linePrice}>{amountLabel}</Text>
-    </Pressable>
+    </SnapPressable>
   );
 }
 
@@ -364,7 +387,7 @@ const styles = StyleSheet.create({
   },
   peopleRow: {
     paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.one,
+    paddingVertical: Spacing.two,
     gap: Spacing.two,
     alignItems: 'stretch',
   },

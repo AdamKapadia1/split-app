@@ -3,6 +3,7 @@ import { Platform, StyleSheet, Text } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { NightScreen } from '@/components/night-screen';
 import { Colors, Spacing } from '@/constants/theme';
 
 type ScreenProps = {
@@ -13,22 +14,24 @@ type ScreenProps = {
 
 export function Screen({ title, subtitle, children }: ScreenProps) {
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Animated.View entering={FadeIn.duration(420)} style={styles.container}>
-        <Text accessibilityRole="header" style={styles.title}>
-          {title}
-        </Text>
-        <Text style={styles.subtitle}>{subtitle}</Text>
-        {children}
-      </Animated.View>
-    </SafeAreaView>
+    <NightScreen>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <Animated.View entering={FadeIn.duration(420)} style={styles.container}>
+          <Text accessibilityRole="header" style={styles.title}>
+            {title}
+          </Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
+          {children}
+        </Animated.View>
+      </SafeAreaView>
+    </NightScreen>
   );
 }
 
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: 'transparent',
   },
   container: {
     flex: 1,
