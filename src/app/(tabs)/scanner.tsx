@@ -1,5 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useIsFocused } from 'expo-router';
+import { router, useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
+import { parseReceiptImage } from '@/lib/parse-receipt';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -22,13 +23,16 @@ export default function ScannerScreen() {
   const [didRequest, setDidRequest] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [snapped, setSnapped] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       return () => {
         setCameraReady(false);
-        setSnapped(false);
+        setCapturing(false);
+        setProcessing(false);
+        setError(null);
       };
     }, []),
   );
@@ -57,13 +61,28 @@ export default function ScannerScreen() {
     }
 
     setCapturing(true);
-    setSnapped(false);
+    setError(null);
 
     try {
-      const photo = await cameraRef.current.takePictureAsync();
-      setSnapped(Boolean(photo?.uri));
-    } catch {
-      setSnapped(false);
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      const image = photo?.base64 ?? photo?.uri;
+      if (!photo?.uri || !image) {
+        return;
+      }
+
+      setProcessing(true);
+      const receipt = await parseReceiptImage(image);
+      router.navigate({
+        pathname: '/split',
+        params: {
+          imageUri: photo.uri,
+          receipt: JSON.stringify(receipt),
+        },
+      });
+    } catch (caught) {
+      console.error(caught);
+      setProcessing(false);
+      setError(caught instanceof Error ? caught.message : "Couldn't read this receipt.");
     } finally {
       setCapturing(false);
     }
@@ -121,27 +140,38 @@ export default function ScannerScreen() {
       <View
         pointerEvents="box-none"
         style={[styles.footer, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 72 }]}>
-        {snapped ? (
-          <Text accessibilityLiveRegion="polite" style={styles.status}>
-            Receipt snapped
-          </Text>
-        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Snap Receipt"
           accessibilityState={{ disabled: !cameraReady || capturing, busy: capturing }}
-          disabled={!cameraReady || capturing}
+          disabled={!cameraReady || capturing || processing}
           onPress={() => {
             void snapReceipt();
           }}
           style={({ pressed }) => [
             styles.button,
-            (!cameraReady || capturing) && styles.buttonDisabled,
+            (!cameraReady || capturing || processing) && styles.buttonDisabled,
             pressed && styles.buttonPressed,
           ]}>
           <Text style={styles.buttonLabel}>{capturing ? 'Snapping…' : 'Snap Receipt'}</Text>
         </Pressable>
       </View>
+      {processing || error ? (
+        <View accessibilityLiveRegion="polite" accessibilityRole="progressbar" style={styles.processing}>
+          {processing ? <ActivityIndicator color={Colors.accent} size="large" /> : null}
+          <Text style={processing ? styles.processingLabel : styles.errorLabel}>
+            {processing ? 'Processing...' : error}
+          </Text>
+          {error ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setError(null)}
+              style={({ pressed }) => [styles.button, styles.retryButton, pressed && styles.buttonPressed]}>
+              <Text style={styles.buttonLabel}>Try again</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -181,10 +211,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
     gap: Spacing.two,
   },
-  status: {
+  processing: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(9, 9, 11, 0.82)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.three,
+    zIndex: 2,
+  },
+  processingLabel: {
     color: Colors.text,
-    fontSize: 14,
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  errorLabel: {
+    color: Colors.text,
+    fontSize: 16,
+    lineHeight: 24,
     fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: Spacing.four,
+  },
+  retryButton: {
+    alignSelf: 'center',
+    marginTop: Spacing.two,
+    minWidth: 180,
   },
   button: {
     alignSelf: 'stretch',
