@@ -6,7 +6,7 @@ import { Colors } from '@/constants/theme';
 export default function TabLayout() {
   return (
     <NativeTabs
-      backgroundColor={Colors.background}
+      backgroundColor="#030712"
       blurEffect="systemChromeMaterialDark"
       tintColor={Colors.accent}
       indicatorColor={Platform.OS === 'web' ? Colors.backgroundSelected : Colors.accent}

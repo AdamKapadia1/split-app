@@ -1,18 +1,14 @@
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import Animated, {
-  FadeIn,
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withSpring,
-} from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInRight, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Surface } from '@/components/surface';
-import { Colors, Radius, Spacing } from '@/constants/theme';
+import { Frost } from '@/components/frost';
+import { NightScreen } from '@/components/night-screen';
+import { Colors, Spacing } from '@/constants/theme';
 import { tapHaptic } from '@/lib/haptics';
 import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
 
@@ -21,6 +17,8 @@ const PEOPLE = [
   { id: 'sarah', name: 'Sarah', initial: 'S', color: '#C084FC' },
   { id: 'mike', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
 ] as const;
+
+const ICE = '#38BDF8';
 
 type Person = (typeof PEOPLE)[number];
 type PersonId = Person['id'];
@@ -149,119 +147,123 @@ export default function SplitScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <NightScreen>
       <View
         style={[
           styles.peopleBar,
           { paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.three },
         ]}>
-        <View style={styles.peopleRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.peopleRow}>
           {PEOPLE.map((person) => (
-            <PersonAvatar
+            <PersonPill
               key={person.id}
               person={person}
               selected={person.id === selected.id}
+              totalLabel={money(shareFor(receipt, claims, person.id).owed)}
               onPress={() => setSelectedId(person.id)}
             />
           ))}
-        </View>
+        </ScrollView>
         <Text style={styles.assignHint}>Tap a line to assign it to {selected.name}.</Text>
       </View>
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.four }]}>
-        <Animated.View entering={FadeIn.duration(360)} style={styles.receipt}>
-        {imageUri ? (
-          <Image
-            accessibilityLabel="Scanned receipt"
-            contentFit="cover"
-            source={{ uri: toImageUri(imageUri) }}
-            style={styles.thumbnail}
-          />
-        ) : (
-          <View style={styles.placeholder}>
-            <Text style={styles.placeholderText}>Snap a receipt to see it here.</Text>
-          </View>
-        )}
-
-        <View style={styles.items}>
-          {receipt.items.map((item, index) => (
-            <ReceiptLine
-              key={`${item.name}-${index}`}
-              item={item}
-              claimants={claims[index] ?? []}
-              amountLabel={money(item.amount)}
-              onPress={() => toggleClaim(index)}
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.four }]}>
+        <Animated.View entering={FadeIn.duration(360)}>
+          {imageUri ? (
+            <Image
+              accessibilityLabel="Scanned receipt"
+              contentFit="cover"
+              source={{ uri: toImageUri(imageUri) }}
+              style={styles.thumbnail}
             />
-          ))}
-        </View>
+          ) : (
+            <Text style={styles.placeholderText}>Snap a receipt to see it here.</Text>
+          )}
+
+          <View>
+            {receipt.items.map((item, index) => (
+              <ReceiptLine
+                key={`${item.name}-${index}`}
+                item={item}
+                claimants={claims[index] ?? []}
+                amountLabel={money(item.amount)}
+                isLast={index === receipt.items.length - 1}
+                onPress={() => toggleClaim(index)}
+              />
+            ))}
+          </View>
         </Animated.View>
       </ScrollView>
 
-      <View style={[styles.summaryWrap, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 72 }]}>
-        <Surface style={styles.totals}>
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Subtotal</Text>
-          <Text style={styles.totalValue}>{money(receipt.subtotal)}</Text>
-        </View>
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Service Charge</Text>
-          <Text style={styles.totalValue}>{money(receipt.serviceCharge)}</Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.totalRow}>
-          <Text style={styles.grandLabel}>Total</Text>
-          <Text style={styles.grandValue}>{money(receipt.total)}</Text>
-        </View>
+      <View style={[styles.deckWrap, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 64 }]}>
+        <Frost style={styles.deck}>
+          <LedgerRow label="Subtotal" value={money(receipt.subtotal)} />
+          <LedgerRow label="Service Charge" value={money(receipt.serviceCharge)} />
+          <View style={styles.totalRule} />
+          <LedgerRow label="Total" value={money(receipt.total)} emphasis />
 
-        <Animated.View key={selected.id} entering={FadeIn.duration(220)}>
-          <Surface style={[styles.owed, { borderColor: selected.color }]}>
-          <Text style={styles.owedKicker}>Individual Owed</Text>
-          <View style={styles.totalRow}>
-            <Text style={[styles.owedName, { color: selected.color }]}>{selected.name}</Text>
-            <Text style={[styles.owedAmount, { color: selected.color }]}>{money(share.owed)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Share of subtotal</Text>
-            <Text style={styles.totalValue}>{money(share.subtotalShare)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Share of service charge</Text>
-            <Text style={styles.totalValue}>{money(share.serviceShare)}</Text>
-          </View>
-          </Surface>
-        </Animated.View>
+          <Animated.View key={selected.id} entering={FadeIn.duration(220)}>
+            <Frost style={[styles.statement, { borderColor: selected.color }]}>
+              <Text style={styles.statementKicker}>Individual Owed</Text>
+              <View style={styles.statementHead}>
+                <Text style={[styles.statementName, { color: selected.color }]}>{selected.name}</Text>
+                <Text style={[styles.statementAmount, { color: selected.color }]}>{money(share.owed)}</Text>
+              </View>
+              <LedgerRow label="Share of subtotal" value={money(share.subtotalShare)} />
+              <LedgerRow label="Share of service charge" value={money(share.serviceShare)} />
+            </Frost>
+          </Animated.View>
 
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Share Breakdown"
-          activeOpacity={0.8}
-          onPress={() => {
-            tapHaptic();
-            void shareBreakdown();
-          }}
-          style={styles.shareButton}>
-          <Text style={styles.shareLabel}>Share Breakdown</Text>
-        </TouchableOpacity>
-        </Surface>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Share Breakdown"
+            activeOpacity={0.85}
+            onPress={() => {
+              tapHaptic();
+              void shareBreakdown();
+            }}
+            style={styles.sharePress}>
+            <LinearGradient
+              colors={['#F4FFB0', '#D6FF4A', '#A3E635']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.shareButton}>
+              <Text style={styles.shareLabel}>Share Breakdown</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </Frost>
       </View>
+    </NightScreen>
+  );
+}
+
+function LedgerRow({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
+  return (
+    <View style={styles.ledgerRow}>
+      <Text style={emphasis ? styles.totalLabel : styles.mutedLabel}>{label}</Text>
+      <Text style={emphasis ? styles.totalValue : styles.mutedValue}>{value}</Text>
     </View>
   );
 }
 
-function PersonAvatar({
+function PersonPill({
   person,
   selected,
+  totalLabel,
   onPress,
 }: {
   person: Person;
   selected: boolean;
+  totalLabel: string;
   onPress: () => void;
 }) {
   const scale = useSharedValue(1);
 
   useEffect(() => {
-    scale.value = withSpring(selected ? 1.06 : 1, { damping: 16, stiffness: 240 });
+    scale.value = withSpring(selected ? 1.03 : 1, { damping: 16, stiffness: 240 });
   }, [scale, selected]);
 
   const animatedStyle = useAnimatedStyle(() => ({
@@ -271,22 +273,33 @@ function PersonAvatar({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={person.name}
+      accessibilityLabel={`${person.name}, ${totalLabel}`}
       accessibilityState={{ selected }}
       onPress={() => {
         tapHaptic();
         onPress();
-      }}
-      style={styles.personButton}>
-      <Animated.View
-        style={[
-          styles.avatar,
-          { backgroundColor: `${person.color}22`, borderColor: selected ? person.color : 'transparent' },
-          animatedStyle,
-        ]}>
-        <Text style={[styles.initial, { color: person.color }]}>{person.initial}</Text>
+      }}>
+      <Animated.View style={animatedStyle}>
+        <Frost
+          style={[
+            styles.pill,
+            selected && {
+              borderColor: ICE,
+              shadowColor: ICE,
+              shadowOpacity: 0.55,
+              shadowRadius: 16,
+              shadowOffset: { width: 0, height: 0 },
+            },
+          ]}>
+          <View style={[styles.pillMark, { backgroundColor: `${person.color}33`, borderColor: person.color }]}>
+            <Text style={[styles.pillInitial, { color: person.color }]}>{person.initial}</Text>
+          </View>
+          <View>
+            <Text style={styles.pillName}>{person.name}</Text>
+            <Text style={[styles.pillTotal, selected && { color: ICE }]}>{totalLabel}</Text>
+          </View>
+        </Frost>
       </Animated.View>
-      <Text style={[styles.personName, selected && { color: person.color }]}>{person.name}</Text>
     </Pressable>
   );
 }
@@ -295,322 +308,274 @@ function ReceiptLine({
   item,
   claimants,
   amountLabel,
+  isLast,
   onPress,
 }: {
   item: ReceiptItem;
   claimants: PersonId[];
   amountLabel: string;
+  isLast: boolean;
   onPress: () => void;
 }) {
-  const scale = useSharedValue(1);
-  const claimKey = claimants.join(',');
-  const hasAnimated = useRef(false);
-
-  useEffect(() => {
-    if (!hasAnimated.current) {
-      hasAnimated.current = true;
-      return;
-    }
-    scale.value = withSequence(withSpring(0.98, { damping: 18, stiffness: 320 }), withSpring(1));
-  }, [claimKey, scale]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const primary = claimants.length === 1 ? personById(claimants[0]) : undefined;
   const names = claimants.flatMap((id) => {
     const name = personById(id)?.name;
     return name ? [name] : [];
-  }).join(', ');
+  });
 
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
-        names ? `${item.quantity}x ${item.name}, claimed by ${names}` : `${item.quantity}x ${item.name}, unclaimed`
+        names.length > 0
+          ? `${item.quantity}x ${item.name}, claimed by ${names.join(', ')}`
+          : `${item.quantity}x ${item.name}, unclaimed`
       }
       onPress={() => {
         tapHaptic();
         onPress();
-      }}>
-      <Animated.View style={animatedStyle}>
-        <Surface
-          style={[
-            styles.itemRow,
-            primary ? { borderColor: primary.color } : claimants.length > 1 ? styles.itemSplit : null,
-          ]}>
-          {primary ? <View style={[styles.tint, { backgroundColor: `${primary.color}1A` }]} /> : null}
+      }}
+      style={[styles.line, !isLast && styles.lineRule]}>
+      <View style={styles.lineCopy}>
+        <Text style={styles.lineName}>
+          <Text style={styles.lineQty}>{item.quantity}× </Text>
+          {item.name}
+        </Text>
         {claimants.length > 0 ? (
-          <View style={styles.colorStack}>
-            {claimants.map((id) => (
-              <View
-                key={id}
-                style={[styles.colorSegment, { backgroundColor: personById(id)?.color ?? Colors.accent }]}
-              />
-            ))}
+          <View style={styles.badges}>
+            {claimants.map((id) => {
+              const person = personById(id);
+              if (!person) {
+                return null;
+              }
+              return (
+                <Animated.View
+                  key={id}
+                  entering={FadeInRight.duration(280).springify()}
+                  style={[styles.badge, { borderColor: person.color, backgroundColor: `${person.color}22` }]}>
+                  <Text style={[styles.badgeText, { color: person.color }]}>{person.initial}</Text>
+                </Animated.View>
+              );
+            })}
           </View>
         ) : null}
-        <View style={styles.itemBody}>
-          <View style={styles.itemMain}>
-            <Text style={styles.quantity}>{item.quantity}x</Text>
-            <Text style={styles.itemName}>{item.name}</Text>
-            <Text style={styles.itemAmount}>{amountLabel}</Text>
-          </View>
-          {claimants.length > 0 ? (
-            <View style={styles.indicators}>
-              {claimants.map((id) => {
-                const person = personById(id);
-                if (!person) {
-                  return null;
-                }
-                return (
-                  <View key={id} style={[styles.indicator, { borderColor: person.color }]}>
-                    <View style={[styles.indicatorDot, { backgroundColor: person.color }]} />
-                    <Text style={[styles.indicatorName, { color: person.color }]}>{person.name}</Text>
-                  </View>
-                );
-              })}
-              {claimants.length > 1 ? (
-                <Text style={styles.splitNote}>split {claimants.length} ways</Text>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-        </Surface>
-      </Animated.View>
+      </View>
+      <Text style={styles.linePrice}>{amountLabel}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
   peopleBar: {
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.three,
+    paddingBottom: Spacing.two,
     gap: Spacing.three,
   },
   peopleRow: {
+    paddingHorizontal: Spacing.four,
+    gap: Spacing.three,
+  },
+  pill: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  personButton: {
     alignItems: 'center',
-    gap: Spacing.two,
-    minWidth: 84,
+    gap: Spacing.three,
+    borderRadius: 22,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    minWidth: 168,
   },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2,
+  pillMark: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  initial: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  personName: {
-    color: Colors.textSecondary,
+  pillInitial: {
     fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  pillName: {
+    color: Colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  pillTotal: {
+    marginTop: 2,
+    color: Colors.textSecondary,
+    fontSize: 13,
     fontWeight: '600',
+    letterSpacing: -0.1,
+    fontVariant: ['tabular-nums'],
   },
   assignHint: {
     color: Colors.textSecondary,
     fontSize: 13,
-    textAlign: 'center',
-  },
-  content: {
+    letterSpacing: -0.1,
     paddingHorizontal: Spacing.four,
   },
-  receipt: {
-    gap: Spacing.four,
+  content: {
+    paddingTop: Spacing.two,
   },
   thumbnail: {
     width: '100%',
-    height: 180,
-    borderRadius: Radius.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.backgroundElement,
-  },
-  placeholder: {
-    width: '100%',
-    height: 180,
-    borderRadius: Radius.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.backgroundElement,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.four,
+    height: 168,
+    marginBottom: Spacing.three,
   },
   placeholderText: {
     color: Colors.textSecondary,
-    fontSize: 16,
-    textAlign: 'center',
+    fontSize: 15,
+    letterSpacing: -0.1,
+    paddingHorizontal: Spacing.four,
+    paddingBottom: Spacing.three,
   },
-  items: {
-    gap: Spacing.two,
-  },
-  itemRow: {
-    flexDirection: 'row',
-  },
-  itemSplit: {
-    borderColor: Colors.border,
-  },
-  tint: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-  },
-  colorStack: {
-    width: 6,
-  },
-  colorSegment: {
-    flex: 1,
-    minHeight: 8,
-  },
-  itemBody: {
-    flex: 1,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    gap: Spacing.two,
-  },
-  itemMain: {
+  line: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.three,
   },
-  quantity: {
-    color: Colors.textSecondary,
-    fontSize: 15,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-    minWidth: 28,
+  lineRule: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(30, 41, 59, 0.4)',
   },
-  itemName: {
+  lineCopy: {
     flex: 1,
+    gap: Spacing.two,
+  },
+  lineName: {
     color: Colors.text,
-    fontSize: 16,
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  lineQty: {
+    color: Colors.textSecondary,
     fontWeight: '600',
   },
-  itemAmount: {
+  linePrice: {
     color: Colors.text,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
     fontVariant: ['tabular-nums'],
   },
-  indicators: {
+  badges: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    alignItems: 'center',
     gap: Spacing.two,
   },
-  indicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-    borderWidth: 1,
-    borderRadius: 999,
+  badge: {
+    minWidth: 28,
+    height: 24,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.half,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  indicatorDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  indicatorName: {
+  badgeText: {
     fontSize: 12,
     fontWeight: '700',
+    letterSpacing: 0.2,
   },
-  splitNote: {
-    color: Colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  summaryWrap: {
+  deckWrap: {
     paddingHorizontal: Spacing.four,
   },
-  totals: {
+  deck: {
+    borderRadius: 28,
     paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
+    paddingTop: Spacing.four,
     paddingBottom: Spacing.three,
-    gap: Spacing.two,
+    gap: Spacing.three,
   },
-  totalRow: {
+  ledgerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  totalLabel: {
+  mutedLabel: {
     color: Colors.textSecondary,
     fontSize: 15,
     fontWeight: '500',
+    letterSpacing: -0.1,
   },
-  totalValue: {
+  mutedValue: {
     color: Colors.text,
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: -0.2,
     fontVariant: ['tabular-nums'],
   },
-  divider: {
+  totalRule: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.backgroundSelected,
-    marginVertical: Spacing.one,
+    backgroundColor: 'rgba(30, 41, 59, 0.4)',
   },
-  grandLabel: {
+  totalLabel: {
     color: Colors.text,
     fontSize: 18,
     fontWeight: '700',
+    letterSpacing: -0.4,
   },
-  grandValue: {
+  totalValue: {
     color: Colors.accent,
     fontSize: 22,
     fontWeight: '700',
+    letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
-  owed: {
-    marginTop: Spacing.two,
+  statement: {
+    borderRadius: 20,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     gap: Spacing.two,
+    borderWidth: 1,
   },
-  owedKicker: {
+  statementKicker: {
     color: Colors.textSecondary,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
-    letterSpacing: 0.6,
+    letterSpacing: 1.1,
     textTransform: 'uppercase',
   },
-  owedName: {
+  statementHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  statementName: {
     fontSize: 16,
     fontWeight: '700',
+    letterSpacing: -0.3,
   },
-  owedAmount: {
+  statementAmount: {
     fontSize: 22,
     fontWeight: '700',
+    letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
-  shareButton: {
-    marginTop: Spacing.two,
-    backgroundColor: Colors.accent,
+  sharePress: {
     borderRadius: 999,
+    shadowColor: '#D6FF4A',
+    shadowOpacity: 0.38,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  shareButton: {
     minHeight: 56,
+    borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
   },
   shareLabel: {
-    color: Colors.background,
+    color: '#071006',
     fontSize: 17,
     fontWeight: '700',
+    letterSpacing: -0.2,
   },
 });

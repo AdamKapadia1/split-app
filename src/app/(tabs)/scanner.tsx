@@ -1,12 +1,14 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect, useIsFocused } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Frost } from '@/components/frost';
+import { NightScreen } from '@/components/night-screen';
 import { Skeleton } from '@/components/skeleton';
-import { Surface } from '@/components/surface';
 import { Colors, Spacing } from '@/constants/theme';
 import { tapHaptic } from '@/lib/haptics';
 import { parseReceiptImage } from '@/lib/parse-receipt';
@@ -88,9 +90,11 @@ export default function ScannerScreen() {
 
   if (!permission || (!permission.granted && permission.canAskAgain && !didRequest)) {
     return (
-      <Animated.View entering={FadeIn.duration(280)} style={styles.fallback}>
-        <ActivityIndicator color={Colors.accent} />
-      </Animated.View>
+      <NightScreen>
+        <Animated.View entering={FadeIn.duration(280)} style={styles.fallback}>
+          <ActivityIndicator color={Colors.accent} />
+        </Animated.View>
+      </NightScreen>
     );
   }
 
@@ -98,34 +102,34 @@ export default function ScannerScreen() {
     const canAskAgain = permission.canAskAgain;
 
     return (
-      <Animated.View entering={FadeIn.duration(320)} style={styles.fallback}>
-        <Text accessibilityRole="header" style={styles.title}>
-          Camera access
-        </Text>
-        <Text style={styles.message}>
-          {canAskAgain
-            ? 'Allow camera access to scan a receipt.'
-            : 'Camera access is off. Enable it in Settings to scan a receipt.'}
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => {
-            tapHaptic();
-            if (canAskAgain) {
-              void requestPermission();
-              return;
-            }
-            void Linking.openSettings();
-          }}
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
-          <Text style={styles.buttonLabel}>{canAskAgain ? 'Allow camera' : 'Open Settings'}</Text>
-        </Pressable>
-      </Animated.View>
+      <NightScreen>
+        <Animated.View entering={FadeIn.duration(320)} style={styles.fallback}>
+          <Text accessibilityRole="header" style={styles.title}>
+            Camera access
+          </Text>
+          <Text style={styles.message}>
+            {canAskAgain
+              ? 'Allow camera access to scan a receipt.'
+              : 'Camera access is off. Enable it in Settings to scan a receipt.'}
+          </Text>
+          <GradientButton
+            label={canAskAgain ? 'Allow camera' : 'Open Settings'}
+            onPress={() => {
+              tapHaptic();
+              if (canAskAgain) {
+                void requestPermission();
+                return;
+              }
+              void Linking.openSettings();
+            }}
+          />
+        </Animated.View>
+      </NightScreen>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <NightScreen>
       {isFocused ? (
         <CameraView
           ref={cameraRef}
@@ -139,21 +143,13 @@ export default function ScannerScreen() {
       <View
         pointerEvents="box-none"
         style={[styles.footer, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 72 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Snap Receipt"
-          accessibilityState={{ disabled: !cameraReady || capturing, busy: capturing }}
+        <GradientButton
+          label={capturing ? 'Snapping…' : 'Snap Receipt'}
           disabled={!cameraReady || capturing || processing}
           onPress={() => {
             void snapReceipt();
           }}
-          style={({ pressed }) => [
-            styles.button,
-            (!cameraReady || capturing || processing) && styles.buttonDisabled,
-            pressed && styles.buttonPressed,
-          ]}>
-          <Text style={styles.buttonLabel}>{capturing ? 'Snapping…' : 'Snap Receipt'}</Text>
-        </Pressable>
+        />
       </View>
       {processing || error ? (
         <Animated.View
@@ -165,40 +161,62 @@ export default function ScannerScreen() {
             {processing ? 'Processing...' : error}
           </Text>
           {processing ? (
-            <Surface style={styles.skeletonCard}>
+            <Frost style={styles.skeletonCard}>
               <Skeleton style={styles.skeletonWide} />
               <Skeleton style={styles.skeletonLine} />
               <Skeleton style={styles.skeletonShort} />
-            </Surface>
+            </Frost>
           ) : null}
           {error ? (
-            <Pressable
-              accessibilityRole="button"
+            <GradientButton
+              label="Try again"
               onPress={() => {
                 tapHaptic();
                 setError(null);
               }}
-              style={({ pressed }) => [styles.button, styles.retryButton, pressed && styles.buttonPressed]}>
-              <Text style={styles.buttonLabel}>Try again</Text>
-            </Pressable>
+            />
           ) : null}
         </Animated.View>
       ) : null}
-    </View>
+    </NightScreen>
+  );
+}
+
+function GradientButton({
+  label,
+  onPress,
+  disabled = false,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled, busy: label === 'Snapping…' }}
+      activeOpacity={0.85}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.sharePress, disabled && styles.buttonDisabled]}>
+      <LinearGradient
+        colors={['#F4FFB0', '#D6FF4A', '#A3E635']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.shareButton}>
+        <Text style={styles.buttonLabel}>{label}</Text>
+      </LinearGradient>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
   fallback: {
     flex: 1,
-    backgroundColor: Colors.background,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Spacing.five,
+    paddingHorizontal: Spacing.four,
     gap: Spacing.three,
   },
   title: {
@@ -229,7 +247,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.88)',
+    backgroundColor: 'rgba(3, 7, 18, 0.82)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.three,
@@ -244,6 +262,7 @@ const styles = StyleSheet.create({
   skeletonCard: {
     width: '100%',
     maxWidth: 320,
+    borderRadius: 24,
     paddingHorizontal: Spacing.four,
     paddingVertical: Spacing.four,
     gap: Spacing.three,
@@ -266,16 +285,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: Spacing.four,
   },
-  retryButton: {
-    alignSelf: 'center',
-    marginTop: Spacing.two,
-    minWidth: 180,
-  },
-  button: {
+  sharePress: {
     alignSelf: 'stretch',
-    backgroundColor: Colors.accent,
     borderRadius: 999,
+    shadowColor: '#D6FF4A',
+    shadowOpacity: 0.38,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  shareButton: {
     minHeight: 56,
+    borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
@@ -283,12 +304,10 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.55,
   },
-  buttonPressed: {
-    opacity: 0.8,
-  },
   buttonLabel: {
-    color: Colors.background,
+    color: '#071006',
     fontSize: 17,
     fontWeight: '700',
+    letterSpacing: -0.2,
   },
 });
