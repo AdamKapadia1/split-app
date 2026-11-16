@@ -1,9 +1,9 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import Animated, { FadeIn, FadeInRight, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
@@ -13,12 +13,13 @@ import { tapHaptic } from '@/lib/haptics';
 import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
 
 const PEOPLE = [
-  { id: 'me', name: 'Me', initial: 'M', color: '#D6FF4A' },
+  { id: 'me', name: 'Me', initial: 'M', color: '#38BDF8' },
   { id: 'sarah', name: 'Sarah', initial: 'S', color: '#C084FC' },
   { id: 'mike', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
 ] as const;
 
 const ICE = '#38BDF8';
+const NAVY = '#030712';
 
 type Person = (typeof PEOPLE)[number];
 type PersonId = Person['id'];
@@ -190,7 +191,6 @@ export default function SplitScreen() {
                 item={item}
                 claimants={claims[index] ?? []}
                 amountLabel={money(item.amount)}
-                isLast={index === receipt.items.length - 1}
                 onPress={() => toggleClaim(index)}
               />
             ))}
@@ -206,15 +206,15 @@ export default function SplitScreen() {
           <LedgerRow label="Total" value={money(receipt.total)} emphasis />
 
           <Animated.View key={selected.id} entering={FadeIn.duration(220)}>
-            <Frost style={[styles.statement, { borderColor: selected.color }]}>
+            <View style={styles.statement}>
               <Text style={styles.statementKicker}>Individual Owed</Text>
               <View style={styles.statementHead}>
-                <Text style={[styles.statementName, { color: selected.color }]}>{selected.name}</Text>
-                <Text style={[styles.statementAmount, { color: selected.color }]}>{money(share.owed)}</Text>
+                <Text style={styles.statementName}>{selected.name}</Text>
+                <Text style={styles.statementAmount}>{money(share.owed)}</Text>
               </View>
               <LedgerRow label="Share of subtotal" value={money(share.subtotalShare)} />
               <LedgerRow label="Share of service charge" value={money(share.serviceShare)} />
-            </Frost>
+            </View>
           </Animated.View>
 
           <TouchableOpacity
@@ -227,7 +227,7 @@ export default function SplitScreen() {
             }}
             style={styles.sharePress}>
             <LinearGradient
-              colors={['#F4FFB0', '#D6FF4A', '#A3E635']}
+              colors={['#7DD3FC', '#38BDF8']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.shareButton}>
@@ -260,16 +260,6 @@ function PersonPill({
   totalLabel: string;
   onPress: () => void;
 }) {
-  const scale = useSharedValue(1);
-
-  useEffect(() => {
-    scale.value = withSpring(selected ? 1.03 : 1, { damping: 16, stiffness: 240 });
-  }, [scale, selected]);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
   return (
     <Pressable
       accessibilityRole="button"
@@ -278,28 +268,33 @@ function PersonPill({
       onPress={() => {
         tapHaptic();
         onPress();
-      }}>
-      <Animated.View style={animatedStyle}>
-        <Frost
-          style={[
-            styles.pill,
-            selected && {
-              borderColor: ICE,
-              shadowColor: ICE,
-              shadowOpacity: 0.55,
-              shadowRadius: 16,
-              shadowOffset: { width: 0, height: 0 },
-            },
-          ]}>
-          <View style={[styles.pillMark, { backgroundColor: `${person.color}33`, borderColor: person.color }]}>
-            <Text style={[styles.pillInitial, { color: person.color }]}>{person.initial}</Text>
-          </View>
-          <View>
-            <Text style={styles.pillName}>{person.name}</Text>
-            <Text style={[styles.pillTotal, selected && { color: ICE }]}>{totalLabel}</Text>
-          </View>
-        </Frost>
-      </Animated.View>
+      }}
+      style={styles.pillPress}>
+      <Frost
+        style={[
+          styles.pill,
+          selected && {
+            borderColor: ICE,
+            shadowColor: ICE,
+            shadowOpacity: 0.45,
+            shadowRadius: 12,
+            shadowOffset: { width: 0, height: 0 },
+          },
+        ]}>
+        <View style={[styles.pillMark, { backgroundColor: `${person.color}33`, borderColor: person.color }]}>
+          <Text style={[styles.pillInitial, { color: person.color }]} numberOfLines={1}>
+            {person.initial}
+          </Text>
+        </View>
+        <View style={styles.pillCopy}>
+          <Text style={styles.pillName} numberOfLines={1}>
+            {person.name}
+          </Text>
+          <Text style={[styles.pillTotal, selected && styles.pillTotalSelected]} numberOfLines={1}>
+            {totalLabel}
+          </Text>
+        </View>
+      </Frost>
     </Pressable>
   );
 }
@@ -308,13 +303,11 @@ function ReceiptLine({
   item,
   claimants,
   amountLabel,
-  isLast,
   onPress,
 }: {
   item: ReceiptItem;
   claimants: PersonId[];
   amountLabel: string;
-  isLast: boolean;
   onPress: () => void;
 }) {
   const names = claimants.flatMap((id) => {
@@ -334,7 +327,7 @@ function ReceiptLine({
         tapHaptic();
         onPress();
       }}
-      style={[styles.line, !isLast && styles.lineRule]}>
+      style={styles.line}>
       <View style={styles.lineCopy}>
         <Text style={styles.lineName}>
           <Text style={styles.lineQty}>{item.quantity}× </Text>
@@ -371,33 +364,48 @@ const styles = StyleSheet.create({
   },
   peopleRow: {
     paddingHorizontal: Spacing.four,
-    gap: Spacing.three,
+    paddingVertical: Spacing.one,
+    gap: Spacing.two,
+    alignItems: 'stretch',
+  },
+  pillPress: {
+    width: 156,
+    height: 64,
   },
   pill: {
+    width: 156,
+    height: 64,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
-    borderRadius: 22,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    minWidth: 168,
+    gap: 10,
+    borderRadius: 18,
+    paddingHorizontal: 12,
   },
   pillMark: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   pillInitial: {
-    fontSize: 14,
+    fontSize: 12,
+    lineHeight: 14,
     fontWeight: '700',
-    letterSpacing: -0.2,
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  pillCopy: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
   },
   pillName: {
     color: Colors.text,
-    fontSize: 16,
+    fontSize: 15,
+    lineHeight: 18,
     fontWeight: '700',
     letterSpacing: -0.3,
   },
@@ -405,9 +413,13 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: Colors.textSecondary,
     fontSize: 13,
+    lineHeight: 16,
     fontWeight: '600',
     letterSpacing: -0.1,
     fontVariant: ['tabular-nums'],
+  },
+  pillTotalSelected: {
+    color: ICE,
   },
   assignHint: {
     color: Colors.textSecondary,
@@ -437,9 +449,7 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
     paddingHorizontal: Spacing.four,
     paddingVertical: Spacing.three,
-  },
-  lineRule: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: 1,
     borderBottomColor: 'rgba(30, 41, 59, 0.4)',
   },
   lineCopy: {
@@ -521,18 +531,20 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   totalValue: {
-    color: Colors.accent,
+    color: ICE,
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
   },
   statement: {
-    borderRadius: 20,
+    borderRadius: 16,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     gap: Spacing.two,
     borderWidth: 1,
+    borderColor: ICE,
+    backgroundColor: 'rgba(56, 189, 248, 0.06)',
   },
   statementKicker: {
     color: Colors.textSecondary,
@@ -547,11 +559,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   statementName: {
+    color: Colors.text,
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.3,
   },
   statementAmount: {
+    color: ICE,
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.5,
@@ -559,11 +573,11 @@ const styles = StyleSheet.create({
   },
   sharePress: {
     borderRadius: 999,
-    shadowColor: '#D6FF4A',
-    shadowOpacity: 0.38,
-    shadowRadius: 18,
+    shadowColor: ICE,
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
-    elevation: 8,
+    elevation: 6,
   },
   shareButton: {
     minHeight: 56,
@@ -573,7 +587,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
   },
   shareLabel: {
-    color: '#071006',
+    color: NAVY,
     fontSize: 17,
     fontWeight: '700',
     letterSpacing: -0.2,
