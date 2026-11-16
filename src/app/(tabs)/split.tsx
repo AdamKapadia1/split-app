@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -85,6 +85,23 @@ function shareFor(receipt: ParsedReceipt, claims: Record<number, PersonId[]>, pe
   };
 }
 
+function formatBreakdown(receipt: ParsedReceipt, claims: Record<number, PersonId[]>) {
+  const assigned = PEOPLE.filter((person) =>
+    Object.values(claims).some((claimants) => claimants.includes(person.id)),
+  );
+
+  if (assigned.length === 0) {
+    return 'Receipt Breakdown: No items assigned yet. (Includes tax & tip)';
+  }
+
+  const parts = assigned.map((person) => {
+    const { owed } = shareFor(receipt, claims, person.id);
+    return `${person.name} owes ${formatMoney(owed, receipt.currency)}`;
+  });
+
+  return `Receipt Breakdown: ${parts.join(' | ')} (Includes tax & tip)`;
+}
+
 export default function SplitScreen() {
   const insets = useSafeAreaInsets();
   const { imageUri: imageUriParam, receipt: receiptParam } = useLocalSearchParams<{
@@ -106,6 +123,14 @@ export default function SplitScreen() {
   const selected = personById(selectedId) ?? PEOPLE[0];
   const share = shareFor(receipt, claims, selected.id);
   const money = (amount: number) => formatMoney(amount, receipt.currency);
+
+  async function shareBreakdown() {
+    try {
+      await Share.share({ message: formatBreakdown(receipt, claims) });
+    } catch {
+      // The share sheet was dismissed or is unavailable.
+    }
+  }
 
   function toggleClaim(index: number) {
     setClaimState((current) => {
@@ -200,6 +225,17 @@ export default function SplitScreen() {
             <Text style={styles.totalValue}>{money(share.serviceShare)}</Text>
           </View>
         </Animated.View>
+
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Share Breakdown"
+          activeOpacity={0.8}
+          onPress={() => {
+            void shareBreakdown();
+          }}
+          style={styles.shareButton}>
+          <Text style={styles.shareLabel}>Share Breakdown</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -545,5 +581,19 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
+  },
+  shareButton: {
+    marginTop: Spacing.two,
+    backgroundColor: Colors.accent,
+    borderRadius: 999,
+    minHeight: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.four,
+  },
+  shareLabel: {
+    color: Colors.background,
+    fontSize: 17,
+    fontWeight: '700',
   },
 });
