@@ -1,10 +1,26 @@
 import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSequence,
+  withSpring,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
-import { parseReceiptParam, type ParsedReceipt } from '@/lib/parse-receipt';
+import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
+
+const PEOPLE = [
+  { id: 'me', name: 'Me', initial: 'M', color: '#D6FF4A' },
+  { id: 'sarah', name: 'Sarah', initial: 'S', color: '#C084FC' },
+  { id: 'mike', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
+] as const;
+
+type Person = (typeof PEOPLE)[number];
+type PersonId = Person['id'];
 
 const RECEIPT_ITEMS = [
   { quantity: 3, name: 'Cheeseburger', amount: 36 },
@@ -28,6 +44,10 @@ function formatMoney(amount: number, currency: string) {
   }
 }
 
+function roundMoney(amount: number) {
+  return Math.round(amount * 100) / 100;
+}
+
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -40,6 +60,31 @@ function toImageUri(uri: string) {
   return `data:image/jpeg;base64,${uri}`;
 }
 
+function personById(id: string) {
+  return PEOPLE.find((person) => person.id === id);
+}
+
+function shareFor(receipt: ParsedReceipt, claims: Record<number, PersonId[]>, personId: PersonId) {
+  const subtotalShare = roundMoney(
+    receipt.items.reduce((sum, item, index) => {
+      const claimants = claims[index] ?? [];
+      if (!claimants.includes(personId) || claimants.length === 0) {
+        return sum;
+      }
+      return sum + item.amount / claimants.length;
+    }, 0),
+  );
+  const serviceShare = roundMoney(
+    receipt.subtotal > 0 ? (subtotalShare / receipt.subtotal) * receipt.serviceCharge : 0,
+  );
+
+  return {
+    subtotalShare,
+    serviceShare,
+    owed: roundMoney(subtotalShare + serviceShare),
+  };
+}
+
 export default function SplitScreen() {
   const insets = useSafeAreaInsets();
   const { imageUri: imageUriParam, receipt: receiptParam } = useLocalSearchParams<{
@@ -47,19 +92,56 @@ export default function SplitScreen() {
     receipt?: string | string[];
   }>();
   const imageUri = firstParam(imageUriParam);
+  const receiptKey = firstParam(receiptParam) ?? 'fallback';
   const receipt = parseReceiptParam(firstParam(receiptParam)) ?? FALLBACK_RECEIPT;
+  const [selectedId, setSelectedId] = useState<PersonId>('me');
+  const [claimState, setClaimState] = useState<{ key: string; claims: Record<number, PersonId[]> }>({
+    key: receiptKey,
+    claims: {},
+  });
+  if (claimState.key !== receiptKey) {
+    setClaimState({ key: receiptKey, claims: {} });
+  }
+  const claims = claimState.key === receiptKey ? claimState.claims : {};
+  const selected = personById(selectedId) ?? PEOPLE[0];
+  const share = shareFor(receipt, claims, selected.id);
   const money = (amount: number) => formatMoney(amount, receipt.currency);
+
+  function toggleClaim(index: number) {
+    setClaimState((current) => {
+      const existing = current.claims[index] ?? [];
+      const next = existing.includes(selected.id)
+        ? existing.filter((id) => id !== selected.id)
+        : [...existing, selected.id];
+      return {
+        key: receiptKey,
+        claims: { ...current.claims, [index]: next },
+      };
+    });
+  }
 
   return (
     <View style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.four,
-            paddingBottom: insets.bottom + Spacing.six,
-          },
+      <View
+        style={[
+          styles.peopleBar,
+          { paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.three },
         ]}>
+        <View style={styles.peopleRow}>
+          {PEOPLE.map((person) => (
+            <PersonAvatar
+              key={person.id}
+              person={person}
+              selected={person.id === selected.id}
+              onPress={() => setSelectedId(person.id)}
+            />
+          ))}
+        </View>
+        <Text style={styles.assignHint}>Tap a line to assign it to {selected.name}.</Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.four }]}>
         {imageUri ? (
           <Image
             accessibilityLabel="Scanned receipt"
@@ -75,11 +157,13 @@ export default function SplitScreen() {
 
         <View style={styles.items}>
           {receipt.items.map((item, index) => (
-            <View key={`${item.name}-${index}`} style={styles.itemRow}>
-              <Text style={styles.quantity}>{item.quantity}x</Text>
-              <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemAmount}>{money(item.amount)}</Text>
-            </View>
+            <ReceiptLine
+              key={`${item.name}-${index}`}
+              item={item}
+              claimants={claims[index] ?? []}
+              amountLabel={money(item.amount)}
+              onPress={() => toggleClaim(index)}
+            />
           ))}
         </View>
       </ScrollView>
@@ -98,8 +182,156 @@ export default function SplitScreen() {
           <Text style={styles.grandLabel}>Total</Text>
           <Text style={styles.grandValue}>{money(receipt.total)}</Text>
         </View>
+
+        <Animated.View
+          key={selected.id}
+          style={[styles.owed, { borderColor: selected.color }]}>
+          <Text style={styles.owedKicker}>Individual Owed</Text>
+          <View style={styles.totalRow}>
+            <Text style={[styles.owedName, { color: selected.color }]}>{selected.name}</Text>
+            <Text style={[styles.owedAmount, { color: selected.color }]}>{money(share.owed)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Share of subtotal</Text>
+            <Text style={styles.totalValue}>{money(share.subtotalShare)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Share of service charge</Text>
+            <Text style={styles.totalValue}>{money(share.serviceShare)}</Text>
+          </View>
+        </Animated.View>
       </View>
     </View>
+  );
+}
+
+function PersonAvatar({
+  person,
+  selected,
+  onPress,
+}: {
+  person: Person;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(1);
+
+  useEffect(() => {
+    scale.value = withSpring(selected ? 1.06 : 1, { damping: 16, stiffness: 240 });
+  }, [scale, selected]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={person.name}
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={styles.personButton}>
+      <Animated.View
+        style={[
+          styles.avatar,
+          { backgroundColor: `${person.color}22`, borderColor: selected ? person.color : 'transparent' },
+          animatedStyle,
+        ]}>
+        <Text style={[styles.initial, { color: person.color }]}>{person.initial}</Text>
+      </Animated.View>
+      <Text style={[styles.personName, selected && { color: person.color }]}>{person.name}</Text>
+    </Pressable>
+  );
+}
+
+function ReceiptLine({
+  item,
+  claimants,
+  amountLabel,
+  onPress,
+}: {
+  item: ReceiptItem;
+  claimants: PersonId[];
+  amountLabel: string;
+  onPress: () => void;
+}) {
+  const scale = useSharedValue(1);
+  const claimKey = claimants.join(',');
+  const hasAnimated = useRef(false);
+
+  useEffect(() => {
+    if (!hasAnimated.current) {
+      hasAnimated.current = true;
+      return;
+    }
+    scale.value = withSequence(withSpring(0.98, { damping: 18, stiffness: 320 }), withSpring(1));
+  }, [claimKey, scale]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const primary = claimants.length === 1 ? personById(claimants[0]) : undefined;
+  const names = claimants.flatMap((id) => {
+    const name = personById(id)?.name;
+    return name ? [name] : [];
+  }).join(', ');
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={
+        names ? `${item.quantity}x ${item.name}, claimed by ${names}` : `${item.quantity}x ${item.name}, unclaimed`
+      }
+      onPress={onPress}>
+      <Animated.View
+        style={[
+          styles.itemRow,
+          primary
+            ? { backgroundColor: `${primary.color}1A`, borderColor: primary.color }
+            : claimants.length > 1
+              ? styles.itemSplit
+              : null,
+          animatedStyle,
+        ]}>
+        {claimants.length > 0 ? (
+          <View style={styles.colorStack}>
+            {claimants.map((id) => (
+              <View
+                key={id}
+                style={[styles.colorSegment, { backgroundColor: personById(id)?.color ?? Colors.accent }]}
+              />
+            ))}
+          </View>
+        ) : null}
+        <View style={styles.itemBody}>
+          <View style={styles.itemMain}>
+            <Text style={styles.quantity}>{item.quantity}x</Text>
+            <Text style={styles.itemName}>{item.name}</Text>
+            <Text style={styles.itemAmount}>{amountLabel}</Text>
+          </View>
+          {claimants.length > 0 ? (
+            <View style={styles.indicators}>
+              {claimants.map((id) => {
+                const person = personById(id);
+                if (!person) {
+                  return null;
+                }
+                return (
+                  <View key={id} style={[styles.indicator, { borderColor: person.color }]}>
+                    <View style={[styles.indicatorDot, { backgroundColor: person.color }]} />
+                    <Text style={[styles.indicatorName, { color: person.color }]}>{person.name}</Text>
+                  </View>
+                );
+              })}
+              {claimants.length > 1 ? (
+                <Text style={styles.splitNote}>split {claimants.length} ways</Text>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -108,19 +340,55 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
+  peopleBar: {
+    paddingHorizontal: Spacing.four,
+    paddingBottom: Spacing.three,
+    gap: Spacing.three,
+  },
+  peopleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  personButton: {
+    alignItems: 'center',
+    gap: Spacing.two,
+    minWidth: 84,
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  initial: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  personName: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  assignHint: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    textAlign: 'center',
+  },
   content: {
     paddingHorizontal: Spacing.four,
     gap: Spacing.four,
   },
   thumbnail: {
     width: '100%',
-    height: 220,
+    height: 180,
     borderRadius: 24,
     backgroundColor: Colors.backgroundElement,
   },
   placeholder: {
     width: '100%',
-    height: 220,
+    height: 180,
     borderRadius: 24,
     backgroundColor: Colors.backgroundElement,
     alignItems: 'center',
@@ -137,15 +405,36 @@ const styles = StyleSheet.create({
   },
   itemRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
+    overflow: 'hidden',
     backgroundColor: Colors.backgroundElement,
     borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  itemSplit: {
+    backgroundColor: Colors.backgroundSelected,
+    borderColor: Colors.backgroundSelected,
+  },
+  colorStack: {
+    width: 6,
+  },
+  colorSegment: {
+    flex: 1,
+    minHeight: 8,
+  },
+  itemBody: {
+    flex: 1,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
+    gap: Spacing.two,
+  },
+  itemMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
   },
   quantity: {
-    color: Colors.accent,
+    color: Colors.textSecondary,
     fontSize: 15,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
@@ -162,6 +451,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
+  },
+  indicators: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  indicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.half,
+  },
+  indicatorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  indicatorName: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  splitNote: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
   },
   totals: {
     paddingHorizontal: Spacing.four,
@@ -199,6 +517,31 @@ const styles = StyleSheet.create({
   },
   grandValue: {
     color: Colors.accent,
+    fontSize: 22,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  owed: {
+    marginTop: Spacing.two,
+    borderWidth: 1,
+    borderRadius: 18,
+    backgroundColor: Colors.backgroundElement,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    gap: Spacing.two,
+  },
+  owedKicker: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  owedName: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  owedAmount: {
     fontSize: 22,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
