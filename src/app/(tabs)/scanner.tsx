@@ -1,7 +1,13 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+import { receiptService } from '../../services/ReceiptService';
+import { VisionParseError, analyzeReceipt } from '../../services/VisionService';
+
+const MOCK_USER_ID = '7924d43c-1f07-4bba-9762-4b62f0b6b071';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -19,11 +25,43 @@ export default function ScannerScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
       console.log('📸 Photo captured! Base64 length:', photo?.base64?.length);
+      if (!photo?.base64) {
+        throw new Error('The camera did not return image data.');
+      }
+
+      const aiData = await analyzeReceipt(photo.base64);
+      const receipt = await receiptService.createEmptyReceipt(MOCK_USER_ID);
+
+      if (aiData.items.length > 0) {
+        await receiptService.addScannedItems(
+          receipt.id,
+          aiData.items.map((item) => ({
+            original_name: item.name,
+            display_name: item.name,
+            price: item.price,
+            quantity: 1,
+            is_tax_exempt: false,
+          })),
+        );
+      }
+
+      await receiptService.updateReceiptTotals(receipt.id, {
+        subtotal: aiData.subtotal,
+        tax_amount: aiData.tax,
+        total_amount: aiData.total,
+        status: 'open',
+      });
+
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.push(`/receipt/${receipt.id}`);
     } catch (error) {
       console.error('Camera capture failed:', error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
+      if (error instanceof VisionParseError) {
+        Alert.alert('Failed to parse receipt', 'Could not read the line items. Please try again.');
+      } else {
+        Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
+      }
     } finally {
       setIsCapturing(false);
     }
