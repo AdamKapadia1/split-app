@@ -1,5 +1,6 @@
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -7,6 +8,7 @@ import { receiptService } from '../../services/ReceiptService';
 import { supabase } from '../../lib/supabase';
 
 export default function ScannerScreen() {
+  const router = useRouter();
   const [isProcessing, setIsProcessing] = useState(false);
 
   async function handleMockScan() {
@@ -60,7 +62,7 @@ export default function ScannerScreen() {
       });
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert('Ledger Updated', 'Receipt securely synced to cloud.');
+      router.push(`/receipt/${receipt.id}`);
     } catch (error) {
       console.error('[Scanner][handleMockScan] Pipeline failure:', error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

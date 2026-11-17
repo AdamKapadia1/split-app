@@ -7,7 +7,7 @@ const DEFAULT_CURRENCY = 'GBP';
 /** Largest absolute value that fits in Postgres `numeric(10,2)`. */
 const MONEY_LIMIT = 99_999_999.99;
 
-type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
+type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status'>
@@ -137,6 +137,44 @@ export class ReceiptService {
       return receipt;
     } catch (caught) {
       throw logged('updateReceiptTotals', 'UPDATE_FAILED', 'Could not update the receipt totals.', caught);
+    }
+  }
+
+  /**
+   * Load one receipt and its lines, oldest item first.
+   * Money fields on the returned rows are exact 2-decimal `numeric(10,2)` amounts.
+   */
+  async getReceiptWithItems(receiptId: string): Promise<{ receipt: Receipt; items: Item[] }> {
+    try {
+      const id = requireId(receiptId, 'receiptId');
+      console.info('[ReceiptService] [getReceiptWithItems] Loading ledger', { receiptId: id });
+      const client = requireClient();
+
+      const receiptResult = await client.from('receipts').select('*').eq('id', id).single();
+      if (receiptResult.error) {
+        throw new ReceiptServiceError('FETCH_FAILED', receiptResult.error.message, receiptResult.error);
+      }
+
+      const itemsResult = await client
+        .from('items')
+        .select('*')
+        .eq('receipt_id', id)
+        .order('created_at', { ascending: true });
+      if (itemsResult.error) {
+        throw new ReceiptServiceError('FETCH_FAILED', itemsResult.error.message, itemsResult.error);
+      }
+
+      const ledger = {
+        receipt: parseReceipt(receiptResult.data, 'FETCH_FAILED'),
+        items: parseItems(itemsResult.data, 'FETCH_FAILED'),
+      };
+      console.info('[ReceiptService] [getReceiptWithItems] Loaded ledger', {
+        receiptId: ledger.receipt.id,
+        count: ledger.items.length,
+      });
+      return ledger;
+    } catch (caught) {
+      throw logged('getReceiptWithItems', 'FETCH_FAILED', 'Could not load the receipt.', caught);
     }
   }
 }
