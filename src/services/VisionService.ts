@@ -18,7 +18,7 @@ export class VisionParseError extends Error {
 }
 
 const SYSTEM_PROMPT =
-  'You are a highly precise financial OCR engine. Analyze this receipt and extract the line items, subtotal, tax, and total. Return ONLY a raw, valid JSON object matching this exact schema: { "items": [{ "name": "string", "price": number }], "subtotal": number, "tax": number, "total": number }. Do not use markdown formatting blocks or conversational text.';
+  'You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks (```json). Do not include introductory text. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols (£, $, etc). Schema: { "items": [{ "name": "string", "price": number }], "subtotal": number, "tax": number, "total": number }';
 
 /**
  * Send a JPEG receipt to Anthropic and return the extracted ledger numbers.
@@ -36,11 +36,12 @@ export async function analyzeReceipt(base64: string): Promise<ReceiptAnalysis> {
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const httpResponse = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
         'content-type': 'application/json',
       },
       body: JSON.stringify({
@@ -65,14 +66,16 @@ export async function analyzeReceipt(base64: string): Promise<ReceiptAnalysis> {
       }),
     });
 
-    if (!response.ok) {
-      throw new VisionParseError(`Anthropic request failed (${response.status}).`);
+    if (!httpResponse.ok) {
+      throw new VisionParseError(`Anthropic request failed (${httpResponse.status}).`);
     }
 
-    const body: unknown = await response.json();
-    const text = readModelText(body);
-    const parsed: unknown = JSON.parse(extractJson(text));
-    return parseAnalysis(parsed);
+    const response = (await httpResponse.json()) as AnthropicMessageResponse;
+    const rawText = response.content[0].text;
+    // Strip markdown code blocks if the LLM ignores the prompt
+    const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsedData = JSON.parse(cleanText);
+    return parseAnalysis(parsedData);
   } catch (error) {
     console.error('[VisionService] [analyzeReceipt] Error:', error);
     if (error instanceof VisionParseError) {
@@ -82,23 +85,9 @@ export async function analyzeReceipt(base64: string): Promise<ReceiptAnalysis> {
   }
 }
 
-function extractJson(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  return (fenced?.[1] ?? text).trim();
-}
-
-function readModelText(body: unknown): string {
-  if (!isRecord(body) || !Array.isArray(body.content)) {
-    throw new VisionParseError('Anthropic response did not include content.');
-  }
-
-  const first = body.content[0];
-  if (!isRecord(first) || typeof first.text !== 'string' || first.text.trim().length === 0) {
-    throw new VisionParseError('Anthropic response did not include receipt JSON.');
-  }
-
-  return first.text;
-}
+type AnthropicMessageResponse = {
+  content: { text: string }[];
+};
 
 function parseAnalysis(value: unknown): ReceiptAnalysis {
   if (!isRecord(value) || !Array.isArray(value.items)) {
