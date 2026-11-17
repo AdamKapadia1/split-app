@@ -31,8 +31,10 @@ export const VisionService = {
         throw new Error(data.error?.message || "Anthropic API request failed");
       }
 
-      const rawText = data.content[0].text;
-      console.log("Raw LLM Output:", rawText);
+      // Safely handle different Anthropic response shapes
+const rawText = data.content?.[0]?.text || data.completion || JSON.stringify(data);
+console.log("Raw LLM Output:", rawText);
+      
 
       // Extract everything between the first '{' and the last '}'
       const startIndex = rawText.indexOf('{');
