@@ -1,9 +1,33 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+
+  async function handleCapture() {
+    if (!cameraRef.current || isCapturing) {
+      return;
+    }
+
+    setIsCapturing(true);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+      console.log('📸 Photo captured! Base64 length:', photo?.base64?.length);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('Camera capture failed:', error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
+    } finally {
+      setIsCapturing(false);
+    }
+  }
 
   if (!permission) {
     return <View style={styles.screen} />;
@@ -30,7 +54,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.screen}>
-      <CameraView facing="back" style={StyleSheet.absoluteFill}>
+      <CameraView ref={cameraRef} facing="back" style={StyleSheet.absoluteFill}>
         <View pointerEvents="none" style={styles.guideFrame}>
           <View style={styles.guide} />
         </View>
@@ -40,12 +64,18 @@ export default function ScannerScreen() {
         <TouchableOpacity
           accessibilityRole="button"
           accessibilityLabel="Shutter"
+          accessibilityState={{ disabled: isCapturing, busy: isCapturing }}
           activeOpacity={0.85}
+          disabled={isCapturing}
           onPress={() => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            void handleCapture();
           }}
           style={styles.shutterOuter}>
-          <View style={styles.shutterInner} />
+          {isCapturing ? (
+            <ActivityIndicator color="#38BDF8" size="large" />
+          ) : (
+            <View style={styles.shutterInner} />
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -107,13 +137,13 @@ const styles = StyleSheet.create({
   },
   footer: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+    bottom: 100,
+    width: '100%',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(11, 15, 25, 0.8)',
     paddingTop: 20,
-    paddingBottom: 40,
+    paddingBottom: 20,
   },
   shutterOuter: {
     width: 80,
