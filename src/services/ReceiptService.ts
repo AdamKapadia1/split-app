@@ -212,11 +212,7 @@ export class ReceiptService {
         return;
       }
 
-      const inserted = await client.from('splits').insert({
-        item_id: item,
-        user_id: user,
-        receipt_id: receipt,
-      });
+      const inserted = await client.from('splits').insert({ item_id: itemId, user_id: userId, receipt_id: receiptId, amount_owed: 0 });
       if (inserted.error) {
         throw new ReceiptServiceError('CLAIM_FAILED', inserted.error.message, inserted.error);
       }
