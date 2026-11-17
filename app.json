@@ -28,7 +28,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan receipts.",
+          "cameraPermission": "Allow Midnight to scan your receipts.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }

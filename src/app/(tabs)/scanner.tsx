@@ -1,99 +1,53 @@
-import { BlurView } from 'expo-blur';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-
-import { receiptService } from '../../services/ReceiptService';
-import { supabase } from '../../lib/supabase';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function ScannerScreen() {
-  const router = useRouter();
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
 
-  async function handleMockScan() {
-    if (!supabase) {
-      Alert.alert('Authentication Error', 'You must be logged in to scan.');
-      return;
-    }
+  if (!permission) {
+    return <View style={styles.screen} />;
+  }
 
-    const { data, error: authError } = await supabase.auth.getUser();
-    const user = data.user;
-    if (authError || !user) {
-      Alert.alert('Authentication Error', 'You must be logged in to scan.');
-      return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-      const receipt = await receiptService.createEmptyReceipt(user.id);
-      const mockItems = [
-        {
-          original_name: 'Artisan Ribeye',
-          display_name: 'Artisan Ribeye',
-          price: 45,
-          quantity: 1,
-          is_tax_exempt: false,
-        },
-        {
-          original_name: 'Truffle Fries',
-          display_name: 'Truffle Fries',
-          price: 8.5,
-          quantity: 1,
-          is_tax_exempt: false,
-        },
-        {
-          original_name: 'Old Fashioned',
-          display_name: 'Old Fashioned',
-          price: 14,
-          quantity: 1,
-          is_tax_exempt: false,
-        },
-      ];
-
-      await receiptService.addScannedItems(receipt.id, mockItems);
-      await receiptService.updateReceiptTotals(receipt.id, {
-        subtotal: 67.5,
-        tax_amount: 13.5,
-        service_charge: 8.44,
-        total_amount: 89.44,
-        status: 'open',
-      });
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.push(`/receipt/${receipt.id}`);
-    } catch (error) {
-      console.error('[Scanner][handleMockScan] Pipeline failure:', error);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Transaction Failed', 'Unable to sync receipt data.');
-    } finally {
-      setIsProcessing(false);
-    }
+  if (!permission.granted) {
+    return (
+      <View style={styles.denied}>
+        <Text style={styles.title}>Camera Access Required</Text>
+        <Text style={styles.subtitle}>Midnight needs your camera to scan and split receipts.</Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Grant Permission"
+          activeOpacity={0.85}
+          onPress={() => {
+            void requestPermission();
+          }}
+          style={styles.permissionButton}>
+          <Text style={styles.permissionLabel}>Grant Permission</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
     <View style={styles.screen}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Snap Receipt"
-        accessibilityState={{ disabled: isProcessing, busy: isProcessing }}
-        disabled={isProcessing}
-        onPress={() => {
-          void handleMockScan();
-        }}
-        style={({ pressed }) => [styles.button, pressed && !isProcessing && styles.buttonPressed, isProcessing && styles.buttonDisabled]}>
-        <Text style={styles.buttonLabel}>Snap Receipt</Text>
-      </Pressable>
+      <CameraView facing="back" style={StyleSheet.absoluteFill}>
+        <View pointerEvents="none" style={styles.guideFrame}>
+          <View style={styles.guide} />
+        </View>
+      </CameraView>
 
-      {isProcessing ? (
-        <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill}>
-          <View style={styles.overlay}>
-            <ActivityIndicator color="#38BDF8" size="large" />
-            <Text style={styles.overlayLabel}>Securing ledger...</Text>
-          </View>
-        </BlurView>
-      ) : null}
+      <View style={styles.footer}>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Shutter"
+          activeOpacity={0.85}
+          onPress={() => {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+          }}
+          style={styles.shutterOuter}>
+          <View style={styles.shutterInner} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -101,42 +55,80 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
     backgroundColor: '#0B0F19',
   },
-  button: {
-    width: '100%',
-    maxWidth: 360,
-    minHeight: 64,
+  denied: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: '#0B0F19',
+  },
+  title: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: -0.6,
+  },
+  subtitle: {
+    marginTop: 12,
+    color: '#94A3B8',
+    fontSize: 16,
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  permissionButton: {
+    marginTop: 28,
+    minHeight: 52,
+    paddingHorizontal: 24,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#38BDF8',
   },
-  buttonPressed: {
-    opacity: 0.88,
-  },
-  buttonDisabled: {
-    opacity: 0.55,
-  },
-  buttonLabel: {
-    color: '#030712',
-    fontSize: 17,
+  permissionLabel: {
+    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: '700',
-    letterSpacing: -0.2,
   },
-  overlay: {
+  guideFrame: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
+    paddingBottom: 120,
   },
-  overlayLabel: {
-    color: '#F8FAFC',
-    fontSize: 16,
-    fontWeight: '600',
-    letterSpacing: -0.2,
+  guide: {
+    width: '78%',
+    height: '62%',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 18,
+  },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(11, 15, 25, 0.8)',
+    paddingTop: 20,
+    paddingBottom: 40,
+  },
+  shutterOuter: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  shutterInner: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#FFFFFF',
   },
 });
