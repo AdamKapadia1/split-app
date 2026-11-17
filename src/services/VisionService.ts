@@ -24,8 +24,14 @@ export const VisionService = {
       });
 
       const data = await response.json();
+
+      // Intercept Anthropic API errors before trying to parse content
+      if (!response.ok || data.error || data.type === 'error') {
+        console.error("🚨 Anthropic API Error Payload:", JSON.stringify(data, null, 2));
+        throw new Error(data.error?.message || "Anthropic API request failed");
+      }
+
       const rawText = data.content[0].text;
-      
       console.log("Raw LLM Output:", rawText);
 
       // Extract everything between the first '{' and the last '}'
