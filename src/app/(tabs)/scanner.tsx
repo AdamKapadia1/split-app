@@ -5,7 +5,7 @@ import { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { receiptService } from '../../services/ReceiptService';
-import { VisionParseError, analyzeReceipt } from '../../services/VisionService';
+import { VisionService } from '../../services/VisionService';
 
 const MOCK_USER_ID = '7924d43c-1f07-4bba-9762-4b62f0b6b071';
 
@@ -29,13 +29,13 @@ export default function ScannerScreen() {
         throw new Error('The camera did not return image data.');
       }
 
-      const aiData = await analyzeReceipt(photo.base64);
+      const aiData = await VisionService.analyzeReceipt(photo.base64);
       const receipt = await receiptService.createEmptyReceipt(MOCK_USER_ID);
 
       if (aiData.items.length > 0) {
         await receiptService.addScannedItems(
           receipt.id,
-          aiData.items.map((item) => ({
+          aiData.items.map((item: { name: string; price: number }) => ({
             original_name: item.name,
             display_name: item.name,
             price: item.price,
@@ -57,11 +57,7 @@ export default function ScannerScreen() {
     } catch (error) {
       console.error('Camera capture failed:', error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      if (error instanceof VisionParseError) {
-        Alert.alert('Failed to parse receipt', 'Could not read the line items. Please try again.');
-      } else {
-        Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
-      }
+      Alert.alert('Failed to parse receipt', 'Could not read the line items. Please try again.');
     } finally {
       setIsCapturing(false);
     }
