@@ -72,8 +72,17 @@ export async function analyzeReceipt(base64: string): Promise<ReceiptAnalysis> {
 
     const response = (await httpResponse.json()) as AnthropicMessageResponse;
     const rawText = response.content[0].text;
-    // Strip markdown code blocks if the LLM ignores the prompt
-    const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    console.log("Raw LLM Output:", rawText);
+
+    // Extract everything between the first '{' and the last '}'
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON object found in the LLM response.");
+    }
+
+    const cleanText = rawText.substring(startIndex, endIndex + 1);
     const parsedData = JSON.parse(cleanText);
     return parseAnalysis(parsedData);
   } catch (error) {
