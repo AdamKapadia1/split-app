@@ -1,0 +1,129 @@
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
+import * as Haptics from 'expo-haptics';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
+
+import { supabase } from '@/lib/supabase';
+
+export type SyncStatus = 'disconnected' | 'connecting' | 'live' | 'error';
+
+type ChangeRow = Record<string, unknown>;
+type ChangeEvent = 'INSERT' | 'UPDATE' | 'DELETE';
+type WatchedTable = 'receipts' | 'items' | 'splits';
+
+const CHANGE_EVENTS: readonly ChangeEvent[] = ['INSERT', 'UPDATE', 'DELETE'];
+
+const TABLE_LABEL: Record<WatchedTable, string> = {
+  receipts: 'RECEIPT',
+  items: 'ITEM',
+  splits: 'SPLIT',
+};
+
+/**
+ * Subscribes to receipt, item, and split changes for one receipt.
+ * `onUpdate` runs at most once per 150ms burst. The socket is removed on
+ * unmount, when `receiptId` changes, and when the app leaves the foreground.
+ */
+export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) {
+  const [report, setReport] = useState<{ id: string; status: 'live' | 'error' } | null>(null);
+  const [isActive, setIsActive] = useState(AppState.currentState === 'active');
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onUpdateRef = useRef(onUpdate);
+
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+  }, [onUpdate]);
+
+  const handlePayload = useCallback((table: WatchedTable, payload: RealtimePostgresChangesPayload<ChangeRow>) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    console.info(`[Realtime] ${TABLE_LABEL[table]} ${payload.eventType} received`, payload);
+
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      onUpdateRef.current();
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      setIsActive(nextState === 'active');
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!receiptId || !client || !isActive) {
+      return;
+    }
+
+    const channel = client.channel(`receipt-${receiptId}`);
+    channelRef.current = channel;
+
+    watchTable(channel, 'receipts', `id=eq.${receiptId}`, handlePayload);
+    watchTable(channel, 'items', `receipt_id=eq.${receiptId}`, handlePayload);
+    watchTable(channel, 'splits', undefined, handlePayload);
+
+    channel.subscribe((startStatus, error) => {
+      if (startStatus === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+        setReport({ id: receiptId, status: 'live' });
+        console.info(`[Realtime] Socket connected for receipt ${receiptId}`);
+        return;
+      }
+
+      if (startStatus === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR || startStatus === REALTIME_SUBSCRIBE_STATES.TIMED_OUT) {
+        setReport({ id: receiptId, status: 'error' });
+        console.error(`[Realtime] Socket failed for receipt ${receiptId}: ${startStatus}`, error);
+      }
+    });
+
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+
+      channelRef.current = null;
+      void client.removeChannel(channel);
+      console.info('[Realtime] Socket disconnected');
+    };
+  }, [handlePayload, isActive, receiptId]);
+
+  const status: SyncStatus =
+    !receiptId || !supabase || !isActive
+      ? 'disconnected'
+      : report?.id === receiptId
+        ? report.status
+        : 'connecting';
+
+  return { status };
+}
+
+function watchTable(
+  channel: RealtimeChannel,
+  table: WatchedTable,
+  filter: string | undefined,
+  handlePayload: (table: WatchedTable, payload: RealtimePostgresChangesPayload<ChangeRow>) => void,
+) {
+  for (const event of CHANGE_EVENTS) {
+    channel.on(
+      'postgres_changes',
+      {
+        event,
+        schema: 'public',
+        table,
+        ...(filter ? { filter } : {}),
+      },
+      (payload) => {
+        handlePayload(table, payload);
+      },
+    );
+  }
+}
