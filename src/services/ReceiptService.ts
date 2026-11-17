@@ -159,7 +159,7 @@ export class ReceiptService {
         .from('items')
         .select('*')
         .eq('receipt_id', id)
-        .order('created_at', { ascending: true });
+        .order('id', { ascending: true });
       if (itemsResult.error) {
         throw new ReceiptServiceError('FETCH_FAILED', itemsResult.error.message, itemsResult.error);
       }
