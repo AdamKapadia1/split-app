@@ -1,14 +1,18 @@
+import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useRealtimeSync, type SyncStatus } from '@/hooks/useRealtimeSync';
 import { receiptService } from '@/services/ReceiptService';
-import type { Item, Receipt } from '@/types/database.types';
+import type { Item, Receipt, Split } from '@/types/database.types';
+
+const MOCK_USER_ID = '7924d43c-1f07-4bba-9762-4b62f0b6b071';
 
 type Ledger = {
   receipt: Receipt;
   items: Item[];
+  splits: Split[];
 };
 
 const STATUS_COLOR: Record<SyncStatus, string> = {
@@ -49,6 +53,18 @@ export default function ReceiptLedgerScreen() {
 
   const receipt = receiptData?.receipt ?? null;
   const items = receiptData?.items ?? [];
+  const splits = receiptData?.splits ?? [];
+
+  function claimItem(itemId: string) {
+    if (!receiptId) {
+      return;
+    }
+
+    void Haptics.selectionAsync();
+    void receiptService.toggleItemClaim(itemId, MOCK_USER_ID, receiptId).catch((error: unknown) => {
+      console.error('[Ledger][toggleItemClaim] Failed to toggle claim:', error);
+    });
+  }
 
   return (
     <View style={styles.screen}>
@@ -71,12 +87,23 @@ export default function ReceiptLedgerScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           {receipt?.merchant_name ? <Text style={styles.merchant}>{receipt.merchant_name}</Text> : null}
-          {items.map((item) => (
-            <View key={item.id} style={styles.card}>
-              <Text style={styles.itemName}>{item.original_name || item.display_name || 'Item'}</Text>
-              <Text style={styles.itemPrice}>{formatPounds(item.price)}</Text>
-            </View>
-          ))}
+          {items.map((item) => {
+            const isClaimedByMe = splits.some((split) => split.item_id === item.id && split.user_id === MOCK_USER_ID);
+            const label = item.original_name || item.display_name || 'Item';
+
+            return (
+              <Pressable
+                key={item.id}
+                accessibilityRole="button"
+                accessibilityLabel={isClaimedByMe ? `${label}, claimed by you` : label}
+                accessibilityState={{ selected: isClaimedByMe }}
+                onPress={() => claimItem(item.id)}
+                style={[styles.card, isClaimedByMe && styles.cardClaimed]}>
+                <Text style={[styles.itemName, isClaimedByMe && styles.claimedText]}>{label}</Text>
+                <Text style={[styles.itemPrice, isClaimedByMe && styles.claimedText]}>{formatPounds(item.price)}</Text>
+              </Pressable>
+            );
+          })}
           <View style={styles.footer}>
             <TotalRow label="Subtotal" value={formatPounds(receipt?.subtotal ?? 0)} />
             <TotalRow label="Tax" value={formatPounds(receipt?.tax_amount ?? 0)} />
@@ -149,6 +176,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
+  },
+  cardClaimed: {
+    backgroundColor: '#064E3B',
+    borderWidth: 1,
+    borderColor: '#10B981',
+  },
+  claimedText: {
+    color: '#34D399',
   },
   itemName: {
     flex: 1,

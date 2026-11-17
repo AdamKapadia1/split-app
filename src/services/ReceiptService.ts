@@ -1,13 +1,13 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
-import type { Item, Receipt, ReceiptStatus } from '@/types/database.types';
+import type { Item, Receipt, ReceiptStatus, Split } from '@/types/database.types';
 
 const DEFAULT_CURRENCY = 'GBP';
 /** Largest absolute value that fits in Postgres `numeric(10,2)`. */
 const MONEY_LIMIT = 99_999_999.99;
 
-type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
+type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status'>
@@ -144,7 +144,7 @@ export class ReceiptService {
    * Load one receipt and its lines, oldest item first.
    * Money fields on the returned rows are exact 2-decimal `numeric(10,2)` amounts.
    */
-  async getReceiptWithItems(receiptId: string): Promise<{ receipt: Receipt; items: Item[] }> {
+  async getReceiptWithItems(receiptId: string): Promise<{ receipt: Receipt; items: Item[]; splits: Split[] }> {
     try {
       const id = requireId(receiptId, 'receiptId');
       console.info('[ReceiptService] [getReceiptWithItems] Loading ledger', { receiptId: id });
@@ -164,17 +164,65 @@ export class ReceiptService {
         throw new ReceiptServiceError('FETCH_FAILED', itemsResult.error.message, itemsResult.error);
       }
 
+      const splitsResult = await client.from('splits').select('*').eq('receipt_id', id);
+      if (splitsResult.error) {
+        throw new ReceiptServiceError('FETCH_FAILED', splitsResult.error.message, splitsResult.error);
+      }
+
       const ledger = {
         receipt: parseReceipt(receiptResult.data, 'FETCH_FAILED'),
         items: parseItems(itemsResult.data, 'FETCH_FAILED'),
+        splits: parseSplits(splitsResult.data, 'FETCH_FAILED'),
       };
       console.info('[ReceiptService] [getReceiptWithItems] Loaded ledger', {
         receiptId: ledger.receipt.id,
-        count: ledger.items.length,
+        items: ledger.items.length,
+        splits: ledger.splits.length,
       });
       return ledger;
     } catch (caught) {
       throw logged('getReceiptWithItems', 'FETCH_FAILED', 'Could not load the receipt.', caught);
+    }
+  }
+
+  /**
+   * Claim a line for a person, or remove that claim if it already exists.
+   * The realtime listener reloads the ledger; this method does not return the new rows.
+   */
+  async toggleItemClaim(itemId: string, userId: string, receiptId: string): Promise<void> {
+    try {
+      const item = requireId(itemId, 'itemId');
+      const user = requireId(userId, 'userId');
+      const receipt = requireId(receiptId, 'receiptId');
+      const client = requireClient();
+      console.info('[ReceiptService] [toggleItemClaim] Toggling claim', { itemId: item, userId: user });
+
+      const existing = await client.from('splits').select('*').eq('item_id', item).eq('user_id', user).single();
+      if (existing.error && !isMissingRow(existing.error)) {
+        throw new ReceiptServiceError('CLAIM_FAILED', existing.error.message, existing.error);
+      }
+
+      if (existing.data && !existing.error) {
+        const split = parseSplit(existing.data, 'CLAIM_FAILED');
+        const removed = await client.from('splits').delete().eq('id', split.id);
+        if (removed.error) {
+          throw new ReceiptServiceError('CLAIM_FAILED', removed.error.message, removed.error);
+        }
+        console.info('[ReceiptService] [toggleItemClaim] Removed claim', { splitId: split.id });
+        return;
+      }
+
+      const inserted = await client.from('splits').insert({
+        item_id: item,
+        user_id: user,
+        receipt_id: receipt,
+      });
+      if (inserted.error) {
+        throw new ReceiptServiceError('CLAIM_FAILED', inserted.error.message, inserted.error);
+      }
+      console.info('[ReceiptService] [toggleItemClaim] Added claim', { itemId: item, userId: user });
+    } catch (caught) {
+      throw logged('toggleItemClaim', 'CLAIM_FAILED', 'Could not update the claim.', caught);
     }
   }
 }
@@ -321,6 +369,28 @@ function parseItems(value: unknown, code: ReceiptServiceCode): Item[] {
       is_tax_exempt: readStoredBoolean(row, 'is_tax_exempt', code),
     };
   });
+}
+
+function parseSplits(value: unknown, code: ReceiptServiceCode): Split[] {
+  if (!Array.isArray(value)) {
+    throw new ReceiptServiceError(code, 'Splits response was not a list of rows.');
+  }
+
+  return value.map((entry) => parseSplit(entry, code));
+}
+
+function parseSplit(value: unknown, code: ReceiptServiceCode): Split {
+  const row = asRecord(value, 'Split', code);
+  return {
+    id: readString(row, 'id', code),
+    receipt_id: readString(row, 'receipt_id', code),
+    item_id: readString(row, 'item_id', code),
+    user_id: readString(row, 'user_id', code),
+  };
+}
+
+function isMissingRow(error: PostgrestError): boolean {
+  return error.code === 'PGRST116' && /0 rows/i.test(error.details);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

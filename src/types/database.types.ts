@@ -17,6 +17,21 @@ export type PaymentStatus = 'pending' | 'processing' | 'completed' | 'failed';
 export type SplitType = 'equal' | 'exact' | 'percentage';
 
 /**
+ * One person's claim on a single receipt line.
+ * `id` is assigned by Postgres and is the key used to remove the claim.
+ */
+export interface Split {
+  /** Immutable primary key assigned by Postgres. */
+  readonly id: string;
+  /** Receipt this claim belongs to. */
+  receipt_id: string;
+  /** Line item being claimed. */
+  item_id: string;
+  /** Profile id of the person who claimed the line. */
+  user_id: string;
+}
+
+/**
  * A receipt owned by a host.
  *
  * Every financial field on this row is an exact 2-decimal money amount mapped to
