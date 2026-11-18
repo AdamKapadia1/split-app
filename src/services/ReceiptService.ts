@@ -1,12 +1,12 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
-import type { Item, Receipt, ReceiptStatus, Split } from '@/types/database.types';
+import type { Item, Receipt, ReceiptSplit, ReceiptStatus, Split } from '@/types/database.types';
 
 const DEFAULT_CURRENCY = 'GBP';
 const MONEY_LIMIT = 99_999_999.99;
 
-type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
+type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'SAVE_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status' | 'merchant_name'> & {
@@ -147,6 +147,43 @@ export class ReceiptService {
       throw logged('toggleItemClaim', 'CLAIM_FAILED', 'Could not update the claim.', caught);
     }
   }
+
+  async getReceiptSplits(receiptId: string): Promise<ReceiptSplit[]> {
+    try {
+      const id = requireId(receiptId, 'receiptId');
+      const client = requireClient();
+      const { data, error } = await client.from('receipt_splits').select('*').eq('receipt_id', id);
+      if (error) throw new ReceiptServiceError('FETCH_FAILED', error.message, error);
+      return parseReceiptSplits(data, 'FETCH_FAILED');
+    } catch (caught) {
+      throw logged('getReceiptSplits', 'FETCH_FAILED', 'Could not load the saved split.', caught);
+    }
+  }
+
+  async saveReceiptSplits(
+    receiptId: string,
+    paidByUserId: string,
+    splits: { user_id: string; amount_minor: number; item_ids: string[] }[],
+  ): Promise<void> {
+    try {
+      const id = requireId(receiptId, 'receiptId');
+      const paidBy = requireId(paidByUserId, 'paidByUserId');
+      const payload = splits.map((split, index) => ({
+        user_id: requireId(split.user_id, `splits[${index}].user_id`),
+        amount_minor: requireMinor(split.amount_minor, index),
+        item_ids: requireItemIds(split.item_ids, index),
+      }));
+      const client = requireClient();
+      const { error } = await client.rpc('save_receipt_splits', {
+        p_receipt_id: id,
+        p_paid_by: paidBy,
+        p_splits: payload,
+      });
+      if (error) throw new ReceiptServiceError('SAVE_FAILED', error.message, error);
+    } catch (caught) {
+      throw logged('saveReceiptSplits', 'SAVE_FAILED', 'Could not save the split.', caught);
+    }
+  }
 }
 
 export const receiptService = new ReceiptService();
@@ -198,6 +235,18 @@ function requireBoolean(value: boolean, index: number): boolean {
   return value;
 }
 
+function requireMinor(value: number, index: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new ReceiptServiceError('VALIDATION_ERROR', `splits[${index}].amount_minor must be a non-negative integer.`);
+  }
+  return value;
+}
+
+function requireItemIds(value: string[], index: number): string[] {
+  if (!Array.isArray(value)) throw new ReceiptServiceError('VALIDATION_ERROR', `splits[${index}].item_ids must be a list.`);
+  return value.map((itemId, itemIndex) => requireId(itemId, `splits[${index}].item_ids[${itemIndex}]`));
+}
+
 function normalizeTotals(updates: ReceiptTotalsUpdate): ReceiptTotalsUpdate {
   const payload: ReceiptTotalsUpdate = {};
   const moneyFields = ['subtotal', 'tax_amount', 'service_charge', 'total_amount'] as const;
@@ -229,6 +278,7 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
   return {
     id: readString(row, 'id', code),
     host_id: readString(row, 'host_id', code),
+    paid_by: readNullableString(row, 'paid_by', code),
     group_id: readNullableString(row, 'group_id', code),
     merchant_name: readNullableString(row, 'merchant_name', code),
     restaurant_name: readNullableString(row, 'restaurant_name', code),
@@ -274,6 +324,21 @@ function parseSplit(value: unknown, code: ReceiptServiceCode): Split {
     item_id: readString(row, 'item_id', code),
     user_id: readString(row, 'user_id', code),
   };
+}
+
+function parseReceiptSplits(value: unknown, code: ReceiptServiceCode): ReceiptSplit[] {
+  if (!Array.isArray(value)) throw new ReceiptServiceError(code, 'Receipt splits response was not a list of rows.');
+  return value.map((entry) => {
+    const row = asRecord(entry, 'ReceiptSplit', code);
+    return {
+      id: readString(row, 'id', code),
+      receipt_id: readString(row, 'receipt_id', code),
+      user_id: readString(row, 'user_id', code),
+      amount_minor: readMinor(row, 'amount_minor', code),
+      item_ids: readStringList(row, 'item_ids', code),
+      updated_at: readString(row, 'updated_at', code),
+    };
+  });
 }
 
 function isMissingRow(error: PostgrestError): boolean {
@@ -330,4 +395,23 @@ function readStoredBoolean(row: Record<string, unknown>, field: string, code: Re
   const value = row[field];
   if (typeof value !== 'boolean') throw new ReceiptServiceError(code, `Response field ${field} was not a boolean.`);
   return value;
+}
+
+function readMinor(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): number {
+  const value = row[field];
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isInteger(numeric)) throw new ReceiptServiceError(code, `Response field ${field} was not an integer.`);
+  return numeric;
+}
+
+function readStringList(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): string[] {
+  const value = row[field];
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new ReceiptServiceError(code, `Response field ${field} was not a list.`);
+  return value.map((entry) => {
+    if (typeof entry !== 'string' || entry.length === 0) {
+      throw new ReceiptServiceError(code, `Response field ${field} contained a non-string id.`);
+    }
+    return entry;
+  });
 }

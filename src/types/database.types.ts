@@ -32,6 +32,25 @@ export interface Split {
 }
 
 /**
+ * One person's saved share of a receipt, stored in integer pence.
+ * Replaced as a set by `save_receipt_splits`.
+ */
+export interface ReceiptSplit {
+  /** Immutable primary key assigned by Postgres. */
+  readonly id: string;
+  /** Receipt this share belongs to. */
+  receipt_id: string;
+  /** Profile id of the person who owes this share. */
+  user_id: string;
+  /** Amount owed, in integer minor units (pence). */
+  amount_minor: number;
+  /** Line items included in this person's share. */
+  item_ids: string[];
+  /** Timestamp of the last time this share was saved. */
+  updated_at: string;
+}
+
+/**
  * A receipt owned by a host.
  *
  * Every financial field on this row is an exact 2-decimal money amount mapped to
@@ -45,6 +64,8 @@ export interface Receipt {
   readonly id: string;
   /** Profile id of the person who owns this receipt. */
   host_id: string;
+  /** Profile id of the person who paid the bill. Null until someone is chosen. */
+  paid_by?: string | null;
   /** Optional group this receipt belongs to. Null while it is still unassigned. */
   group_id: string | null;
   /** Cleaned business name from the logo, header, or footer. Null when none is visible. */
