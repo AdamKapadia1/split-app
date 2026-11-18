@@ -299,10 +299,15 @@ function readString(row: Record<string, unknown>, field: string, code: ReceiptSe
 
 function readNullableString(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): string | null {
   const value = row[field];
-  if (value === null) return null;
-  if (typeof value !== 'string') throw new ReceiptServiceError(code, `Response field ${field} was not a string or null.`);
+  // Now handles both null and undefined safely
+  if (value === undefined || value === null) return null;
+  
+  if (typeof value !== 'string') {
+    throw new ReceiptServiceError(code, `Response field ${field} was not a string or null.`);
+  }
   return value;
 }
+
 
 function readStoredMoney(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): number {
   const value = row[field];
