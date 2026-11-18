@@ -8,7 +8,10 @@
     "scheme": "splitapp",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": ["sms"]
+      }
     },
     "android": {
       "adaptiveIcon": {

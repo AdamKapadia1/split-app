@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -20,7 +21,7 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
-import { formatPhoneAsYouType, SUPPORTED_COUNTRIES } from '@/utils/phone';
+import { formatPhoneAsYouType, SUPPORTED_COUNTRIES, toE164 } from '@/utils/phone';
 
 type AddMemberModalProps = {
   visible: boolean;
@@ -42,6 +43,7 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [invitePhone, setInvitePhone] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [focused, setFocused] = useState(false);
   const [countriesOpen, setCountriesOpen] = useState(false);
@@ -59,6 +61,7 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
     setPhone('');
     setError(null);
     setNotFound(false);
+    setInvitePhone(null);
     setFocused(false);
     setCountriesOpen(false);
   }
@@ -84,6 +87,7 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
   function onChangePhone(value: string) {
     if (error) setError(null);
     if (notFound) setNotFound(false);
+    if (invitePhone) setInvitePhone(null);
 
     const trimmed = value.trim();
     if (trimmed.startsWith('+')) {
@@ -122,6 +126,7 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
       const code = caught instanceof GroupServiceError ? caught.code : 'NETWORK_ERROR';
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       if (code === 'NOT_FOUND') {
+        setInvitePhone(toE164(phone, country));
         setNotFound(true);
         return;
       }
@@ -133,15 +138,48 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
   }
 
   async function sendInvite() {
+    if (submittingRef.current) return;
+
+    submittingRef.current = true;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const name = groupName.trim() || 'my group';
+    const message = `Hey! I added you to "${name}" to split our bills. Download the app and sign up with this number to join automatically.`;
+    const e164Phone = invitePhone ?? toE164(phone, country);
+
     try {
-      await Share.share({
-        message: `Join ${name} on Split. Download the app and I'll add you by phone.`,
-      });
+      if (e164Phone) {
+        try {
+          await groupService.createPendingInvite(groupId, e164Phone);
+        } catch {
+          // The text should still open if the invite cannot be saved.
+        }
+      }
+
+      const separator = Platform.OS === 'ios' ? '&' : '?';
+      const smsUrl = e164Phone ? `sms:${e164Phone}${separator}body=${encodeURIComponent(message)}` : null;
+      let composerOpened = false;
+      if (smsUrl) {
+        try {
+          if (await Linking.canOpenURL(smsUrl)) {
+            await Linking.openURL(smsUrl);
+            composerOpened = true;
+          }
+        } catch {
+          composerOpened = false;
+        }
+      }
+
+      if (!composerOpened) {
+        await Share.share({ message });
+      }
+
+      reset();
+      onClose();
     } catch {
       setNotFound(false);
       setError('Could not open the share sheet.');
+    } finally {
+      submittingRef.current = false;
     }
   }
 

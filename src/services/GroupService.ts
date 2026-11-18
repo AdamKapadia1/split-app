@@ -96,6 +96,19 @@ class GroupService {
     }
   }
 
+  async createPendingInvite(groupId: string, e164Phone: string): Promise<void> {
+    try {
+      const client = requireClient();
+      const invited = await client.rpc('create_group_invite', {
+        p_group_id: groupId,
+        p_phone: e164Phone,
+      });
+      if (invited.error) throw invited.error;
+    } catch (error) {
+      throw asGroupError(error);
+    }
+  }
+
   async removeMember(groupId: string, userId: string): Promise<void> {
     try {
       const client = requireClient();
@@ -121,7 +134,7 @@ function requireClient() {
 
 function asGroupError(error: unknown): GroupServiceError {
   if (error instanceof GroupServiceError) return error;
-  
+
   const code = postgresCode(error);
   if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
