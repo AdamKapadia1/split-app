@@ -4,37 +4,57 @@ import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
+import { GroupSelectorSheet } from '@/components/GroupSelectorSheet';
+import { supabase } from '@/lib/supabase';
+
 import { receiptService } from '../../services/ReceiptService';
 import { VisionService } from '../../services/VisionService';
-
-const MOCK_USER_ID = '7924d43c-1f07-4bba-9762-4b62f0b6b071';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [pendingPhotoBase64, setPendingPhotoBase64] = useState<string | null>(null);
+  const [isGroupSheetVisible, setGroupSheetVisible] = useState(false);
 
-  async function handleCapture() {
-    if (!cameraRef.current || isCapturing) {
-      return;
-    }
+  const takePicture = async () => {
+    if (!cameraRef.current || isCapturing) return;
 
     setIsCapturing(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
       const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
-      console.log('📸 Photo captured! Base64 length:', photo?.base64?.length);
       if (!photo?.base64) {
         throw new Error('The camera did not return image data.');
       }
+      setPendingPhotoBase64(photo.base64);
+      setGroupSheetVisible(true);
+    } catch (error) {
+      console.error(error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
+    } finally {
+      setIsCapturing(false);
+    }
+  };
 
-      const aiData = await VisionService.analyzeReceipt(photo.base64);
-      const receipt = await receiptService.createEmptyReceipt(MOCK_USER_ID);
+  const processReceiptWithGroup = async (groupId: string | null) => {
+    setGroupSheetVisible(false);
+    if (!pendingPhotoBase64) return;
+
+    setIsCapturing(true);
+    try {
+      if (!supabase) throw new Error('Not logged in');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) throw new Error('Not logged in');
+
+      const newReceipt = await receiptService.createEmptyReceipt(session.user.id, groupId);
+      const aiData = await VisionService.analyzeReceipt(pendingPhotoBase64);
 
       if (aiData.items.length > 0) {
         await receiptService.addScannedItems(
-          receipt.id,
+          newReceipt.id,
           aiData.items.map((item: { name: string; price: number }) => ({
             original_name: item.name,
             display_name: item.name,
@@ -45,7 +65,7 @@ export default function ScannerScreen() {
         );
       }
 
-      await receiptService.updateReceiptTotals(receipt.id, {
+      await receiptService.updateReceiptTotals(newReceipt.id, {
         subtotal: aiData.subtotal,
         tax_amount: aiData.tax,
         total_amount: aiData.total,
@@ -53,15 +73,16 @@ export default function ScannerScreen() {
       });
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.push(`/receipt/${receipt.id}`);
+      router.push(`/receipt/${newReceipt.id}`);
     } catch (error) {
-      console.error('Camera capture failed:', error);
+      console.error(error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Failed to parse receipt', 'Could not read the line items. Please try again.');
     } finally {
+      setPendingPhotoBase64(null);
       setIsCapturing(false);
     }
-  }
+  };
 
   if (!permission) {
     return <View style={styles.screen} />;
@@ -102,7 +123,7 @@ export default function ScannerScreen() {
           activeOpacity={0.85}
           disabled={isCapturing}
           onPress={() => {
-            void handleCapture();
+            void takePicture();
           }}
           style={styles.shutterOuter}>
           {isCapturing ? (
@@ -112,6 +133,14 @@ export default function ScannerScreen() {
           )}
         </TouchableOpacity>
       </View>
+      <GroupSelectorSheet
+        visible={isGroupSheetVisible}
+        onSelect={processReceiptWithGroup}
+        onCancel={() => {
+          setGroupSheetVisible(false);
+          setPendingPhotoBase64(null);
+        }}
+      />
     </View>
   );
 }
