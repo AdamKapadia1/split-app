@@ -11,6 +11,8 @@ export type ReceiptItem = {
 };
 
 export type ParsedReceipt = {
+  restaurant_name?: string | null;
+  website?: string | null;
   items: ReceiptItem[];
   subtotal: number;
   serviceCharge: number;
@@ -61,6 +63,8 @@ export async function parseReceiptImage(image: string): Promise<ParsedReceipt> {
               text: [
                 'Read this receipt and return JSON with this shape:',
                 '{',
+                '  "restaurant_name": string,',
+                '  "website": string,',
                 '  "items": [{ "quantity": number, "name": string, "amount": number }],',
                 '  "subtotal": number,',
                 '  "serviceCharge": number,',
@@ -70,6 +74,7 @@ export async function parseReceiptImage(image: string): Promise<ParsedReceipt> {
                 'amount is the line total, not the unit price. quantity is how many of that item were bought.',
                 'Use an ISO currency code. Use 0 when service charge is not printed.',
                 'If subtotal or total are missing, calculate them from the line items.',
+                'CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items.',
               ].join('\n'),
             },
           ],
@@ -124,6 +129,8 @@ function parseReceiptJson(text: string): ParsedReceipt {
   }
 
   const parsed = JSON.parse(json.slice(start, end + 1)) as {
+    restaurant_name?: unknown;
+    website?: unknown;
     items?: unknown;
     subtotal?: unknown;
     serviceCharge?: unknown;
@@ -150,8 +157,13 @@ function parseReceiptJson(text: string): ParsedReceipt {
   const serviceCharge = asMoney(parsed.serviceCharge);
   const total = parsed.total == null ? asMoney(subtotal + serviceCharge) : asMoney(parsed.total);
   const currency = typeof parsed.currency === 'string' && parsed.currency.trim() ? parsed.currency.trim().toUpperCase() : 'GBP';
+  
+  const restaurant_name = typeof parsed.restaurant_name === 'string' ? parsed.restaurant_name.trim() : null;
+  const website = typeof parsed.website === 'string' ? parsed.website.trim() : null;
 
   return {
+    restaurant_name,
+    website,
     items,
     subtotal: asMoney(subtotal),
     serviceCharge,
