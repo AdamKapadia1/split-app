@@ -1,9 +1,9 @@
 import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { useRealtimeSync, type SyncStatus } from '@/hooks/useRealtimeSync';
+import { type SyncStatus } from '@/hooks/useRealtimeSync';
 import { receiptService } from '@/services/ReceiptService';
 import type { Item, Receipt, Split } from '@/types/database.types';
 
@@ -22,215 +22,221 @@ const STATUS_COLOR: Record<SyncStatus, string> = {
   disconnected: '#EF4444',
 };
 
+// 1. MEMOIZED ITEM ROW: Fixes the tap delay so the green box appears instantly
+const LedgerItem = memo(({ item, isSelected, onToggle }: { item: Item, isSelected: boolean, onToggle: (id: string) => void }) => (
+  <Pressable 
+    onPress={() => onToggle(item.id)}
+    style={[styles.itemCard, isSelected && styles.itemCardSelected]}
+  >
+    <Text style={styles.itemName}>{item.name}</Text>
+    <Text style={styles.itemPrice}>£{Number(item.price).toFixed(2)}</Text>
+  </Pressable>
+));
+
 export default function ReceiptLedgerScreen() {
   const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
-  const receiptId = firstParam(idParam);
+  // Helper to safely extract string ID whether it's an array or string
+  const receiptId = Array.isArray(idParam) ? idParam[0] : idParam;
+  
   const [receiptData, setReceiptData] = useState<Ledger | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Local state for instantly toggling the UI before running heavy math
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
-  const loadLedger = useCallback(() => {
-    if (!receiptId) {
-      return;
+  const loadLedger = useCallback(async () => {
+    if (!receiptId) return;
+    try {
+      setIsLoading(true);
+      const data = await receiptService.getReceiptWithItems(receiptId);
+      setReceiptData(data as Ledger);
+    } catch (error) {
+      console.error("Failed to load ledger:", error);
+    } finally {
+      setIsLoading(false);
     }
-
-    void receiptService.getReceiptWithItems(receiptId).then(
-      (ledger) => {
-        setReceiptData(ledger);
-        setIsLoading(false);
-      },
-      (error: unknown) => {
-        console.error('[Ledger][loadLedger] Failed to load receipt:', error);
-        setIsLoading(false);
-      },
-    );
   }, [receiptId]);
 
   useEffect(() => {
     loadLedger();
   }, [loadLedger]);
 
-  const { status } = useRealtimeSync(receiptId, loadLedger);
-
-  const receipt = receiptData?.receipt ?? null;
-  const items = receiptData?.items ?? [];
-  const splits = receiptData?.splits ?? [];
-
-  function claimItem(itemId: string) {
-    if (!receiptId) {
-      return;
-    }
-
-    void Haptics.selectionAsync();
-    void receiptService.toggleItemClaim(itemId, MOCK_USER_ID, receiptId).catch((error: unknown) => {
-      console.error('[Ledger][toggleItemClaim] Failed to toggle claim:', error);
+  const toggleItem = useCallback((itemId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
     });
+  }, []);
+
+  if (isLoading || !receiptData) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#4ade80" />
+      </View>
+    );
   }
 
-  return (
-    <View style={styles.screen}>
-      <Stack.Screen
-        options={{
-          title: 'Ledger',
-          headerShown: true,
-          headerShadowVisible: false,
-          headerStyle: { backgroundColor: '#0B0F19' },
-          headerTintColor: '#F8FAFC',
-          headerTitleStyle: { color: '#F8FAFC' },
-          headerRight: () => <LiveDot status={status} />,
-        }}
-      />
+  const { receipt, items } = receiptData;
 
-      {receiptId && isLoading && receiptData === null ? (
-        <View style={styles.loading}>
-          <ActivityIndicator color="#38BDF8" size="large" />
+  return (
+    <View style={styles.container}>
+      <Stack.Screen options={{ title: 'Ledger', headerStyle: { backgroundColor: '#0f172a' }, headerTintColor: '#fff' }} />
+      
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        
+        {/* 2. NEW UI HEADER: Restaurant Name & Actionable Booking Link */}
+        <View style={styles.headerContainer}>
+          <Text style={styles.restaurantName}>
+            {receipt.restaurant_name || 'Ledger'}
+          </Text>
+          
+          {receipt.website && (
+            <Pressable 
+              onPress={() => Linking.openURL(receipt.website.startsWith('http') ? receipt.website : `https://${receipt.website}`)}
+              style={styles.bookButton}
+            >
+              <Text style={styles.bookButtonText}>Book again</Text>
+            </Pressable>
+          )}
         </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.content}>
-          {receipt?.merchant_name ? <Text style={styles.merchant}>{receipt.merchant_name}</Text> : null}
-          {items.map((item) => {
-            const isClaimedByMe = splits.some((split) => split.item_id === item.id && split.user_id === MOCK_USER_ID);
-            const label = item.original_name || item.display_name || 'Item';
 
-            return (
-              <Pressable
-                key={item.id}
-                accessibilityRole="button"
-                accessibilityLabel={isClaimedByMe ? `${label}, claimed by you` : label}
-                accessibilityState={{ selected: isClaimedByMe }}
-                onPress={() => claimItem(item.id)}
-                style={[styles.card, isClaimedByMe && styles.cardClaimed]}>
-                <Text style={[styles.itemName, isClaimedByMe && styles.claimedText]}>{label}</Text>
-                <Text style={[styles.itemPrice, isClaimedByMe && styles.claimedText]}>{formatPounds(item.price)}</Text>
-              </Pressable>
-            );
-          })}
-          <View style={styles.footer}>
-            <TotalRow label="Subtotal" value={formatPounds(receipt?.subtotal ?? 0)} />
-            <TotalRow label="Tax" value={formatPounds(receipt?.tax_amount ?? 0)} />
-            <TotalRow label="Service Charge" value={formatPounds(receipt?.service_charge ?? 0)} />
-            <TotalRow label="Total" value={formatPounds(receipt?.total_amount ?? 0)} emphasis />
+        {/* 3. ITEMS LIST: Uses the fast-rendering Memoized component */}
+        <View style={styles.itemsContainer}>
+          {items.map(item => (
+            <LedgerItem 
+              key={item.id} 
+              item={item} 
+              isSelected={selectedItemIds.has(item.id)} 
+              onToggle={toggleItem} 
+            />
+          ))}
+        </View>
+
+        {/* 4. TOTALS FOOTER */}
+        <View style={styles.totalsContainer}>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Subtotal</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.subtotal).toFixed(2)}</Text>
           </View>
-        </ScrollView>
-      )}
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Tax</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.tax).toFixed(2)}</Text>
+          </View>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Service Charge</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.tip || 0).toFixed(2)}</Text>
+          </View>
+          <View style={[styles.totalRow, styles.grandTotalRow]}>
+            <Text style={styles.grandTotalLabel}>Total</Text>
+            <Text style={styles.grandTotalValue}>£{Number(receipt.total).toFixed(2)}</Text>
+          </View>
+        </View>
+
+      </ScrollView>
     </View>
   );
-}
-
-function LiveDot({ status }: { status: SyncStatus }) {
-  return (
-    <View
-      accessibilityLabel={`Connection ${status}`}
-      style={[styles.dot, { backgroundColor: STATUS_COLOR[status] }]}
-    />
-  );
-}
-
-function TotalRow({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
-  return (
-    <View style={styles.totalRow}>
-      <Text style={emphasis ? styles.totalLabel : styles.footerLabel}>{label}</Text>
-      <Text style={emphasis ? styles.totalValue : styles.footerValue}>{value}</Text>
-    </View>
-  );
-}
-
-function firstParam(value: string | string[] | undefined): string | null {
-  const raw = Array.isArray(value) ? value[0] : value;
-  if (!raw || raw.trim().length === 0) {
-    return null;
-  }
-  return raw;
-}
-
-function formatPounds(value: number): string {
-  const amount = Number.isFinite(value) ? value : 0;
-  return `£${amount.toFixed(2)}`;
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  container: {
     flex: 1,
-    backgroundColor: '#0B0F19',
-    padding: 16,
+    backgroundColor: '#0f172a', // Midnight Navy background
   },
-  loading: {
+  centerContainer: {
     flex: 1,
-    alignItems: 'center',
+    backgroundColor: '#0f172a',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  content: {
-    paddingBottom: 24,
-  },
-  merchant: {
-    color: '#94A3B8',
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  card: {
-    backgroundColor: '#1E293B',
-    borderRadius: 12,
+  scrollContent: {
     padding: 16,
-    marginBottom: 8,
+    paddingBottom: 40,
+  },
+  headerContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  restaurantName: {
+    color: 'white',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  bookButton: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#1e293b',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  bookButtonText: {
+    color: '#4ade80',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  itemsContainer: {
+    gap: 12,
+    marginBottom: 32,
+  },
+  itemCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
+    backgroundColor: '#1e293b',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
-  cardClaimed: {
-    backgroundColor: '#064E3B',
-    borderWidth: 1,
-    borderColor: '#10B981',
-  },
-  claimedText: {
-    color: '#34D399',
+  itemCardSelected: {
+    borderColor: '#4ade80',
+    backgroundColor: '#1e293b', // Keeps the navy interior, adds green border
   },
   itemName: {
-    flex: 1,
-    color: '#FFFFFF',
+    color: 'white',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   itemPrice: {
-    color: '#38BDF8',
+    color: '#38bdf8', // Light blue price text from your design
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
   },
-  footer: {
+  totalsContainer: {
     borderTopWidth: 1,
-    borderColor: '#334155',
+    borderTopColor: '#334155',
     paddingTop: 16,
-    marginTop: 16,
-    gap: 10,
+    gap: 8,
   },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  footerLabel: {
-    color: '#94A3B8',
-    fontSize: 15,
-  },
-  footerValue: {
-    color: '#F8FAFC',
-    fontSize: 15,
-    fontWeight: '600',
-  },
   totalLabel: {
-    color: '#F8FAFC',
-    fontSize: 20,
-    fontWeight: '700',
+    color: '#94a3b8',
+    fontSize: 14,
   },
   totalValue: {
-    color: '#38BDF8',
-    fontSize: 22,
-    fontWeight: '700',
+    color: 'white',
+    fontSize: 14,
   },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 8,
+  grandTotalRow: {
+    marginTop: 8,
+  },
+  grandTotalLabel: {
+    color: 'white',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  grandTotalValue: {
+    color: '#38bdf8',
+    fontSize: 20,
+    fontWeight: 'bold',
   },
 });
