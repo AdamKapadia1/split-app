@@ -8,7 +8,6 @@ const MONEY_LIMIT = 99_999_999.99;
 
 type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
-// 1. ADDED RESTAURANT FIELDS TO THE UPDATE PAYLOAD
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status'> & {
     restaurant_name?: string | null;
@@ -16,7 +15,6 @@ type ReceiptTotalsUpdate = Partial<
   }
 >;
 
-// 2. MADE SCANNED ITEM MORE LENIENT FOR AI OUTPUT
 type ScannedItem = Omit<Item, 'id' | 'receipt_id'> & { name?: string };
 
 const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['scanning', 'open', 'locked', 'settled'];
@@ -67,11 +65,10 @@ export class ReceiptService {
       const id = requireId(receiptId, 'receiptId');
       const rows = items.map((item, index) => ({
         receipt_id: id,
-        // Fallback to item.name if original_name is missing from the AI mapping
+        line_index: index, // Saves the exact layout order
         original_name: requireName(item.original_name || item.name || '', index),
         display_name: requireNullableName(item.display_name ?? null, index),
         price: requireMoney(item.price, `items[${index}].price`),
-        // Default quantity to 1 and tax exempt to false if AI skips them
         quantity: requireQuantity(item.quantity ?? 1, index),
         is_tax_exempt: requireBoolean(item.is_tax_exempt ?? false, index),
       }));
@@ -108,7 +105,8 @@ export class ReceiptService {
       const receiptResult = await client.from('receipts').select('*').eq('id', id).single();
       if (receiptResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptResult.error.message, receiptResult.error);
 
-      const itemsResult = await client.from('items').select('*').eq('receipt_id', id).order('id', { ascending: true });
+      // Fetches items sorted by line_index instead of random ID
+      const itemsResult = await client.from('items').select('*').eq('receipt_id', id).order('line_index', { ascending: true });
       if (itemsResult.error) throw new ReceiptServiceError('FETCH_FAILED', itemsResult.error.message, itemsResult.error);
 
       const splitsResult = await client.from('splits').select('*').eq('receipt_id', id);
@@ -198,7 +196,6 @@ function requireBoolean(value: boolean, index: number): boolean {
   return value;
 }
 
-// 3. UPDATED TO ALLOW RESTAURANT STRINGS TO PASS VALIDATION
 function normalizeTotals(updates: ReceiptTotalsUpdate): ReceiptTotalsUpdate {
   const payload: ReceiptTotalsUpdate = {};
   const moneyFields = ['subtotal', 'tax_amount', 'service_charge', 'total_amount'] as const;
@@ -225,7 +222,6 @@ function normalizeTotals(updates: ReceiptTotalsUpdate): ReceiptTotalsUpdate {
   return payload;
 }
 
-// 4. ADDED PARSING FOR THE NEW DATABASE COLUMNS
 function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
   const row = asRecord(value, 'Receipt', code);
   return {
@@ -233,8 +229,8 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
     host_id: readString(row, 'host_id', code),
     group_id: readNullableString(row, 'group_id', code),
     merchant_name: readNullableString(row, 'merchant_name', code),
-    restaurant_name: readNullableString(row, 'restaurant_name', code), // New
-    website: readNullableString(row, 'website', code), // New
+    restaurant_name: readNullableString(row, 'restaurant_name', code),
+    website: readNullableString(row, 'website', code),
     currency_code: readString(row, 'currency_code', code),
     subtotal: readStoredMoney(row, 'subtotal', code),
     tax_amount: readStoredMoney(row, 'tax_amount', code),
@@ -244,7 +240,7 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
     image_url: readNullableString(row, 'image_url', code),
     status: readStatus(row, code),
     created_at: readString(row, 'created_at', code),
-  } as Receipt; // Cast to Receipt to satisfy any type mismatches during transition
+  } as Receipt;
 }
 
 function parseItems(value: unknown, code: ReceiptServiceCode): Item[] {
@@ -299,15 +295,10 @@ function readString(row: Record<string, unknown>, field: string, code: ReceiptSe
 
 function readNullableString(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): string | null {
   const value = row[field];
-  // Now handles both null and undefined safely
   if (value === undefined || value === null) return null;
-  
-  if (typeof value !== 'string') {
-    throw new ReceiptServiceError(code, `Response field ${field} was not a string or null.`);
-  }
+  if (typeof value !== 'string') throw new ReceiptServiceError(code, `Response field ${field} was not a string or null.`);
   return value;
 }
-
 
 function readStoredMoney(row: Record<string, unknown>, field: string, code: ReceiptServiceCode): number {
   const value = row[field];
