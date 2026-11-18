@@ -3,7 +3,6 @@ export const VisionService = {
     try {
       console.log("🚀 Sending receipt to Anthropic Vision API...");
 
-      // Ensure the base64 string does not contain the data URI prefix
       const cleanBase64 = base64.replace(/^data:image\/(jpeg|png|jpg);base64,/, '');
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -18,7 +17,7 @@ export const VisionService = {
           model: 'claude-sonnet-5-5',
           max_tokens: 1000,
           thinking: { type: 'between_tools' },
-          system: "You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks (```json). Do not include introductory text. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols (£, $, etc). You MUST extract and list the items in the exact top-to-bottom order they appear on the physical receipt. Schema: { \"items\": [{ \"name\": \"string\", \"price\": number }], \"subtotal\": number, \"tax\": number, \"total\": number }",
+          system: "You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols. CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items. Schema: { \"restaurantName\": \"string\", \"website\": \"string\", \"items\": [{ \"name\": \"string\", \"price\": number }], \"subtotal\": number, \"tax\": number, \"total\": number }",
           messages: [{
             role: 'user',
             content: [{
@@ -41,9 +40,7 @@ export const VisionService = {
       }
 
       const rawText = data.content?.[0]?.text || JSON.stringify(data);
-      console.log("Raw LLM Output:", rawText);
-
-      // Extract everything between the first '{' and the last '}'
+      
       const startIndex = rawText.indexOf('{');
       const endIndex = rawText.lastIndexOf('}');
 
