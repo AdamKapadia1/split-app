@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -22,7 +22,6 @@ const STATUS_COLOR: Record<SyncStatus, string> = {
   disconnected: '#EF4444',
 };
 
-// Fixed: item.original_name instead of item.name
 const LedgerItem = memo(({ item, isSelected, onToggle }: { item: Item, isSelected: boolean, onToggle: (id: string) => void }) => (
   <Pressable 
     onPress={() => onToggle(item.id)}
@@ -34,6 +33,7 @@ const LedgerItem = memo(({ item, isSelected, onToggle }: { item: Item, isSelecte
 ));
 
 export default function ReceiptLedgerScreen() {
+  const router = useRouter();
   const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
   const receiptId = Array.isArray(idParam) ? idParam[0] : idParam;
   
@@ -80,7 +80,18 @@ export default function ReceiptLedgerScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: 'Ledger', headerStyle: { backgroundColor: '#0f172a' }, headerTintColor: '#fff' }} />
+      <Stack.Screen 
+        options={{ 
+          title: 'Ledger', 
+          headerStyle: { backgroundColor: '#0f172a' }, 
+          headerTintColor: '#fff',
+          headerLeft: () => (
+            <Pressable onPress={() => router.back()} style={{ padding: 8, marginLeft: -8 }}>
+              <Text style={{ color: '#4ade80', fontSize: 16, fontWeight: '600' }}>Back</Text>
+            </Pressable>
+          )
+        }} 
+      />
       
       <ScrollView contentContainerStyle={styles.scrollContent}>
         
@@ -110,7 +121,6 @@ export default function ReceiptLedgerScreen() {
           ))}
         </View>
 
-        {/* Fixed: Use correct database column names for amounts */}
         <View style={styles.totalsContainer}>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Subtotal</Text>
@@ -129,6 +139,14 @@ export default function ReceiptLedgerScreen() {
             <Text style={styles.grandTotalValue}>£{Number(receipt.total_amount || 0).toFixed(2)}</Text>
           </View>
         </View>
+
+        {/* New Continue Button */}
+        <Pressable 
+          onPress={() => router.push('/split')}
+          style={styles.continueButton}
+        >
+          <Text style={styles.continueButtonText}>Continue to Split</Text>
+        </Pressable>
 
       </ScrollView>
     </View>
@@ -155,4 +173,6 @@ const styles = StyleSheet.create({
   grandTotalRow: { marginTop: 8 },
   grandTotalLabel: { color: 'white', fontSize: 20, fontWeight: 'bold' },
   grandTotalValue: { color: '#38bdf8', fontSize: 20, fontWeight: 'bold' },
+  continueButton: { backgroundColor: '#4ade80', padding: 16, borderRadius: 12, marginTop: 32, alignItems: 'center' },
+  continueButtonText: { color: '#0f172a', fontSize: 18, fontWeight: 'bold' },
 });
