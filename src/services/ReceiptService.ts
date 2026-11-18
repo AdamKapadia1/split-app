@@ -32,7 +32,7 @@ export class ReceiptServiceError extends Error {
 }
 
 export class ReceiptService {
-  async createEmptyReceipt(hostId: string): Promise<Receipt> {
+  async createEmptyReceipt(hostId: string, groupId: string | null = null): Promise<Receipt> {
     try {
       const host = requireId(hostId, 'hostId');
       const client = requireClient();
@@ -40,6 +40,7 @@ export class ReceiptService {
         .from('receipts')
         .insert({
           host_id: host,
+          group_id: groupId, // Maps to the selected group, or null for personal
           currency_code: DEFAULT_CURRENCY,
           subtotal: 0,
           tax_amount: 0,
