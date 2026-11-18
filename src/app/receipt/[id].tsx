@@ -22,26 +22,23 @@ const STATUS_COLOR: Record<SyncStatus, string> = {
   disconnected: '#EF4444',
 };
 
-// 1. MEMOIZED ITEM ROW: Fixes the tap delay so the green box appears instantly
+// Fixed: item.original_name instead of item.name
 const LedgerItem = memo(({ item, isSelected, onToggle }: { item: Item, isSelected: boolean, onToggle: (id: string) => void }) => (
   <Pressable 
     onPress={() => onToggle(item.id)}
     style={[styles.itemCard, isSelected && styles.itemCardSelected]}
   >
-    <Text style={styles.itemName}>{item.name}</Text>
+    <Text style={styles.itemName}>{item.display_name || item.original_name}</Text>
     <Text style={styles.itemPrice}>£{Number(item.price).toFixed(2)}</Text>
   </Pressable>
 ));
 
 export default function ReceiptLedgerScreen() {
   const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
-  // Helper to safely extract string ID whether it's an array or string
   const receiptId = Array.isArray(idParam) ? idParam[0] : idParam;
   
   const [receiptData, setReceiptData] = useState<Ledger | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  
-  // Local state for instantly toggling the UI before running heavy math
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
   const loadLedger = useCallback(async () => {
@@ -87,7 +84,6 @@ export default function ReceiptLedgerScreen() {
       
       <ScrollView contentContainerStyle={styles.scrollContent}>
         
-        {/* 2. NEW UI HEADER: Restaurant Name & Actionable Booking Link */}
         <View style={styles.headerContainer}>
           <Text style={styles.restaurantName}>
             {receipt.restaurant_name || 'Ledger'}
@@ -95,7 +91,7 @@ export default function ReceiptLedgerScreen() {
           
           {receipt.website && (
             <Pressable 
-              onPress={() => Linking.openURL(receipt.website.startsWith('http') ? receipt.website : `https://${receipt.website}`)}
+              onPress={() => Linking.openURL(receipt.website!.startsWith('http') ? receipt.website! : `https://${receipt.website}`)}
               style={styles.bookButton}
             >
               <Text style={styles.bookButtonText}>Book again</Text>
@@ -103,7 +99,6 @@ export default function ReceiptLedgerScreen() {
           )}
         </View>
 
-        {/* 3. ITEMS LIST: Uses the fast-rendering Memoized component */}
         <View style={styles.itemsContainer}>
           {items.map(item => (
             <LedgerItem 
@@ -115,23 +110,23 @@ export default function ReceiptLedgerScreen() {
           ))}
         </View>
 
-        {/* 4. TOTALS FOOTER */}
+        {/* Fixed: Use correct database column names for amounts */}
         <View style={styles.totalsContainer}>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.subtotal).toFixed(2)}</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.subtotal || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Tax</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.tax).toFixed(2)}</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.tax_amount || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Service Charge</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.tip || 0).toFixed(2)}</Text>
+            <Text style={styles.totalValue}>£{Number(receipt.service_charge || 0).toFixed(2)}</Text>
           </View>
           <View style={[styles.totalRow, styles.grandTotalRow]}>
             <Text style={styles.grandTotalLabel}>Total</Text>
-            <Text style={styles.grandTotalValue}>£{Number(receipt.total).toFixed(2)}</Text>
+            <Text style={styles.grandTotalValue}>£{Number(receipt.total_amount || 0).toFixed(2)}</Text>
           </View>
         </View>
 
@@ -141,102 +136,23 @@ export default function ReceiptLedgerScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f172a', // Midnight Navy background
-  },
-  centerContainer: {
-    flex: 1,
-    backgroundColor: '#0f172a',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 40,
-  },
-  headerContainer: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  restaurantName: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  bookButton: {
-    marginTop: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#1e293b',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  bookButtonText: {
-    color: '#4ade80',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  itemsContainer: {
-    gap: 12,
-    marginBottom: 32,
-  },
-  itemCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#1e293b',
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  itemCardSelected: {
-    borderColor: '#4ade80',
-    backgroundColor: '#1e293b', // Keeps the navy interior, adds green border
-  },
-  itemName: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  itemPrice: {
-    color: '#38bdf8', // Light blue price text from your design
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  totalsContainer: {
-    borderTopWidth: 1,
-    borderTopColor: '#334155',
-    paddingTop: 16,
-    gap: 8,
-  },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  totalLabel: {
-    color: '#94a3b8',
-    fontSize: 14,
-  },
-  totalValue: {
-    color: 'white',
-    fontSize: 14,
-  },
-  grandTotalRow: {
-    marginTop: 8,
-  },
-  grandTotalLabel: {
-    color: 'white',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  grandTotalValue: {
-    color: '#38bdf8',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#0f172a' },
+  centerContainer: { flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center' },
+  scrollContent: { padding: 16, paddingBottom: 40 },
+  headerContainer: { alignItems: 'center', marginBottom: 24 },
+  restaurantName: { color: 'white', fontSize: 24, fontWeight: 'bold', textAlign: 'center' },
+  bookButton: { marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#1e293b', borderRadius: 8, borderWidth: 1, borderColor: '#334155' },
+  bookButtonText: { color: '#4ade80', fontSize: 14, fontWeight: '600' },
+  itemsContainer: { gap: 12, marginBottom: 32 },
+  itemCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e293b', padding: 16, borderRadius: 12, borderWidth: 2, borderColor: 'transparent' },
+  itemCardSelected: { borderColor: '#4ade80', backgroundColor: '#1e293b' },
+  itemName: { color: 'white', fontSize: 16, fontWeight: '600' },
+  itemPrice: { color: '#38bdf8', fontSize: 16, fontWeight: '600' },
+  totalsContainer: { borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 16, gap: 8 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  totalLabel: { color: '#94a3b8', fontSize: 14 },
+  totalValue: { color: 'white', fontSize: 14 },
+  grandTotalRow: { marginTop: 8 },
+  grandTotalLabel: { color: 'white', fontSize: 20, fontWeight: 'bold' },
+  grandTotalValue: { color: '#38bdf8', fontSize: 20, fontWeight: 'bold' },
 });
