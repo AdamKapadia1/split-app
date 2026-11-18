@@ -17,9 +17,9 @@ import { receiptService } from '@/services/ReceiptService';
 import type { Item, Receipt, Split } from '@/types/database.types';
 
 const PEOPLE = [
-  { id: 'me', name: 'Me', initial: 'M', color: '#38BDF8' },
-  { id: 'sarah', name: 'Sarah', initial: 'S', color: '#C084FC' },
-  { id: 'mike', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
+  { id: '11111111-1111-4111-a111-111111111111', name: 'Me', initial: 'M', color: '#38BDF8' },
+  { id: '22222222-2222-4222-a222-222222222222', name: 'Sarah', initial: 'S', color: '#C084FC' },
+  { id: '33333333-3333-4333-a333-333333333333', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
 ] as const;
 
 const ICE = '#38BDF8';
