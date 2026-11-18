@@ -3,9 +3,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 type Group = {
   id: string;
@@ -15,16 +15,22 @@ type Group = {
 };
 
 export default function GroupsScreen() {
+  const router = useRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
   // 1. Relational Database Fetching
-  const fetchGroups = async () => {
+  const fetchGroups = useCallback(async (mode: 'load' | 'refresh' = 'load') => {
     try {
-      setIsLoading(true);
+      if (mode === 'refresh') {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
@@ -43,13 +49,14 @@ export default function GroupsScreen() {
       console.error('Error fetching groups:', error);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      fetchGroups();
-    }, [])
+      void fetchGroups();
+    }, [fetchGroups])
   );
 
   // 2. Seamless Creation Pipeline
@@ -107,7 +114,7 @@ export default function GroupsScreen() {
       console.error('Error creating group:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Transaction Failed', 'Could not create the group securely.');
-      fetchGroups(); // Revert the UI to the verified database state
+      void fetchGroups();
     } finally {
       setIsCreating(false);
     }
@@ -124,27 +131,39 @@ export default function GroupsScreen() {
     setNewGroupName('');
   };
 
-  const renderGroup = ({ item }: { item: Group }) => (
-    <TouchableOpacity 
-      style={styles.groupCard} 
-      activeOpacity={0.8}
-      onPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        // Future route: router.push({ pathname: '/group/[id]', params: { id: item.id } })
-      }}
-    >
-      <View style={styles.groupIconWrap}>
-        <Ionicons name="people" size={24} color="#38BDF8" />
-      </View>
-      <View style={styles.groupInfo}>
-        <Text style={styles.groupName}>{item.name}</Text>
-        <Text style={styles.dateText}>
-          Created {new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={20} color="#64748b" />
-    </TouchableOpacity>
-  );
+  const renderGroup = ({ item }: { item: Group }) => {
+    const isSyncing = item.id.startsWith('temp-');
+
+    return (
+      <TouchableOpacity
+        style={[styles.groupCard, isSyncing && styles.groupCardSyncing]}
+        activeOpacity={0.8}
+        onPress={() => {
+          if (isSyncing) {
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            return;
+          }
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          router.push({ pathname: '/group/[id]', params: { id: item.id } });
+        }}
+      >
+        <View style={styles.groupIconWrap}>
+          <Ionicons name="people" size={24} color="#38BDF8" />
+        </View>
+        <View style={styles.groupInfo}>
+          <Text style={styles.groupName}>{item.name}</Text>
+          {isSyncing ? (
+            <Text style={styles.syncingText}>Syncing...</Text>
+          ) : (
+            <Text style={styles.dateText}>
+              Created {new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+            </Text>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#64748b" />
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -167,6 +186,15 @@ export default function GroupsScreen() {
           renderItem={renderGroup}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => {
+                void fetchGroups('refresh');
+              }}
+              tintColor="#38BDF8"
+            />
+          }
         />
       )}
 
@@ -239,6 +267,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, fontWeight: '800', color: 'white', letterSpacing: -0.5 },
   listContent: { paddingHorizontal: 16, paddingBottom: 120 },
   groupCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e293b', padding: 20, borderRadius: 24, marginBottom: 12, borderWidth: 1, borderColor: '#334155' },
+  groupCardSyncing: { opacity: 0.6 },
+  syncingText: { fontSize: 13, color: '#38BDF8', fontWeight: '600' },
   groupIconWrap: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(56, 189, 248, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   groupInfo: { flex: 1 },
   groupName: { fontSize: 18, fontWeight: '700', color: 'white', marginBottom: 4, letterSpacing: -0.3 },
