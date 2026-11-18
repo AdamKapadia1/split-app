@@ -2,18 +2,19 @@ import { BlurTargetView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
-import { useRef, useState, type ComponentRef } from 'react';
-import { Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { useEffect, useRef, useState, type ComponentRef } from 'react';
+import { ActivityIndicator, Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
-import { PayoutSetup, payoutRouteLabel, type PayoutBank } from '@/components/payout-setup';
+import { PayoutSetup, type PayoutBank } from '@/components/payout-setup';
 import { Colors, Spacing } from '@/constants/theme';
 import { mediumHaptic, successHaptic, tickHaptic } from '@/lib/haptics';
 import { SnapPressable, useSnapScale } from '@/lib/use-snap-scale';
-import { parseReceiptParam, type ParsedReceipt, type ReceiptItem } from '@/lib/parse-receipt';
+import { receiptService } from '@/services/ReceiptService';
+import type { Item, Receipt, Split } from '@/types/database.types';
 
 const PEOPLE = [
   { id: 'me', name: 'Me', initial: 'M', color: '#38BDF8' },
@@ -27,18 +28,10 @@ const NAVY = '#030712';
 type Person = (typeof PEOPLE)[number];
 type PersonId = Person['id'];
 
-const RECEIPT_ITEMS = [
-  { quantity: 3, name: 'Cheeseburger', amount: 36 },
-  { quantity: 1, name: 'Spicy Wings', amount: 8.5 },
-  { quantity: 4, name: 'Pale Ale', amount: 22 },
-] as const;
-
-const FALLBACK_RECEIPT: ParsedReceipt = {
-  items: RECEIPT_ITEMS.map((item) => ({ ...item })),
-  subtotal: 66.5,
-  serviceCharge: 8.31,
-  total: 74.81,
-  currency: 'GBP',
+type LedgerData = {
+  receipt: Receipt;
+  items: Item[];
+  splits: Split[];
 };
 
 function formatMoney(amount: number, currency: string) {
@@ -57,11 +50,11 @@ function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function toImageUri(uri: string) {
+function toImageUri(uri: string | null) {
+  if (!uri) return '';
   if (/^(file|content|ph|assets-library|http|data):/i.test(uri)) {
     return uri;
   }
-
   return `data:image/jpeg;base64,${uri}`;
 }
 
@@ -69,18 +62,20 @@ function personById(id: string) {
   return PEOPLE.find((person) => person.id === id);
 }
 
-function shareFor(receipt: ParsedReceipt, claims: Record<number, PersonId[]>, personId: PersonId) {
+// Fixed share calculation to use the live Supabase Item array
+function shareFor(items: Item[], claims: Record<string, PersonId[]>, personId: PersonId, subtotal: number, serviceCharge: number) {
   const subtotalShare = roundMoney(
-    receipt.items.reduce((sum, item, index) => {
-      const claimants = claims[index] ?? [];
+    items.reduce((sum, item) => {
+      const claimants = claims[item.id] ?? [];
       if (!claimants.includes(personId) || claimants.length === 0) {
         return sum;
       }
-      return sum + item.amount / claimants.length;
-    }, 0),
+      return sum + Number(item.price) / claimants.length;
+    }, 0)
   );
+  
   const serviceShare = roundMoney(
-    receipt.subtotal > 0 ? (subtotalShare / receipt.subtotal) * receipt.serviceCharge : 0,
+    subtotal > 0 ? (subtotalShare / subtotal) * serviceCharge : 0
   );
 
   return {
@@ -90,100 +85,143 @@ function shareFor(receipt: ParsedReceipt, claims: Record<number, PersonId[]>, pe
   };
 }
 
-function formatBreakdown(receipt: ParsedReceipt, claims: Record<number, PersonId[]>) {
-  const assigned = PEOPLE.filter((person) =>
-    Object.values(claims).some((claimants) => claimants.includes(person.id)),
-  );
-
-  if (assigned.length === 0) {
-    return 'Receipt Breakdown: No items assigned yet. (Includes tax & tip)';
-  }
-
-  const parts = assigned.map((person) => {
-    const { owed } = shareFor(receipt, claims, person.id);
-    return `${person.name} owes ${formatMoney(owed, receipt.currency)}`;
-  });
-
-  return `Receipt Breakdown: ${parts.join(' | ')} (Includes tax & tip)`;
-}
-
 export default function SplitScreen() {
   const insets = useSafeAreaInsets();
-  const { imageUri: imageUriParam, receipt: receiptParam } = useLocalSearchParams<{
-    imageUri?: string | string[];
-    receipt?: string | string[];
-  }>();
-  const imageUri = firstParam(imageUriParam);
-  const receiptKey = firstParam(receiptParam) ?? 'fallback';
-  const receipt = parseReceiptParam(firstParam(receiptParam)) ?? FALLBACK_RECEIPT;
+  const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
+  const receiptId = firstParam(idParam);
+  
+  const [ledgerData, setLedgerData] = useState<LedgerData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
   const [selectedId, setSelectedId] = useState<PersonId>('me');
-  const [claimState, setClaimState] = useState<{ key: string; claims: Record<number, PersonId[]> }>({
-    key: receiptKey,
-    claims: {},
-  });
-  if (claimState.key !== receiptKey) {
-    setClaimState({ key: receiptKey, claims: {} });
-  }
-  const claims = claimState.key === receiptKey ? claimState.claims : {};
+  // Local state for instant visual feedback before persisting
+  const [claims, setClaims] = useState<Record<string, PersonId[]>>({});
+  
   const selected = personById(selectedId) ?? PEOPLE[0];
-  const share = shareFor(receipt, claims, selected.id);
-  const money = (amount: number) => formatMoney(amount, receipt.currency);
+  
   const scrollAnchor = useRef(0);
   const blurTarget = useRef<ComponentRef<typeof View>>(null);
   const [payoutOpen, setPayoutOpen] = useState(false);
   const [payout, setPayout] = useState<PayoutBank | null>(null);
 
+  // Load the live data from Supabase
+  useEffect(() => {
+    async function loadLedger() {
+      if (!receiptId) {
+        setIsLoading(false);
+        return;
+      }
+      try {
+        setIsLoading(true);
+        const data = await receiptService.getReceiptWithItems(receiptId);
+        setLedgerData(data as LedgerData);
+        
+        // Populate local claims state from database splits
+        const initialClaims: Record<string, PersonId[]> = {};
+        data.splits.forEach(split => {
+          if (!initialClaims[split.item_id]) initialClaims[split.item_id] = [];
+          // In a real app we'd map auth UUIDs to our mock PEOPLE array. 
+          // For now, if user_id matches a mock ID, use it, else default to 'me'
+          const pid = PEOPLE.some(p => p.id === split.user_id) ? split.user_id as PersonId : 'me';
+          if (!initialClaims[split.item_id].includes(pid)) {
+             initialClaims[split.item_id].push(pid);
+          }
+        });
+        setClaims(initialClaims);
+      } catch (error) {
+        console.error("Failed to load split ledger:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadLedger();
+  }, [receiptId]);
+
   function onPeopleScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
     const x = event.nativeEvent.contentOffset.x;
-    if (Math.abs(x - scrollAnchor.current) < 64) {
-      return;
-    }
-
+    if (Math.abs(x - scrollAnchor.current) < 64) return;
     scrollAnchor.current = x;
     tickHaptic();
   }
 
   async function shareBreakdown() {
+    if (!ledgerData) return;
     try {
-      await Share.share({ message: formatBreakdown(receipt, claims) });
+      const assigned = PEOPLE.filter((person) => Object.values(claims).some((c) => c.includes(person.id)));
+      if (assigned.length === 0) {
+        await Share.share({ message: 'Receipt Breakdown: No items assigned yet.' });
+        return;
+      }
+      const parts = assigned.map((person) => {
+        const { owed } = shareFor(ledgerData.items, claims, person.id, Number(ledgerData.receipt.subtotal), Number(ledgerData.receipt.service_charge));
+        return `${person.name} owes ${formatMoney(owed, ledgerData.receipt.currency_code)}`;
+      });
+      await Share.share({ message: `Receipt Breakdown: ${parts.join(' | ')} (Includes tax & tip)` });
     } catch {
-      // The share sheet was dismissed or is unavailable.
+      // Dismissed
     }
   }
 
-  function toggleClaim(index: number) {
-    setClaimState((current) => {
-      const existing = current.claims[index] ?? [];
+  async function toggleClaim(itemId: string) {
+    if (!receiptId) return;
+    
+    // Optimistic UI update for zero lag
+    setClaims(current => {
+      const existing = current[itemId] ?? [];
       const next = existing.includes(selected.id)
         ? existing.filter((id) => id !== selected.id)
         : [...existing, selected.id];
-      return {
-        key: receiptKey,
-        claims: { ...current.claims, [index]: next },
-      };
+      return { ...current, [itemId]: next };
     });
+
+    // Persist to database in background
+    try {
+      // Assuming selected.id is the user's UUID in a real auth setup.
+      await receiptService.toggleItemClaim(itemId, selected.id, receiptId);
+    } catch (error) {
+      console.error("Failed to persist split:", error);
+      // If persistence fails, you could revert the optimistic state here
+    }
   }
+
+  if (isLoading) {
+    return (
+      <NightScreen>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color="#4ade80" />
+        </View>
+      </NightScreen>
+    );
+  }
+
+  if (!ledgerData) {
+    return (
+      <NightScreen>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <Text style={{ color: 'white', textAlign: 'center', fontSize: 18 }}>
+            No receipt selected. Please start a scan or select a receipt from the home screen.
+          </Text>
+        </View>
+      </NightScreen>
+    );
+  }
+
+  const { receipt, items } = ledgerData;
+  const currency = receipt.currency_code;
+  const share = shareFor(items, claims, selected.id, Number(receipt.subtotal), Number(receipt.service_charge));
+  const money = (amount: number) => formatMoney(amount, currency);
 
   return (
     <NightScreen>
       <BlurTargetView ref={blurTarget} style={styles.flex}>
-      <View
-        style={[
-          styles.peopleBar,
-          { paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.three },
-        ]}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          scrollEventThrottle={32}
-          onScroll={onPeopleScroll}
-          contentContainerStyle={styles.peopleRow}>
+      <View style={[styles.peopleBar, { paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.three }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} scrollEventThrottle={32} onScroll={onPeopleScroll} contentContainerStyle={styles.peopleRow}>
           {PEOPLE.map((person) => (
             <PersonPill
               key={person.id}
               person={person}
               selected={person.id === selected.id}
-              totalLabel={money(shareFor(receipt, claims, person.id).owed)}
+              totalLabel={money(shareFor(items, claims, person.id, Number(receipt.subtotal), Number(receipt.service_charge)).owed)}
               onPress={() => setSelectedId(person.id)}
             />
           ))}
@@ -191,80 +229,62 @@ export default function SplitScreen() {
         <Text style={styles.assignHint}>Tap a line to assign it to {selected.name}.</Text>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Spacing.four }]}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 120 }]}>
         <Animated.View entering={FadeIn.duration(360)}>
-          {imageUri ? (
-            <Image
-              accessibilityLabel="Scanned receipt"
-              contentFit="cover"
-              source={{ uri: toImageUri(imageUri) }}
-              style={styles.thumbnail}
-            />
-          ) : (
-            <Text style={styles.placeholderText}>Snap a receipt to see it here.</Text>
-          )}
+          {receipt.image_url ? (
+            <Image accessibilityLabel="Scanned receipt" contentFit="cover" source={{ uri: toImageUri(receipt.image_url) }} style={styles.thumbnail} />
+          ) : null}
 
-          <View>
-            {receipt.items.map((item, index) => (
+          <View style={styles.listContainer}>
+            {items.map((item) => (
               <ReceiptLine
-                key={`${item.name}-${index}`}
+                key={item.id}
                 item={item}
-                claimants={claims[index] ?? []}
-                amountLabel={money(item.amount)}
-                onPress={() => toggleClaim(index)}
+                currency={currency}
+                claimants={claims[item.id] ?? []}
+                amountLabel={money(Number(item.price))}
+                onPress={() => toggleClaim(item.id)}
               />
             ))}
           </View>
         </Animated.View>
       </ScrollView>
 
-      <View style={[styles.deckWrap, { paddingBottom: Math.max(insets.bottom, Spacing.three) + 64 }]}>
-        <Frost style={styles.deck}>
-          <LedgerRow label="Subtotal" value={money(receipt.subtotal)} />
-          <LedgerRow label="Service Charge" value={money(receipt.serviceCharge)} />
-          <View style={styles.totalRule} />
-          <LedgerRow label="Total" value={money(receipt.total)} emphasis />
-
-          <Animated.View key={selected.id} entering={FadeIn.duration(220)}>
-            <View style={styles.statement}>
-              <Text style={styles.statementKicker}>Individual Owed</Text>
-              <View style={styles.statementHead}>
-                <Text style={styles.statementName}>{selected.name}</Text>
-                <Text style={styles.statementAmount}>{money(share.owed)}</Text>
-              </View>
-              <LedgerRow label="Share of subtotal" value={money(share.subtotalShare)} />
-              <LedgerRow label="Share of service charge" value={money(share.serviceShare)} />
+      {/* NEW COMPACT FOOTER UI */}
+      <View style={[styles.compactFooterWrap, { paddingBottom: Math.max(insets.bottom, Spacing.three) }]}>
+        <Frost style={styles.compactFooter}>
+          <View style={styles.compactRow}>
+            <View style={styles.compactSummaryColumn}>
+              <Text style={styles.compactSummaryLabel}>Bill Total</Text>
+              <Text style={styles.compactSummaryValue}>{money(Number(receipt.total_amount))}</Text>
             </View>
-          </Animated.View>
+            
+            <View style={styles.compactShareColumn}>
+              <Text style={styles.compactShareLabel}>{selected.name}'s Share</Text>
+              <Text style={styles.compactShareValue}>{money(share.owed)}</Text>
+            </View>
 
-          <ConnectBankButton
-            label={payout ? payoutRouteLabel(payout) : 'Connect Bank to Receive Funds'}
-            linked={payout !== null}
-            onPress={() => {
-              tickHaptic();
-              setPayoutOpen(true);
-            }}
-          />
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Share Breakdown"
-            activeOpacity={0.85}
-            onPress={() => {
-              successHaptic();
-              void shareBreakdown();
-            }}
-            style={styles.sharePress}>
-            <LinearGradient
-              colors={['#7DD3FC', '#38BDF8']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.shareButton}>
-              <Text style={styles.shareLabel}>Share Breakdown</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => {
+                successHaptic();
+                void shareBreakdown();
+              }}
+              style={styles.compactShareButton}
+            >
+              <LinearGradient
+                colors={['#7DD3FC', '#38BDF8']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.compactGradientWrap}
+              >
+                <Text style={styles.compactShareText}>Share</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
         </Frost>
       </View>
+
       </BlurTargetView>
       <PayoutSetup
         blurTarget={blurTarget}
@@ -279,66 +299,8 @@ export default function SplitScreen() {
   );
 }
 
-function WalletIcon({ color }: { color: string }) {
-  return (
-    <View style={[styles.wallet, { borderColor: color }]}>
-      <View style={[styles.walletClasp, { backgroundColor: color }]} />
-    </View>
-  );
-}
-
-function ConnectBankButton({
-  label,
-  linked,
-  onPress,
-}: {
-  label: string;
-  linked: boolean;
-  onPress: () => void;
-}) {
-  const press = useSnapScale(false, true);
-
-  return (
-    <SnapPressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: linked }}
-      onPress={onPress}
-      onPressIn={press.onPressIn}
-      onPressOut={press.onPressOut}
-      style={[styles.connectPress, linked && styles.connectGlow, press.style]}>
-      <Frost style={[styles.connect, linked && styles.connectReady]}>
-        <WalletIcon color={linked ? ICE : Colors.textSecondary} />
-        <Text style={[styles.connectLabel, linked && styles.connectLabelReady]} numberOfLines={1}>
-          {label}
-        </Text>
-      </Frost>
-    </SnapPressable>
-  );
-}
-
-function LedgerRow({ label, value, emphasis = false }: { label: string; value: string; emphasis?: boolean }) {
-  return (
-    <View style={styles.ledgerRow}>
-      <Text style={emphasis ? styles.totalLabel : styles.mutedLabel}>{label}</Text>
-      <Text style={emphasis ? styles.totalValue : styles.mutedValue}>{value}</Text>
-    </View>
-  );
-}
-
-function PersonPill({
-  person,
-  selected,
-  totalLabel,
-  onPress,
-}: {
-  person: Person;
-  selected: boolean;
-  totalLabel: string;
-  onPress: () => void;
-}) {
+function PersonPill({ person, selected, totalLabel, onPress }: { person: Person; selected: boolean; totalLabel: string; onPress: () => void }) {
   const snap = useSnapScale(selected);
-
   return (
     <SnapPressable
       accessibilityRole="button"
@@ -347,52 +309,28 @@ function PersonPill({
       onPressIn={snap.onPressIn}
       onPressOut={snap.onPressOut}
       onPress={() => {
-        if (!selected) {
-          tickHaptic();
-        }
+        if (!selected) tickHaptic();
         onPress();
       }}
       style={[styles.pillPress, snap.style]}>
       <Frost
         style={[
           styles.pill,
-          selected && {
-            borderColor: ICE,
-            shadowColor: ICE,
-            shadowOpacity: 0.45,
-            shadowRadius: 12,
-            shadowOffset: { width: 0, height: 0 },
-          },
+          selected && { borderColor: ICE, shadowColor: ICE, shadowOpacity: 0.45, shadowRadius: 12, shadowOffset: { width: 0, height: 0 } },
         ]}>
         <View style={[styles.pillMark, { backgroundColor: `${person.color}33`, borderColor: person.color }]}>
-          <Text style={[styles.pillInitial, { color: person.color }]} numberOfLines={1}>
-            {person.initial}
-          </Text>
+          <Text style={[styles.pillInitial, { color: person.color }]} numberOfLines={1}>{person.initial}</Text>
         </View>
         <View style={styles.pillCopy}>
-          <Text style={styles.pillName} numberOfLines={1}>
-            {person.name}
-          </Text>
-          <Text style={[styles.pillTotal, selected && styles.pillTotalSelected]} numberOfLines={1}>
-            {totalLabel}
-          </Text>
+          <Text style={styles.pillName} numberOfLines={1}>{person.name}</Text>
+          <Text style={[styles.pillTotal, selected && styles.pillTotalSelected]} numberOfLines={1}>{totalLabel}</Text>
         </View>
       </Frost>
     </SnapPressable>
   );
 }
 
-function ReceiptLine({
-  item,
-  claimants,
-  amountLabel,
-  onPress,
-}: {
-  item: ReceiptItem;
-  claimants: PersonId[];
-  amountLabel: string;
-  onPress: () => void;
-}) {
+function ReceiptLine({ item, currency, claimants, amountLabel, onPress }: { item: Item; currency: string; claimants: PersonId[]; amountLabel: string; onPress: () => void }) {
   const names = claimants.flatMap((id) => {
     const name = personById(id)?.name;
     return name ? [name] : [];
@@ -404,8 +342,8 @@ function ReceiptLine({
       accessibilityRole="button"
       accessibilityLabel={
         names.length > 0
-          ? `${item.quantity}x ${item.name}, claimed by ${names.join(', ')}`
-          : `${item.quantity}x ${item.name}, unclaimed`
+          ? `${item.quantity}x ${item.display_name || item.original_name}, claimed by ${names.join(', ')}`
+          : `${item.quantity}x ${item.display_name || item.original_name}, unclaimed`
       }
       onPressIn={snap.onPressIn}
       onPressOut={snap.onPressOut}
@@ -417,15 +355,13 @@ function ReceiptLine({
       <View style={styles.lineCopy}>
         <Text style={styles.lineName}>
           <Text style={styles.lineQty}>{item.quantity}× </Text>
-          {item.name}
+          {item.display_name || item.original_name}
         </Text>
         {claimants.length > 0 ? (
           <View style={styles.badges}>
             {claimants.map((id) => {
               const person = personById(id);
-              if (!person) {
-                return null;
-              }
+              if (!person) return null;
               return (
                 <Animated.View
                   key={id}
@@ -444,287 +380,41 @@ function ReceiptLine({
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
-  peopleBar: {
-    paddingBottom: Spacing.two,
-    gap: Spacing.three,
-  },
-  peopleRow: {
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.two,
-    gap: Spacing.two,
-    alignItems: 'stretch',
-  },
-  pillPress: {
-    width: 156,
-    height: 64,
-  },
-  pill: {
-    width: 156,
-    height: 64,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-  },
-  pillMark: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  pillInitial: {
-    fontSize: 12,
-    lineHeight: 14,
-    fontWeight: '700',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  pillCopy: {
-    flex: 1,
-    minWidth: 0,
-    justifyContent: 'center',
-  },
-  pillName: {
-    color: Colors.text,
-    fontSize: 15,
-    lineHeight: 18,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  pillTotal: {
-    marginTop: 2,
-    color: Colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '600',
-    letterSpacing: -0.1,
-    fontVariant: ['tabular-nums'],
-  },
-  pillTotalSelected: {
-    color: ICE,
-  },
-  assignHint: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    letterSpacing: -0.1,
-    paddingHorizontal: Spacing.four,
-  },
-  content: {
-    paddingTop: Spacing.two,
-  },
-  thumbnail: {
-    width: '100%',
-    height: 168,
-    marginBottom: Spacing.three,
-  },
-  placeholderText: {
-    color: Colors.textSecondary,
-    fontSize: 15,
-    letterSpacing: -0.1,
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.three,
-  },
-  line: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.three,
-    paddingHorizontal: Spacing.four,
-    paddingVertical: Spacing.three,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(30, 41, 59, 0.4)',
-  },
-  lineCopy: {
-    flex: 1,
-    gap: Spacing.two,
-  },
-  lineName: {
-    color: Colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  lineQty: {
-    color: Colors.textSecondary,
-    fontWeight: '600',
-  },
-  linePrice: {
-    color: Colors.text,
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-    fontVariant: ['tabular-nums'],
-  },
-  badges: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  badge: {
-    minWidth: 28,
-    height: 24,
-    paddingHorizontal: Spacing.two,
-    borderRadius: 999,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  deckWrap: {
-    paddingHorizontal: Spacing.four,
-  },
-  deck: {
-    borderRadius: 28,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.four,
-    paddingBottom: Spacing.three,
-    gap: Spacing.three,
-  },
-  ledgerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  mutedLabel: {
-    color: Colors.textSecondary,
-    fontSize: 15,
-    fontWeight: '500',
-    letterSpacing: -0.1,
-  },
-  mutedValue: {
-    color: Colors.text,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    fontVariant: ['tabular-nums'],
-  },
-  totalRule: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(30, 41, 59, 0.4)',
-  },
-  totalLabel: {
-    color: Colors.text,
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: -0.4,
-  },
-  totalValue: {
-    color: ICE,
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: -0.5,
-    fontVariant: ['tabular-nums'],
-  },
-  statement: {
-    borderRadius: 16,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    gap: Spacing.two,
-    borderWidth: 1,
-    borderColor: ICE,
-    backgroundColor: 'rgba(56, 189, 248, 0.06)',
-  },
-  statementKicker: {
-    color: Colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.1,
-    textTransform: 'uppercase',
-  },
-  statementHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  statementName: {
-    color: Colors.text,
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  statementAmount: {
-    color: ICE,
-    fontSize: 22,
-    fontWeight: '700',
-    letterSpacing: -0.5,
-    fontVariant: ['tabular-nums'],
-  },
-  connectPress: {
-    borderRadius: 18,
-  },
-  connectGlow: {
-    shadowColor: ICE,
-    shadowOpacity: 0.55,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 8,
-  },
-  connect: {
-    minHeight: 54,
-    borderRadius: 18,
-    paddingHorizontal: Spacing.three,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.two,
-  },
-  connectReady: {
-    borderColor: ICE,
-  },
-  wallet: {
-    width: 18,
-    height: 13,
-    borderRadius: 3,
-    borderWidth: 1.5,
-    justifyContent: 'center',
-    alignItems: 'flex-end',
-    paddingRight: 2,
-  },
-  walletClasp: {
-    width: 6,
-    height: 4,
-    borderRadius: 1,
-  },
-  connectLabel: {
-    flexShrink: 1,
-    color: Colors.text,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-  },
-  connectLabelReady: {
-    color: ICE,
-  },
-  sharePress: {
-    borderRadius: 999,
-    shadowColor: ICE,
-    shadowOpacity: 0.28,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
-  },
-  shareButton: {
-    minHeight: 56,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.four,
-  },
-  shareLabel: {
-    color: NAVY,
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-  },
+  flex: { flex: 1 },
+  peopleBar: { paddingBottom: Spacing.two, gap: Spacing.three },
+  peopleRow: { paddingHorizontal: Spacing.four, paddingVertical: Spacing.two, gap: Spacing.two, alignItems: 'stretch' },
+  pillPress: { width: 156, height: 64 },
+  pill: { width: 156, height: 64, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18, paddingHorizontal: 12 },
+  pillMark: { width: 32, height: 32, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  pillInitial: { fontSize: 12, lineHeight: 14, fontWeight: '700', textAlign: 'center', letterSpacing: -0.3 },
+  pillCopy: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  pillName: { color: Colors.text, fontSize: 15, lineHeight: 18, fontWeight: '700', letterSpacing: -0.3 },
+  pillTotal: { marginTop: 2, color: Colors.textSecondary, fontSize: 13, lineHeight: 16, fontWeight: '600', letterSpacing: -0.1, fontVariant: ['tabular-nums'] },
+  pillTotalSelected: { color: ICE },
+  assignHint: { color: Colors.textSecondary, fontSize: 13, letterSpacing: -0.1, paddingHorizontal: Spacing.four },
+  content: { paddingTop: Spacing.two },
+  thumbnail: { width: '100%', height: 168, marginBottom: Spacing.three },
+  listContainer: { paddingBottom: 24 },
+  line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.three, paddingHorizontal: Spacing.four, paddingVertical: Spacing.three, borderBottomWidth: 1, borderBottomColor: 'rgba(30, 41, 59, 0.4)' },
+  lineCopy: { flex: 1, gap: Spacing.two },
+  lineName: { color: Colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  lineQty: { color: Colors.textSecondary, fontWeight: '600' },
+  linePrice: { color: Colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  badge: { minWidth: 28, height: 24, paddingHorizontal: Spacing.two, borderRadius: 999, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  badgeText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.2 },
+  
+  // NEW COMPACT FOOTER STYLES
+  compactFooterWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: Spacing.four },
+  compactFooter: { borderRadius: 24, padding: Spacing.three, paddingHorizontal: Spacing.four, borderWidth: 1, borderColor: 'rgba(56, 189, 248, 0.2)', backgroundColor: 'rgba(3, 7, 18, 0.85)' },
+  compactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  compactSummaryColumn: { flex: 1 },
+  compactSummaryLabel: { color: Colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  compactSummaryValue: { color: Colors.text, fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  compactShareColumn: { flex: 1, paddingLeft: 12, borderLeftWidth: 1, borderLeftColor: 'rgba(30, 41, 59, 0.8)' },
+  compactShareLabel: { color: ICE, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  compactShareValue: { color: ICE, fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  compactShareButton: { marginLeft: 16 },
+  compactGradientWrap: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999 },
+  compactShareText: { color: NAVY, fontSize: 14, fontWeight: '800', letterSpacing: -0.2 },
 });
