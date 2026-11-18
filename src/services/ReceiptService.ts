@@ -9,7 +9,7 @@ const MONEY_LIMIT = 99_999_999.99;
 type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
 type ReceiptTotalsUpdate = Partial<
-  Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status'> & {
+  Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status' | 'merchant_name'> & {
     restaurant_name?: string | null;
     website?: string | null;
   }
@@ -200,7 +200,7 @@ function requireBoolean(value: boolean, index: number): boolean {
 function normalizeTotals(updates: ReceiptTotalsUpdate): ReceiptTotalsUpdate {
   const payload: ReceiptTotalsUpdate = {};
   const moneyFields = ['subtotal', 'tax_amount', 'service_charge', 'total_amount'] as const;
-  const stringFields = ['restaurant_name', 'website'] as const;
+  const stringFields = ['merchant_name', 'restaurant_name', 'website'] as const;
 
   for (const field of moneyFields) {
     if (updates[field] !== undefined) {

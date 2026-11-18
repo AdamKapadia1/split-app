@@ -66,6 +66,7 @@ export default function ScannerScreen() {
       }
 
       await receiptService.updateReceiptTotals(newReceipt.id, {
+        merchant_name: aiData.merchant_name,
         subtotal: aiData.subtotal,
         tax_amount: aiData.tax,
         total_amount: aiData.total,

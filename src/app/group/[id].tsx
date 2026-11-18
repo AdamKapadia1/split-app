@@ -19,10 +19,10 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 function receiptName(receipt: GroupReceipt) {
-  const restaurant = receipt.restaurant_name?.trim();
-  if (restaurant) return restaurant;
   const merchant = receipt.merchant_name?.trim();
   if (merchant) return merchant;
+  const restaurant = receipt.restaurant_name?.trim();
+  if (restaurant) return restaurant;
   const date = new Date(receipt.created_at).toLocaleDateString('en-GB', {
     weekday: 'short',
     month: 'short',

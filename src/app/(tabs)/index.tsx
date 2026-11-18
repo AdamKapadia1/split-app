@@ -16,10 +16,10 @@ function money(value: number) {
 }
 
 function receiptTitle(item: HistoryReceipt) {
-  const restaurant = item.restaurant_name?.trim();
-  if (restaurant) return restaurant;
   const merchant = item.merchant_name?.trim();
   if (merchant) return merchant;
+  const restaurant = item.restaurant_name?.trim();
+  if (restaurant) return restaurant;
 
   const date = new Date(item.created_at);
   const day = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });

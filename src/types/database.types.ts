@@ -47,7 +47,7 @@ export interface Receipt {
   host_id: string;
   /** Optional group this receipt belongs to. Null while it is still unassigned. */
   group_id: string | null;
-  /** Merchant printed on the receipt. Null until parsing fills it in. */
+  /** Cleaned business name from the logo, header, or footer. Null when none is visible. */
   merchant_name: string | null;
   /** ISO 4217 currency code, for example `GBP`. */
   currency_code: string;

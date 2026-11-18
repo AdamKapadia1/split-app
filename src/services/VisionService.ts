@@ -17,7 +17,7 @@ export const VisionService = {
           model: 'claude-sonnet-5-5',
           max_tokens: 1000,
           thinking: { type: 'between_tools' },
-          system: "You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols. CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items. Schema: { \"restaurantName\": \"string\", \"website\": \"string\", \"items\": [{ \"name\": \"string\", \"price\": number }], \"subtotal\": number, \"tax\": number, \"total\": number }",
+          system: "You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols. CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items. merchant_name: look at the top logo, header, address block, or footer for the business name. Clean it into a readable display name (for example, convert \"MOLLIES MOTEL & DINER LTD #04\" to \"Mollie's\", or \"TESCO STORES 2314\" to \"Tesco\"). Return null only when no business name is visible at all. Schema: { \"merchant_name\": string | null, \"website\": string | null, \"items\": [{ \"name\": \"string\", \"price\": number }], \"subtotal\": number, \"tax\": number, \"total\": number }",
           messages: [{
             role: 'user',
             content: [{
@@ -49,7 +49,11 @@ export const VisionService = {
       }
 
       const cleanText = rawText.substring(startIndex, endIndex + 1);
-      return JSON.parse(cleanText);
+      const parsed = JSON.parse(cleanText);
+      return {
+        ...parsed,
+        merchant_name: readMerchantName(parsed),
+      };
 
     } catch (error) {
       console.error("🚨 Vision API Error:", error);
@@ -57,3 +61,11 @@ export const VisionService = {
     }
   }
 };
+
+function readMerchantName(parsed: { merchant_name?: unknown; restaurantName?: unknown; restaurant_name?: unknown }) {
+  const raw = parsed.merchant_name ?? parsed.restaurantName ?? parsed.restaurant_name;
+  if (typeof raw !== 'string') return null;
+  const name = raw.trim();
+  if (!name || name.toLowerCase() === 'null') return null;
+  return name;
+}
