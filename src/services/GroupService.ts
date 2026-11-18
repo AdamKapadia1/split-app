@@ -121,7 +121,7 @@ function requireClient() {
 
 function asGroupError(error: unknown): GroupServiceError {
   if (error instanceof GroupServiceError) return error;
-  console.error('[GroupService] raw Supabase error:', error);
+  
   const code = postgresCode(error);
   if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
