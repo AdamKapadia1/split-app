@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { compareGroupMembers, groupService, type GroupMemberProfile } from '@/services/GroupService';
 import type { Receipt } from '@/types/database.types';
+import { maskPhoneNumber } from '@/utils/phone';
 
 type GroupReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -279,7 +280,7 @@ export default function GroupLedgerScreen() {
                             <Text style={styles.rosterName} numberOfLines={1}>{member.fullName}</Text>
                             {member.role === 'owner' ? <Text style={styles.ownerBadge}>Owner</Text> : null}
                           </View>
-                          <Text style={styles.rosterEmail} numberOfLines={1}>{member.email}</Text>
+                          <Text style={styles.rosterEmail} numberOfLines={1}>{member.phone ? maskPhoneNumber(member.phone) : member.email}</Text>
                         </View>
                         {viewerIsOwner && member.role !== 'owner' ? (
                           <TouchableOpacity
@@ -334,7 +335,7 @@ export default function GroupLedgerScreen() {
         <AddMemberModal
           visible={addOpen}
           groupId={groupId}
-          existingMemberIds={members.map((member) => member.userId)}
+          groupName={groupName}
           onMemberAdded={addMember}
           onClose={() => setAddOpen(false)}
         />

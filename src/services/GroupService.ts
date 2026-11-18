@@ -1,32 +1,40 @@
 import type { PostgrestError } from '@supabase/supabase-js';
+import type { CountryCode } from 'libphonenumber-js';
 
 import { supabase } from '@/lib/supabase';
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { toE164 } from '@/utils/phone';
 
 export type GroupMemberProfile = {
   userId: string;
   email: string;
+  phone: string | null;
   fullName: string;
   avatarUrl: string | null;
   role: 'owner' | 'member';
   joinedAt: string;
 };
 
-export type GroupServiceCode = 'NOT_FOUND' | 'ALREADY_MEMBER' | 'PERMISSION_DENIED' | 'INVALID_EMAIL' | 'NETWORK_ERROR';
+export type GroupServiceCode = 'INVALID_PHONE' | 'NOT_FOUND' | 'ALREADY_MEMBER' | 'PERMISSION_DENIED' | 'NETWORK_ERROR';
 
 type ProfileRow = {
   id?: string;
   email?: string | null;
+  phone?: string | null;
   full_name?: string | null;
+  fullName?: string | null;
   avatar_url?: string | null;
+  avatarUrl?: string | null;
 };
 
-type MemberRow = {
+type MemberRow = ProfileRow & {
   user_id?: string;
+  userId?: string;
   role?: string | null;
   joined_at?: string | null;
+  joinedAt?: string | null;
   profiles?: ProfileRow | ProfileRow[] | null;
+  member?: unknown;
+  profile?: unknown;
 };
 
 export class GroupServiceError extends Error {
@@ -50,7 +58,7 @@ class GroupService {
       const client = requireClient();
       const { data, error } = await client
         .from('group_members')
-        .select('user_id, role, joined_at, profiles(id, email, full_name, avatar_url)')
+        .select('user_id, role, joined_at, profiles(id, email, phone, full_name, avatar_url)')
         .eq('group_id', groupId)
         .order('joined_at', { ascending: true });
 
@@ -69,33 +77,20 @@ class GroupService {
     }
   }
 
-  async addMemberByEmail(groupId: string, email: string): Promise<GroupMemberProfile> {
-    const lookup = email.trim().toLowerCase();
-    if (!EMAIL.test(lookup)) {
-      throw new GroupServiceError('INVALID_EMAIL', 'Enter a valid email address.');
+  async addMemberByPhone(groupId: string, rawPhone: string, country: CountryCode = 'GB'): Promise<GroupMemberProfile> {
+    const e164 = toE164(rawPhone, country);
+    if (!e164) {
+      throw new GroupServiceError('INVALID_PHONE', 'Enter a valid phone number.');
     }
 
     try {
       const client = requireClient();
-      const found = await client.rpc('find_profile_by_email', { lookup_email: lookup });
-      if (found.error) throw found.error;
-
-      const profile = firstProfile(found.data);
-      if (!profile?.id) {
-        throw new GroupServiceError('NOT_FOUND', 'No account found for that email.');
-      }
-
-      const inserted = await client
-        .from('group_members')
-        .insert({ group_id: groupId, user_id: profile.id, role: 'member' })
-        .select('joined_at')
-        .maybeSingle();
-
-      if (inserted.error) throw inserted.error;
-
-      const joinedAt =
-        inserted.data && typeof inserted.data.joined_at === 'string' ? inserted.data.joined_at : new Date().toISOString();
-      return toMember(profile, profile.id, 'member', joinedAt);
+      const added = await client.rpc('add_group_member_by_phone', {
+        p_group_id: groupId,
+        p_phone: e164,
+      });
+      if (added.error) throw added.error;
+      return memberFromRpc(added.data, e164);
     } catch (error) {
       throw asGroupError(error);
     }
@@ -128,7 +123,9 @@ function asGroupError(error: unknown): GroupServiceError {
   if (error instanceof GroupServiceError) return error;
 
   const code = postgresCode(error);
+  if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
+  if (code === '22023') return new GroupServiceError('INVALID_PHONE', 'Enter a valid phone number.');
   if (code === '42501') return new GroupServiceError('PERMISSION_DENIED', 'You do not have permission to change this group.');
   return new GroupServiceError('NETWORK_ERROR', 'Could not update group members.');
 }
@@ -144,17 +141,74 @@ function firstProfile(value: unknown): ProfileRow | null {
   return value as ProfileRow;
 }
 
-function toMember(profile: ProfileRow | null, userId: string, role: string | null | undefined, joinedAt: string | null | undefined): GroupMemberProfile {
-  const email = typeof profile?.email === 'string' ? profile.email.trim() : '';
-  const fullName = typeof profile?.full_name === 'string' && profile.full_name.trim() ? profile.full_name.trim() : email.split('@')[0] || 'Member';
-  const avatarUrl = typeof profile?.avatar_url === 'string' && profile.avatar_url.trim() ? profile.avatar_url : null;
+function firstRecord(value: unknown): MemberRow | null {
+  if (Array.isArray(value)) return firstRecord(value[0]);
+  if (!value || typeof value !== 'object') return null;
+
+  const record = value as MemberRow;
+  if (text(record.userId, record.user_id, record.id)) return record;
+  if (record.member && record.member !== record) {
+    const member = firstRecord(record.member);
+    if (member) return member;
+  }
+  if (record.profile && record.profile !== record) {
+    const profile = firstRecord(record.profile);
+    if (profile) return profile;
+  }
+  return record;
+}
+
+function memberFromRpc(data: unknown, phone: string): GroupMemberProfile {
+  const row = firstRecord(data);
+  if (!row) {
+    throw new GroupServiceError('NETWORK_ERROR', 'Could not add this member.');
+  }
+
+  const profile = firstProfile(row.profiles) ?? row;
+  const userId = text(row.userId, row.user_id, profile.id);
+  if (!userId) {
+    throw new GroupServiceError('NETWORK_ERROR', 'Could not add this member.');
+  }
+
+  return toMember(
+    {
+      email: profile.email,
+      phone: text(profile.phone) || phone,
+      full_name: profile.full_name,
+      fullName: profile.fullName,
+      avatar_url: profile.avatar_url,
+      avatarUrl: profile.avatarUrl,
+    },
+    userId,
+    text(row.role) || null,
+    text(row.joinedAt, row.joined_at) || null,
+  );
+}
+
+function toMember(
+  profile: ProfileRow | null,
+  userId: string,
+  role: string | null | undefined,
+  joinedAt: string | null | undefined,
+): GroupMemberProfile {
+  const email = text(profile?.email);
+  const fullName = text(profile?.full_name, profile?.fullName) || email.split('@')[0] || 'Member';
+  const avatarUrl = text(profile?.avatar_url, profile?.avatarUrl) || null;
 
   return {
     userId,
     email,
+    phone: text(profile?.phone) || null,
     fullName,
     avatarUrl,
     role: role === 'owner' ? 'owner' : 'member',
     joinedAt: joinedAt || new Date().toISOString(),
   };
+}
+
+function text(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
 }
