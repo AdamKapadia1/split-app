@@ -140,9 +140,9 @@ export default function ReceiptLedgerScreen() {
           </View>
         </View>
 
-        {/* New Continue Button */}
+        {/* Updated Continue Button with params */}
         <Pressable 
-          onPress={() => router.push('/split')}
+          onPress={() => router.push({ pathname: '/split', params: { id: receiptId } })}
           style={styles.continueButton}
         >
           <Text style={styles.continueButtonText}>Continue to Split</Text>
