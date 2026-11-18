@@ -114,6 +114,10 @@ export default function SplitScreen() {
       try {
         setIsLoading(true);
         const data = await receiptService.getReceiptWithItems(receiptId);
+        if (!data) {
+          setLedgerData(null);
+          return;
+        }
         setLedgerData(data as LedgerData);
         
         // Populate local claims state from database splits

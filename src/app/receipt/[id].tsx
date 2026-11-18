@@ -39,14 +39,27 @@ export default function ReceiptLedgerScreen() {
   
   const [receiptData, setReceiptData] = useState<Ledger | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
 
   const loadLedger = useCallback(async () => {
-    if (!receiptId) return;
+    if (!receiptId) {
+      setReceiptData(null);
+      setNotFound(true);
+      setIsLoading(false);
+      return;
+    }
+
     try {
       setIsLoading(true);
       const data = await receiptService.getReceiptWithItems(receiptId);
-      setReceiptData(data as Ledger);
+      if (!data) {
+        setReceiptData(null);
+        setNotFound(true);
+        return;
+      }
+      setReceiptData(data);
+      setNotFound(false);
     } catch (error) {
       console.error("Failed to load ledger:", error);
     } finally {
@@ -68,10 +81,22 @@ export default function ReceiptLedgerScreen() {
     });
   }, []);
 
-  if (isLoading || !receiptData) {
+  if (isLoading) {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#4ade80" />
+      </View>
+    );
+  }
+
+  if (notFound || !receiptData) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.missingTitle}>Receipt not found</Text>
+        <Text style={styles.missingSubtitle}>This receipt was deleted or is no longer available.</Text>
+        <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.missingButton}>
+          <Text style={styles.missingButtonText}>Go back</Text>
+        </Pressable>
       </View>
     );
   }
@@ -155,7 +180,11 @@ export default function ReceiptLedgerScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f172a' },
-  centerContainer: { flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center' },
+  centerContainer: { flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  missingTitle: { color: 'white', fontSize: 24, fontWeight: '800', letterSpacing: -0.4, textAlign: 'center' },
+  missingSubtitle: { marginTop: 8, color: '#94a3b8', fontSize: 16, lineHeight: 24, textAlign: 'center' },
+  missingButton: { marginTop: 24, backgroundColor: '#1e293b', borderRadius: 12, borderWidth: 1, borderColor: '#334155', paddingHorizontal: 20, paddingVertical: 14 },
+  missingButtonText: { color: '#4ade80', fontSize: 16, fontWeight: '700' },
   scrollContent: { padding: 16, paddingBottom: 40 },
   headerContainer: { alignItems: 'center', marginBottom: 24 },
   restaurantName: { color: 'white', fontSize: 24, fontWeight: 'bold', textAlign: 'center' },

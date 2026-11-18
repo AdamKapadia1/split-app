@@ -98,13 +98,14 @@ export class ReceiptService {
     }
   }
 
-  async getReceiptWithItems(receiptId: string): Promise<{ receipt: Receipt; items: Item[]; splits: Split[] }> {
+  async getReceiptWithItems(receiptId: string): Promise<{ receipt: Receipt; items: Item[]; splits: Split[] } | null> {
     try {
       const id = requireId(receiptId, 'receiptId');
       const client = requireClient();
 
-      const receiptResult = await client.from('receipts').select('*').eq('id', id).single();
+      const receiptResult = await client.from('receipts').select('*').eq('id', id).maybeSingle();
       if (receiptResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptResult.error.message, receiptResult.error);
+      if (!receiptResult.data) return null;
 
       // Fetches items sorted by line_index instead of random ID
       const itemsResult = await client.from('items').select('*').eq('receipt_id', id).order('line_index', { ascending: true });
