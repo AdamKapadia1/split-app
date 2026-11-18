@@ -1,40 +1,45 @@
-import { NativeTabs } from 'expo-router/native-tabs';
-import { Platform } from 'react-native';
-
-import { Colors } from '@/constants/theme';
+import { Ionicons } from '@expo/vector-icons';
+import { Tabs } from 'expo-router';
 
 export default function TabLayout() {
   return (
-    <NativeTabs
-      backgroundColor="#030712"
-      blurEffect="systemChromeMaterialDark"
-      tintColor={Colors.accent}
-      indicatorColor={Platform.OS === 'web' ? Colors.backgroundSelected : Colors.accent}
-      iconColor={{
-        default: Colors.textSecondary,
-        selected: Colors.accent,
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: {
+          backgroundColor: '#0f172a',
+          borderTopColor: '#1e293b',
+          borderTopWidth: 1,
+          height: 88,
+          paddingBottom: 28,
+        },
+        tabBarActiveTintColor: '#38BDF8',
+        tabBarInactiveTintColor: '#64748b',
       }}
-      labelStyle={{
-        default: { color: Colors.textSecondary },
-        selected: { color: Colors.accent },
-      }}>
-      <NativeTabs.Trigger name="index" contentStyle={{ backgroundColor: Colors.background }}>
-        <NativeTabs.Trigger.Label>Groups</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'person.2', selected: 'person.2.fill' }}
-          md="group"
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="scanner" contentStyle={{ backgroundColor: Colors.background }}>
-        <NativeTabs.Trigger.Label>Scanner</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="qrcode.viewfinder" md="qr_code_scanner" />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="split" contentStyle={{ backgroundColor: Colors.background }}>
-        <NativeTabs.Trigger.Label>Split</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="arrow.left.arrow.right" md="call_split" />
-      </NativeTabs.Trigger>
-    </NativeTabs>
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'History',
+          tabBarIcon: ({ color, size }) => <Ionicons name="receipt" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="groups"
+        options={{
+          title: 'Groups',
+          tabBarIcon: ({ color, size }) => <Ionicons name="people" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="scanner"
+        options={{
+          title: 'Scan',
+          tabBarIcon: ({ color, size }) => <Ionicons name="camera" size={size} color={color} />,
+        }}
+      />
+      {/* Explicitly hide background screens from the tab bar */}
+      <Tabs.Screen name="split" options={{ href: null }} />
+    </Tabs>
   );
 }
