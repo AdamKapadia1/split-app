@@ -12,18 +12,26 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
-import { groupService, type AccountProfile } from '@/services/GroupService';
-import { receiptService } from '@/services/ReceiptService';
+import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup } from '@/services/GroupService';
+import { isAbortError, receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import { formatSmartDate } from '@/utils/formatSmartDate';
 import {
   collapseHistoryToPreview,
   filterAndGroupReceipts,
+  getInitialHistoryLimit,
   HISTORY_PAGE_SIZE,
   HISTORY_PREVIEW_LIMIT,
+  HISTORY_SEARCH_DEBOUNCE_MS,
+  isHistoryFiltered,
+  isValidGroupUuid,
   mergePaginatedReceipts,
+  normalizeHistorySearchQuery,
+  reconcileGroupFilter,
   type HistorySection,
   type ReceiptHistoryCursor,
+  type ReceiptHistoryFilter,
+  type ReceiptHistoryGroupFilter,
   type ReceiptHistoryItem,
 } from '@/utils/receiptHistory';
 
@@ -92,6 +100,12 @@ export default function HomeScreen() {
   const itemsRef = useRef<ReceiptHistoryItem[]>([]);
   const hasMoreRef = useRef(false);
   const nextCursorRef = useRef<ReceiptHistoryCursor | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasLoadedOnceRef = useRef(false);
+  const pageLoadingRef = useRef(false);
+  const skipFocusRefreshRef = useRef(true);
+  const filterRef = useRef<ReceiptHistoryFilter>({ searchQuery: '', groupFilter: 'all' });
 
   const [mode, setMode] = useState<HistoryMode>('preview');
   const [items, setItems] = useState<ReceiptHistoryItem[]>([]);
@@ -99,14 +113,18 @@ export default function HomeScreen() {
   const [nextCursor, setNextCursor] = useState<ReceiptHistoryCursor | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isFilterLoading, setIsFilterLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [initialError, setInitialError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [rawSearchText, setRawSearchText] = useState('');
+  const [appliedSearchText, setAppliedSearchText] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [selectedGroupKey, setSelectedGroupKey] = useState<'all' | 'personal' | string>('all');
+  const [groupFilter, setGroupFilter] = useState<ReceiptHistoryGroupFilter>('all');
+  const [groups, setGroups] = useState<MemberGroup[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -127,45 +145,77 @@ export default function HomeScreen() {
     setMode(nextMode);
   }, []);
 
-  const loadPreview = useCallback(async (kind: 'load' | 'refresh') => {
+  const beginHistoryRequest = useCallback(() => {
     const generation = ++requestGenRef.current;
+    const previous = abortRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    previous?.abort();
     moreTokenRef.current += 1;
     inFlightMoreRef.current = false;
     endReachedArmed.current = false;
+    nextCursorRef.current = null;
+    pageLoadingRef.current = true;
+    setNextCursor(null);
     setIsLoadingMore(false);
     setLoadMoreError(null);
+    return { generation, signal: controller.signal };
+  }, []);
+
+  const loadFirstPage = useCallback(async (kind: 'load' | 'refresh' | 'filter') => {
+    const activeFilter = filterRef.current;
+    const filtered = isHistoryFiltered(activeFilter);
+    const { generation, signal } = beginHistoryRequest();
 
     const hasRows = itemsRef.current.length > 0;
-    if (kind === 'refresh' || hasRows) setIsRefreshing(true);
-    if (!hasRows) setIsInitialLoading(true);
+    if (kind === 'refresh') {
+      setIsRefreshing(true);
+      setIsFilterLoading(false);
+    } else if (kind === 'filter' || hasRows) {
+      setIsFilterLoading(true);
+      setIsRefreshing(false);
+    } else {
+      setIsInitialLoading(true);
+      setIsFilterLoading(false);
+    }
 
     try {
       const page = await receiptService.fetchReceiptHistoryPage({
-        limit: HISTORY_PREVIEW_LIMIT,
+        limit: getInitialHistoryLimit(activeFilter),
         cursor: null,
+        searchQuery: activeFilter.searchQuery,
+        groupFilter: activeFilter.groupFilter,
+        signal,
       });
       if (generation !== requestGenRef.current) return;
-      commitPage(page.items, page.hasMore, page.nextCursor, 'preview');
+      hasLoadedOnceRef.current = true;
+      commitPage(page.items, page.hasMore, page.nextCursor, filtered ? 'expanded' : 'preview');
       setInitialError(null);
     } catch (error) {
+      if (isAbortError(error) || generation !== requestGenRef.current) return;
       console.error('Error fetching receipts:', error);
-      if (generation !== requestGenRef.current) return;
       if (itemsRef.current.length === 0) setInitialError('Could not load receipts.');
     } finally {
       if (generation !== requestGenRef.current) return;
+      pageLoadingRef.current = false;
       setIsInitialLoading(false);
       setIsRefreshing(false);
+      setIsFilterLoading(false);
       setIsLoadingMore(false);
     }
-  }, [commitPage]);
+  }, [beginHistoryRequest, commitPage]);
 
   const loadMore = useCallback(async () => {
-    if (inFlightMoreRef.current) return;
+    if (pageLoadingRef.current || inFlightMoreRef.current) return;
     if (!hasMoreRef.current || !nextCursorRef.current) return;
 
     const generation = requestGenRef.current;
     const token = ++moreTokenRef.current;
     const cursor = nextCursorRef.current;
+    const signal = abortRef.current?.signal;
+    const activeFilter = filterRef.current;
+    if (signal?.aborted) return;
+
     inFlightMoreRef.current = true;
     setIsLoadingMore(true);
     setLoadMoreError(null);
@@ -174,13 +224,16 @@ export default function HomeScreen() {
       const page = await receiptService.fetchReceiptHistoryPage({
         limit: HISTORY_PAGE_SIZE,
         cursor,
+        searchQuery: activeFilter.searchQuery,
+        groupFilter: activeFilter.groupFilter,
+        signal,
       });
       if (generation !== requestGenRef.current) return;
       const merged = mergePaginatedReceipts(itemsRef.current, page.items);
       commitPage(merged, page.hasMore, page.nextCursor, 'expanded');
     } catch (error) {
+      if (isAbortError(error) || generation !== requestGenRef.current) return;
       console.error('Error loading more receipts:', error);
-      if (generation !== requestGenRef.current) return;
       setLoadMoreError('Could not load more receipts.');
     } finally {
       if (token === moreTokenRef.current) inFlightMoreRef.current = false;
@@ -198,12 +251,46 @@ export default function HomeScreen() {
     }
   }, [userId]);
 
+  const loadGroups = useCallback(async () => {
+    if (!userId) {
+      setGroups([]);
+      setGroupsLoaded(false);
+      return;
+    }
+    try {
+      const next = await groupService.listMemberGroups(userId);
+      setGroups(next);
+      setGroupsLoaded(true);
+    } catch (error) {
+      console.error('Error loading history groups:', error);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    filterRef.current = { searchQuery: appliedSearchText, groupFilter };
+    void loadFirstPage(hasLoadedOnceRef.current ? 'filter' : 'load');
+  }, [appliedSearchText, groupFilter, loadFirstPage]);
+
+  useEffect(() => subscribeGroupList(() => {
+    void loadGroups();
+  }), [loadGroups]);
+
+  useEffect(() => () => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    requestGenRef.current += 1;
+    abortRef.current?.abort();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      const kind = itemsRef.current.length > 0 ? 'refresh' : 'load';
-      void loadPreview(kind);
+      void loadGroups();
       void loadProfile();
-    }, [loadPreview, loadProfile]),
+      if (skipFocusRefreshRef.current) {
+        skipFocusRefreshRef.current = false;
+        return;
+      }
+      void loadFirstPage('refresh');
+    }, [loadFirstPage, loadGroups, loadProfile]),
   );
 
   async function handleLogout() {
@@ -213,8 +300,9 @@ export default function HomeScreen() {
   }
 
   function onRefresh() {
-    void loadPreview('refresh');
+    void loadFirstPage('refresh');
     void loadProfile();
+    void loadGroups();
   }
 
   const openReceipt = useCallback((id: string) => {
@@ -247,7 +335,7 @@ export default function HomeScreen() {
         );
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Error', 'Could not delete receipt from the database.');
-        void loadPreview('refresh');
+        void loadFirstPage('refresh');
         return;
       }
 
@@ -256,9 +344,9 @@ export default function HomeScreen() {
       console.error('Delete failed:', error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'Could not delete receipt from the database.');
-      void loadPreview('refresh');
+      void loadFirstPage('refresh');
     }
-  }, [commitPage, loadPreview, mode]);
+  }, [commitPage, loadFirstPage, mode]);
 
   const deleteReceipt = useCallback((id: string, name: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -292,6 +380,10 @@ export default function HomeScreen() {
     moreTokenRef.current += 1;
     inFlightMoreRef.current = false;
     endReachedArmed.current = false;
+    const previous = abortRef.current;
+    abortRef.current = new AbortController();
+    previous?.abort();
+    pageLoadingRef.current = false;
     const page = collapseHistoryToPreview(itemsRef.current, hasMoreRef.current);
     commitPage(page.items, page.hasMore, page.nextCursor, 'preview');
     setLoadMoreError(null);
@@ -318,53 +410,83 @@ export default function HomeScreen() {
     <GroupedHistoryRow row={item} onDelete={deleteReceipt} onOpen={openReceipt} onOpenGroup={openGroup} />
   ), [deleteReceipt, openGroup, openReceipt]);
 
-  const everything = useMemo(
+  const ledger = useMemo(
     () => filterAndGroupReceipts({ receipts: items, searchQuery: '', selectedGroupKey: 'all' }),
     [items],
   );
-  const filtered = useMemo(
-    () => filterAndGroupReceipts({ receipts: items, searchQuery, selectedGroupKey }),
-    [items, searchQuery, selectedGroupKey],
+  const rows = useMemo(() => flattenHistorySections(ledger.sections), [ledger.sections]);
+  const activeFilter = useMemo<ReceiptHistoryFilter>(
+    () => ({ searchQuery: appliedSearchText, groupFilter }),
+    [appliedSearchText, groupFilter],
   );
-  const rows = useMemo(() => flattenHistorySections(filtered.sections), [filtered.sections]);
-
-  const allCount = everything.filteredCount;
-  const allTotalMinor = everything.filteredTotalMinor;
-  const groupChips = everything.sections.filter((section) => section.groupId !== null);
-  const hasPersonal = everything.sections.some((section) => section.groupId === null);
-  const showChips = everything.sections.length > 1 || groupChips.length > 0;
-  const queryActive = searchQuery.trim().length > 0;
-  const isFiltered = queryActive || selectedGroupKey !== 'all';
-  const selectedGroupTitle = selectedGroupKey === 'personal'
+  const isFiltered = isHistoryFiltered(activeFilter);
+  const queryActive = normalizeHistorySearchQuery(appliedSearchText).length > 0;
+  const searchPending = normalizeHistorySearchQuery(rawSearchText) !== appliedSearchText;
+  const groupOptions = useMemo(
+    () => groups.filter((group) => isValidGroupUuid(group.id)),
+    [groups],
+  );
+  const [trackedGroups, setTrackedGroups] = useState(groups);
+  if (groupsLoaded && trackedGroups !== groups) {
+    setTrackedGroups(groups);
+    setGroupFilter((current) => reconcileGroupFilter(current, groupOptions.map((group) => group.id)));
+  }
+  const selectedGroupTitle = groupFilter === 'ungrouped'
     ? 'Personal'
-    : everything.sections.find((section) => section.key === selectedGroupKey)?.title ?? 'Group';
-  const heroLabel = queryActive
-    ? 'MATCHING SPEND'
-    : selectedGroupKey !== 'all'
-      ? `${selectedGroupTitle.toUpperCase()} SPEND`
-      : hasMore
-        ? 'RECENT SPEND'
-        : 'TOTAL TRACKED';
-  const loadedCountLabel = `${allCount}${hasMore ? '+' : ''} ${allCount === 1 && !hasMore ? 'receipt' : 'receipts'}`;
-  const countLabel = isFiltered
-    ? `${filtered.filteredCount} of ${allCount}${hasMore ? '+' : ''} receipts`
-    : loadedCountLabel;
+    : groupOptions.find((group) => group.id === groupFilter)?.name ?? null;
+  const heroLabel = !isFiltered
+    ? (hasMore ? 'Recent spend' : 'Total tracked')
+    : queryActive
+      ? 'Matching spend'
+      : `${selectedGroupTitle ?? 'Group'} spend`;
+  const visibleCount = ledger.filteredCount;
+  const countLabel = `${visibleCount}${hasMore ? '+' : ''} ${visibleCount === 1 && !hasMore ? 'receipt' : 'receipts'}`;
 
-  function selectGroup(key: 'all' | 'personal' | string) {
-    if (key === selectedGroupKey) return;
+  function commitSearch(value: string) {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    const normalized = normalizeHistorySearchQuery(value);
+    if (filterRef.current.searchQuery === normalized) return;
+    filterRef.current = { ...filterRef.current, searchQuery: normalized };
+    beginHistoryRequest();
+    setAppliedSearchText(normalized);
+  }
+
+  function onChangeSearch(value: string) {
+    setRawSearchText(value);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      searchTimerRef.current = null;
+      commitSearch(value);
+    }, HISTORY_SEARCH_DEBOUNCE_MS);
+  }
+
+  function selectGroup(key: ReceiptHistoryGroupFilter) {
+    if (key !== 'all' && key !== 'ungrouped' && !isValidGroupUuid(key)) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedGroupKey(key);
+    commitSearch(rawSearchText);
+    if (filterRef.current.groupFilter === key) return;
+    filterRef.current = { ...filterRef.current, groupFilter: key };
+    beginHistoryRequest();
+    setGroupFilter(key);
   }
 
   function clearSearch() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSearchQuery('');
+    setRawSearchText('');
+    commitSearch('');
   }
 
   function resetFilters() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSearchQuery('');
-    setSelectedGroupKey('all');
+    setRawSearchText('');
+    commitSearch('');
+    if (filterRef.current.groupFilter === 'all') return;
+    filterRef.current = { ...filterRef.current, groupFilter: 'all' };
+    beginHistoryRequest();
+    setGroupFilter('all');
   }
 
   const displayName = profile?.displayName || sessionDisplayName(session?.user.user_metadata, session?.user.email);
@@ -376,29 +498,37 @@ export default function HomeScreen() {
     <View>
       <View style={styles.hero}>
         <Text style={styles.heroLabel}>{heroLabel}</Text>
-        <MoneyText amountMinor={isFiltered ? filtered.filteredTotalMinor : allTotalMinor} size="hero" splitDecimals />
+        <MoneyText amountMinor={ledger.filteredTotalMinor} size="hero" splitDecimals />
         <View style={styles.countPill}>
           {isFiltered ? <View style={styles.countDot} /> : null}
           <Text style={styles.countText}>{countLabel}</Text>
         </View>
       </View>
 
-      <View style={[styles.search, isSearchFocused && styles.searchFocused, !showChips && styles.searchSolo]}>
+      <View style={[styles.search, isSearchFocused && styles.searchFocused]}>
         <Ionicons name="search" size={16} color={isSearchFocused ? theme.colors.accent : theme.colors.textMuted} />
         <TextInput
-          accessibilityLabel="Search receipts"
+          accessibilityLabel="Search merchants"
           autoCorrect={false}
-          placeholder="Search merchant, group, or amount..."
+          placeholder="Search merchants"
           placeholderTextColor={theme.colors.textMuted}
           returnKeyType="search"
           selectionColor={theme.colors.accent}
           style={styles.searchInput}
-          value={searchQuery}
+          value={rawSearchText}
           onBlur={() => setIsSearchFocused(false)}
-          onChangeText={setSearchQuery}
+          onChangeText={onChangeSearch}
           onFocus={() => setIsSearchFocused(true)}
+          onSubmitEditing={() => commitSearch(rawSearchText)}
         />
-        {searchQuery.length > 0 ? (
+        {searchPending || isFilterLoading ? (
+          <ActivityIndicator
+            accessibilityLabel="Searching receipts"
+            color={theme.colors.accent}
+            size="small"
+          />
+        ) : null}
+        {rawSearchText.length > 0 ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Clear search"
@@ -411,28 +541,24 @@ export default function HomeScreen() {
         ) : null}
       </View>
 
-      {showChips ? (
-        <ScrollView
-          horizontal
-          keyboardShouldPersistTaps="handled"
-          showsHorizontalScrollIndicator={false}
-          style={styles.chips}
-          contentContainerStyle={styles.chipsContent}
-        >
-          <FilterChip label="All" active={selectedGroupKey === 'all'} onPress={() => selectGroup('all')} />
-          {groupChips.map((section) => (
-            <FilterChip
-              key={section.key}
-              label={section.title}
-              active={selectedGroupKey === section.key}
-              onPress={() => selectGroup(section.key)}
-            />
-          ))}
-          {hasPersonal ? (
-            <FilterChip label="Personal" active={selectedGroupKey === 'personal'} onPress={() => selectGroup('personal')} />
-          ) : null}
-        </ScrollView>
-      ) : null}
+      <ScrollView
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        showsHorizontalScrollIndicator={false}
+        style={styles.chips}
+        contentContainerStyle={styles.chipsContent}
+      >
+        <FilterChip label="All" active={groupFilter === 'all'} onPress={() => selectGroup('all')} />
+        {groupOptions.map((group) => (
+          <FilterChip
+            key={group.id}
+            label={group.name}
+            active={groupFilter === group.id}
+            onPress={() => selectGroup(group.id)}
+          />
+        ))}
+        <FilterChip label="Personal" active={groupFilter === 'ungrouped'} onPress={() => selectGroup('ungrouped')} />
+      </ScrollView>
     </View>
   );
 
@@ -443,6 +569,7 @@ export default function HomeScreen() {
       isLoadingMore={isLoadingMore}
       loadMoreError={loadMoreError}
       mode={mode}
+      showCollapse={mode === 'expanded' && !isFiltered}
       onLoadMore={continueHistory}
       onRetry={retryLoadMore}
       onShowLess={showLess}
@@ -476,7 +603,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Retry"
             onPress={() => {
-              void loadPreview('load');
+              void loadFirstPage('load');
             }}
             style={styles.footerButton}
           >
@@ -487,16 +614,27 @@ export default function HomeScreen() {
         <FlatList
           ref={listRef}
           data={rows}
-          extraData={`${mode}:${String(hasMore)}:${String(isLoadingMore)}:${loadMoreError ?? ''}:${items.length}`}
+          extraData={`${mode}:${String(hasMore)}:${String(isLoadingMore)}:${String(isFiltered)}:${loadMoreError ?? ''}:${items.length}`}
           keyExtractor={keyExtractor}
           renderItem={renderRow}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
+          style={isFilterLoading ? styles.listDimmed : undefined}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={listHeader}
           ListFooterComponent={listFooter}
-          ListEmptyComponent={items.length === 0 ? <HistoryEmpty /> : <HistoryNoMatch onReset={resetFilters} />}
+          ListEmptyComponent={isFilterLoading ? (
+            <ActivityIndicator accessibilityLabel="Searching receipts" color={theme.colors.accent} style={styles.footerSpinner} />
+          ) : isFiltered ? (
+            <HistoryNoMatch
+              groupLabel={groupFilter === 'all' ? null : selectedGroupTitle}
+              query={appliedSearchText}
+              onReset={resetFilters}
+            />
+          ) : (
+            <HistoryEmpty />
+          )}
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />}
           onEndReached={onEndReached}
           onEndReachedThreshold={0.3}
@@ -538,6 +676,7 @@ function HistoryPaginationFooter({
   canContinue,
   isLoadingMore,
   loadMoreError,
+  showCollapse,
   onViewMore,
   onLoadMore,
   onShowLess,
@@ -548,6 +687,7 @@ function HistoryPaginationFooter({
   canContinue: boolean;
   isLoadingMore: boolean;
   loadMoreError: string | null;
+  showCollapse: boolean;
   onViewMore: () => void;
   onLoadMore: () => void;
   onShowLess: () => void;
@@ -568,17 +708,20 @@ function HistoryPaginationFooter({
   }
 
   const showLoadMore = hasMore && canContinue && !isLoadingMore && !loadMoreError;
+  if (!showCollapse && !isLoadingMore && !loadMoreError && !showLoadMore) return null;
 
   return (
     <View style={styles.footer}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Show less"
-        onPress={onShowLess}
-        style={styles.footerQuiet}
-      >
-        <Text style={styles.footerQuietText}>Show less</Text>
-      </Pressable>
+      {showCollapse ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Show less"
+          onPress={onShowLess}
+          style={styles.footerQuiet}
+        >
+          <Text style={styles.footerQuietText}>Show less</Text>
+        </Pressable>
+      ) : null}
       {isLoadingMore ? (
         <ActivityIndicator color={theme.colors.accent} style={styles.footerSpinner} />
       ) : null}
@@ -649,21 +792,37 @@ function HistoryEmpty() {
   );
 }
 
-function HistoryNoMatch({ onReset }: { onReset: () => void }) {
+function HistoryNoMatch({
+  query,
+  groupLabel,
+  onReset,
+}: {
+  query: string;
+  groupLabel: string | null;
+  onReset: () => void;
+}) {
+  const detail = query.length > 0 && groupLabel
+    ? `No receipts match “${query}” in ${groupLabel}.`
+    : query.length > 0
+      ? `No receipts match “${query}”.`
+      : groupLabel
+        ? `No receipts in ${groupLabel}.`
+        : 'Try a different merchant.';
+
   return (
     <View style={styles.noMatchCard}>
       <View style={styles.noMatchBadge}>
         <Ionicons name="search" size={18} color={theme.colors.textMuted} />
       </View>
       <Text style={styles.noMatchTitle}>No matching receipts</Text>
-      <Text style={styles.noMatchSubtitle}>Try searching a different merchant, group, or amount.</Text>
+      <Text style={styles.noMatchSubtitle}>{detail}</Text>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Reset filters"
+        accessibilityLabel="Clear filters"
         onPress={onReset}
         style={styles.resetPill}
       >
-        <Text style={styles.resetText}>Reset filters</Text>
+        <Text style={styles.resetText}>Clear filters</Text>
       </Pressable>
     </View>
   );
@@ -769,6 +928,7 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={`${label} receipts`}
       accessibilityState={{ selected: active }}
       onPress={onPress}
       style={[styles.chip, active ? styles.chipActive : styles.chipInactive]}
@@ -823,7 +983,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   searchFocused: { borderColor: theme.colors.accentBorder },
-  searchSolo: { marginBottom: 18 },
+  listDimmed: { opacity: 0.55 },
   searchInput: {
     flex: 1,
     fontSize: 15,

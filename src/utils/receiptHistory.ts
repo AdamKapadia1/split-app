@@ -7,6 +7,69 @@ export const HISTORY_PREVIEW_LIMIT = 5;
 /** Pages after the preview. Large enough to fill a phone, small enough to stay cheap. */
 export const HISTORY_PAGE_SIZE = 15;
 
+/** Merchant search is a substring, not a document. Cap it before it hits PostgREST. */
+export const HISTORY_SEARCH_MAX_LENGTH = 100;
+
+/** Wait for a pause in typing before querying the ledger. Submit and chips skip this. */
+export const HISTORY_SEARCH_DEBOUNCE_MS = 300;
+
+/**
+ * Group chip sent to the server.
+ * `all` is the whole RLS-visible ledger. `ungrouped` is `group_id IS NULL`.
+ * Any other value must be a canonical group UUID before it is queried.
+ */
+export type ReceiptHistoryGroupFilter = 'all' | 'ungrouped' | string;
+
+export type ReceiptHistoryFilter = {
+  searchQuery: string;
+  groupFilter: ReceiptHistoryGroupFilter;
+};
+
+const GROUP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Trims, collapses internal whitespace, and caps the merchant query.
+ * Whitespace-only input becomes an empty string so it does not count as a filter.
+ */
+export function normalizeHistorySearchQuery(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, HISTORY_SEARCH_MAX_LENGTH);
+}
+
+/**
+ * Escapes SQL LIKE wildcards so the merchant pattern matches literally.
+ * Backslash is escaped first so the slashes added for `%` and `_` stay escapes.
+ */
+export function escapeIlikePattern(query: string): string {
+  return query.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+/** Canonical 8-4-4-4-12 hex UUID. Rejects sentinels and filter injection. */
+export function isValidGroupUuid(value: string): boolean {
+  return GROUP_UUID.test(value);
+}
+
+/** True when the ledger query is narrower than the unfiltered preview. */
+export function isHistoryFiltered(filter: ReceiptHistoryFilter): boolean {
+  return normalizeHistorySearchQuery(filter.searchQuery).length > 0 || filter.groupFilter !== 'all';
+}
+
+/** Unfiltered History stays a 5-row preview. An active search or chip loads a full page. */
+export function getInitialHistoryLimit(filter: ReceiptHistoryFilter): number {
+  return isHistoryFiltered(filter) ? HISTORY_PAGE_SIZE : HISTORY_PREVIEW_LIMIT;
+}
+
+/**
+ * Drops a group chip the member no longer belongs to.
+ * `all` and `ungrouped` are sentinels, not group ids, so they always survive.
+ */
+export function reconcileGroupFilter(
+  currentFilter: ReceiptHistoryGroupFilter,
+  availableGroupIds: readonly string[],
+): ReceiptHistoryGroupFilter {
+  if (currentFilter === 'all' || currentFilter === 'ungrouped') return currentFilter;
+  return availableGroupIds.includes(currentFilter) ? currentFilter : 'all';
+}
+
 /**
  * Strict keyset position. `createdAt` is the row's `created_at`; `id` breaks ties.
  * Both are required so two receipts inserted in the same millisecond stay ordered.

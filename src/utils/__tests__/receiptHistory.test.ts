@@ -3,8 +3,17 @@ import { formatPence } from '../money';
 import {
   buildReceiptHistoryKeysetFilter,
   collapseHistoryToPreview,
+  escapeIlikePattern,
   filterAndGroupReceipts,
+  getInitialHistoryLimit,
+  HISTORY_PAGE_SIZE,
+  HISTORY_PREVIEW_LIMIT,
+  HISTORY_SEARCH_MAX_LENGTH,
+  isHistoryFiltered,
+  isValidGroupUuid,
   mergePaginatedReceipts,
+  normalizeHistorySearchQuery,
+  reconcileGroupFilter,
   sliceLookaheadPage,
   type HistoryReceiptInput,
 } from '../receiptHistory';
@@ -226,6 +235,63 @@ it('orders sections and rows by most recent activity', () => {
   const ledger = filterAndGroupReceipts({ receipts: rows, searchQuery: '', selectedGroupKey: 'all' });
   assertEqual(ledger.sections.map((section) => section.key), ['personal', 'group-b', 'group-a']);
   assertEqual(ledger.sections.find((section) => section.key === 'group-a')?.data.map((row) => row.id), ['a-mid', 'a-old']);
+});
+
+it('normalizes a history search before it is sent to the ledger', () => {
+  assertEqual(normalizeHistorySearchQuery('  Nando   \t  House \n '), 'Nando House');
+  assertEqual(normalizeHistorySearchQuery('   '), '');
+  assertEqual(normalizeHistorySearchQuery(''), '');
+  assertEqual(normalizeHistorySearchQuery('\n\t'), '');
+
+  const capped = normalizeHistorySearchQuery(`  ${'a'.repeat(HISTORY_SEARCH_MAX_LENGTH + 40)}  `);
+  assertEqual(capped.length, HISTORY_SEARCH_MAX_LENGTH);
+  assertEqual(capped, 'a'.repeat(HISTORY_SEARCH_MAX_LENGTH));
+});
+
+it('escapes LIKE wildcards without mangling ordinary merchant names', () => {
+  assertEqual(escapeIlikePattern("Nando's"), "Nando's");
+  assertEqual(escapeIlikePattern('M&S'), 'M&S');
+  assertEqual(escapeIlikePattern('50%'), '50\\%');
+  assertEqual(escapeIlikePattern('M_S'), 'M\\_S');
+  assertEqual(escapeIlikePattern('A\\B'), 'A\\\\B');
+  assertEqual(escapeIlikePattern('50% Off_Cafe\\UK'), '50\\% Off\\_Cafe\\\\UK');
+});
+
+it('accepts only canonical group UUIDs', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  assertTrue(isValidGroupUuid(id), 'expected a lowercase uuid');
+  assertTrue(isValidGroupUuid(id.toUpperCase()), 'expected an uppercase uuid');
+  assertTrue(!isValidGroupUuid(''), 'empty string');
+  assertTrue(!isValidGroupUuid('all'), 'all sentinel');
+  assertTrue(!isValidGroupUuid('ungrouped'), 'ungrouped sentinel');
+  assertTrue(!isValidGroupUuid(`${id}' OR true --`), 'sql payload');
+  assertTrue(!isValidGroupUuid(`${id},group_id.eq.injected`), 'postgrest payload');
+  assertTrue(!isValidGroupUuid('not-a-uuid'), 'plain text');
+});
+
+it('uses the preview limit until a search or group chip is active', () => {
+  assertEqual(HISTORY_PREVIEW_LIMIT, 5);
+  assertEqual(HISTORY_PAGE_SIZE, 15);
+  assertEqual(isHistoryFiltered({ searchQuery: '   ', groupFilter: 'all' }), false);
+  assertEqual(getInitialHistoryLimit({ searchQuery: '   ', groupFilter: 'all' }), 5);
+  assertEqual(isHistoryFiltered({ searchQuery: '  nando  ', groupFilter: 'all' }), true);
+  assertEqual(getInitialHistoryLimit({ searchQuery: '  nando  ', groupFilter: 'all' }), 15);
+  assertEqual(getInitialHistoryLimit({ searchQuery: '', groupFilter: 'ungrouped' }), 15);
+  assertEqual(
+    getInitialHistoryLimit({ searchQuery: '', groupFilter: '11111111-1111-4111-8111-111111111111' }),
+    15,
+  );
+});
+
+it('keeps all and ungrouped chips, and drops a group the member no longer has', () => {
+  const kept = '11111111-1111-4111-8111-111111111111';
+  const missing = '22222222-2222-4222-8222-222222222222';
+  const available = [kept];
+  assertEqual(reconcileGroupFilter('all', available), 'all');
+  assertEqual(reconcileGroupFilter('ungrouped', []), 'ungrouped');
+  assertEqual(reconcileGroupFilter(kept, available), kept);
+  assertEqual(reconcileGroupFilter(missing, available), 'all');
+  assertEqual(reconcileGroupFilter(missing, []), 'all');
 });
 
 let failed = 0;

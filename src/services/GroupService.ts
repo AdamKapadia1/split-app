@@ -46,6 +46,12 @@ export type AccountProfile = {
   paymentLink: string | null;
 };
 
+/** A group the signed-in member belongs to. History chips come from this list, not from loaded receipts. */
+export type MemberGroup = {
+  id: string;
+  name: string;
+};
+
 export type GroupServiceCode = 'INVALID_PHONE' | 'NOT_FOUND' | 'ALREADY_MEMBER' | 'PERMISSION_DENIED' | 'NETWORK_ERROR';
 
 type ProfileRow = {
@@ -246,6 +252,39 @@ class GroupService {
       }
 
       return buildBalanceSummaries(ids, userId, (membersResult.data ?? []) as unknown[], receipts, (settlementsResult.data ?? []) as unknown[], splitRows);
+    } catch (error) {
+      throw asGroupError(error);
+    }
+  }
+
+  /**
+   * Every group this member belongs to, including groups with no recent receipts.
+   * History uses this for filter chips so a six-month-old group is still selectable.
+   */
+  async listMemberGroups(userId: string): Promise<MemberGroup[]> {
+    const viewerId = userId.trim();
+    if (!viewerId) return [];
+
+    try {
+      const client = requireClient();
+      const { data, error } = await client
+        .from('groups')
+        .select('id, name, group_members!inner(user_id)')
+        .eq('group_members.user_id', viewerId)
+        .order('name', { ascending: true });
+      if (error) throw error;
+
+      const groups: MemberGroup[] = [];
+      for (const row of data ?? []) {
+        if (!row || typeof row !== 'object') continue;
+        const record = row as { id?: unknown; name?: unknown };
+        if (typeof record.id !== 'string' || typeof record.name !== 'string') continue;
+        const id = record.id.trim();
+        const name = record.name.trim();
+        if (!id || !name) continue;
+        groups.push({ id, name });
+      }
+      return groups;
     } catch (error) {
       throw asGroupError(error);
     }

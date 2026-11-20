@@ -5,8 +5,12 @@ import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs,
 import { toMinorUnits } from '@/utils/money';
 import {
   buildReceiptHistoryKeysetFilter,
+  escapeIlikePattern,
+  isValidGroupUuid,
+  normalizeHistorySearchQuery,
   sliceLookaheadPage,
   type ReceiptHistoryCursor,
+  type ReceiptHistoryGroupFilter,
   type ReceiptHistoryItem,
   type ReceiptHistoryPage,
 } from '@/utils/receiptHistory';
@@ -229,13 +233,20 @@ export class ReceiptService {
    * Reads `limit + 1` rows so the extra row can say "there is another page"
    * without a full-table count. Group names are resolved in the same round trip.
    * A missing or deleted group leaves `group_name` null so the row stays Personal.
+   * Search and group chips are applied in Postgres, across the whole RLS-visible ledger.
    */
   async fetchReceiptHistoryPage({
     limit,
     cursor,
+    searchQuery,
+    groupFilter,
+    signal,
   }: {
     limit: number;
     cursor?: ReceiptHistoryCursor | null;
+    searchQuery?: string;
+    groupFilter?: ReceiptHistoryGroupFilter;
+    signal?: AbortSignal;
   }): Promise<ReceiptHistoryPage<ReceiptHistoryItem>> {
     try {
       const pageLimit = requirePageLimit(limit);
@@ -248,15 +259,31 @@ export class ReceiptService {
         .order('id', { ascending: false })
         .limit(pageLimit + 1);
 
+      receiptsQuery = applyHistoryGroupFilter(receiptsQuery, groupFilter);
+      const merchantQuery = normalizeHistorySearchQuery(searchQuery ?? '');
+      if (merchantQuery.length > 0) {
+        receiptsQuery = receiptsQuery.ilike('merchant_name', `%${escapeIlikePattern(merchantQuery)}%`);
+      }
       if (keyset) receiptsQuery = receiptsQuery.or(keyset);
+
+      let groupsQuery = client.from('groups').select('id, name');
+      if (signal) {
+        receiptsQuery = receiptsQuery.abortSignal(signal);
+        groupsQuery = groupsQuery.abortSignal(signal);
+      }
 
       const [receiptsResult, groupsResult] = await Promise.all([
         receiptsQuery,
-        client.from('groups').select('id, name'),
+        groupsQuery,
       ]);
 
-      if (receiptsResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptsResult.error.message, receiptsResult.error);
-      if (groupsResult.error) console.error('[ReceiptService] [fetchReceiptHistoryPage] groups', groupsResult.error);
+      if (receiptsResult.error) {
+        if (isAbortError(receiptsResult.error)) throw abortError(receiptsResult.error);
+        throw new ReceiptServiceError('FETCH_FAILED', receiptsResult.error.message, receiptsResult.error);
+      }
+      if (groupsResult.error && !isAbortError(groupsResult.error)) {
+        console.error('[ReceiptService] [fetchReceiptHistoryPage] groups', groupsResult.error);
+      }
 
       const names = groupsResult.error ? new Map<string, string>() : groupNameMap(groupsResult.data);
       const parsed: StoredReceipt[] = [];
@@ -275,9 +302,39 @@ export class ReceiptService {
         nextCursor: page.nextCursor,
       };
     } catch (caught) {
+      if (isAbortError(caught)) throw abortError(caught);
       throw logged('fetchReceiptHistoryPage', 'FETCH_FAILED', 'Could not load receipt history.', caught);
     }
   }
+}
+
+/**
+ * True when a History query was cancelled by a newer search, chip, or refresh.
+ * Callers should ignore this. It is not a failed load.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+
+  const record = err as {
+    name?: unknown;
+    message?: unknown;
+    hint?: unknown;
+    code?: unknown;
+    cause?: unknown;
+    originalError?: unknown;
+  };
+  const name = typeof record.name === 'string' ? record.name : '';
+  const message = typeof record.message === 'string' ? record.message : '';
+  const hint = typeof record.hint === 'string' ? record.hint : '';
+  const code = typeof record.code === 'string' ? record.code : '';
+
+  if (name === 'AbortError' || code === 'ABORT_ERR') return true;
+  if (/^AbortError\b/i.test(message)) return true;
+  if (/user aborted a request/i.test(message)) return true;
+  if (/request was aborted/i.test(hint) || /aborted locally/i.test(hint)) return true;
+  if (record.cause && record.cause !== err && isAbortError(record.cause)) return true;
+  if (record.originalError && record.originalError !== err && isAbortError(record.originalError)) return true;
+  return false;
 }
 
 type StoredReceipt = Receipt & {
@@ -328,6 +385,29 @@ function requireKeysetFilter(cursor: ReceiptHistoryCursor): string {
   } catch (error) {
     throw new ReceiptServiceError('VALIDATION_ERROR', 'History cursor is invalid.', error instanceof Error ? error : null);
   }
+}
+
+function applyHistoryGroupFilter<Query extends { eq: (column: string, value: string) => Query; is: (column: string, value: null) => Query }>(
+  query: Query,
+  groupFilter: ReceiptHistoryGroupFilter | undefined,
+): Query {
+  if (groupFilter === undefined || groupFilter === 'all') return query;
+  if (groupFilter === 'ungrouped') return query.is('group_id', null);
+  if (!isValidGroupUuid(groupFilter)) {
+    throw new ReceiptServiceError('VALIDATION_ERROR', 'groupFilter must be "all", "ungrouped", or a group id.');
+  }
+  return query.eq('group_id', groupFilter);
+}
+
+function abortError(source: unknown): Error {
+  const message = source instanceof Error
+    ? source.message
+    : source && typeof source === 'object' && 'message' in source && typeof source.message === 'string'
+      ? source.message
+      : 'The request was aborted.';
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
 }
 
 function toReceiptHistoryItem(receipt: StoredReceipt, names: Map<string, string>): ReceiptHistoryItem {
