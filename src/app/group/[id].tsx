@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddMemberModal } from '@/components/AddMemberModal';
@@ -11,7 +11,7 @@ import { MoneyText } from '@/components/MoneyText';
 import { StatusPill } from '@/components/StatusPill';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
-import { compareGroupMembers, groupService, type GroupMemberProfile } from '@/services/GroupService';
+import { compareGroupMembers, GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { createIdempotencyKey, SettlementServiceError, settlementService } from '@/services/SettlementService';
 import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
@@ -98,6 +98,8 @@ export default function GroupLedgerScreen() {
   const [rosterOpen, setRosterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [groupAction, setGroupAction] = useState<'delete' | 'leave' | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
@@ -211,6 +213,8 @@ export default function GroupLedgerScreen() {
   const transfers = useMemo(() => simplifyDebts(balances), [balances]);
   const viewerBalance = viewerId ? (balances[viewerId] ?? 0) : 0;
   const viewerIsOwner = members.some((member) => member.userId === viewerId && member.role === 'owner') || (viewerId !== null && viewerId === createdBy);
+  const isCreator = viewerId !== null && (createdBy ? viewerId === createdBy : members.some((member) => member.userId === viewerId && member.role === 'owner'));
+  const isMember = viewerId !== null && members.some((member) => member.userId === viewerId);
   const visibleMembers = members.slice(0, VISIBLE_AVATARS);
   const overflow = Math.max(members.length - VISIBLE_AVATARS, 0);
 
@@ -344,6 +348,91 @@ export default function GroupLedgerScreen() {
     }
   }
 
+  function openSettings() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSettingsOpen(true);
+  }
+
+  function closeSettings() {
+    if (groupAction) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSettingsOpen(false);
+  }
+
+  function confirmDeleteGroup() {
+    if (!groupId || groupAction) return;
+    const message = transfers.length > 0
+      ? 'This group still has unsettled balances. Deleting it will permanently remove its ledger and settlement history.'
+      : `This will permanently delete ${groupName} and its settlement history. This cannot be undone.`;
+    Alert.alert('Delete group', message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete Group',
+        style: 'destructive',
+        onPress: () => {
+          void runDeleteGroup();
+        },
+      },
+    ]);
+  }
+
+  function confirmLeaveGroup() {
+    if (!groupId || groupAction) return;
+    const message = transfers.length > 0
+      ? 'This group still has unsettled balances. Leaving removes you from the group and its ledger.'
+      : `Leave ${groupName}? You will lose access to this group. This cannot be undone.`;
+    Alert.alert('Leave group', message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Leave Group',
+        style: 'destructive',
+        onPress: () => {
+          void runLeaveGroup();
+        },
+      },
+    ]);
+  }
+
+  async function finishGroupAction() {
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setSettingsOpen(false);
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/groups');
+    }
+  }
+
+  async function runDeleteGroup() {
+    if (!groupId || groupAction) return;
+    setGroupAction('delete');
+    try {
+      await groupService.deleteGroup(groupId);
+      await finishGroupAction();
+    } catch (error) {
+      console.error('Failed to delete group:', error);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const message = error instanceof GroupServiceError ? error.message : 'Try again in a moment.';
+      Alert.alert('Could not delete group', message);
+      setGroupAction(null);
+    }
+  }
+
+  async function runLeaveGroup() {
+    if (!groupId || groupAction) return;
+    setGroupAction('leave');
+    try {
+      await groupService.leaveGroup(groupId);
+      await finishGroupAction();
+    } catch (error) {
+      console.error('Failed to leave group:', error);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const message = error instanceof GroupServiceError ? error.message : 'Try again in a moment.';
+      Alert.alert('Could not leave group', message);
+      setGroupAction(null);
+    }
+  }
+
   function toggleRoster() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setRosterOpen((open) => !open);
@@ -397,8 +486,7 @@ export default function GroupLedgerScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Group settings"
-              accessibilityState={{ expanded: rosterOpen }}
-              onPress={toggleRoster}
+              onPress={openSettings}
               style={({ pressed }) => [styles.gear, pressed && styles.gearPressed]}
             >
               <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
@@ -709,6 +797,72 @@ export default function GroupLedgerScreen() {
           onClose={() => setAddOpen(false)}
         />
       ) : null}
+
+      <Modal visible={settingsOpen} animationType="fade" transparent statusBarTranslucent onRequestClose={closeSettings}>
+        <View style={styles.settingsOverlay}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+            disabled={groupAction !== null}
+            style={StyleSheet.absoluteFill}
+            onPress={closeSettings}
+          />
+          <View style={styles.settingsCard}>
+            <View style={styles.settingsHeader}>
+              <Text style={styles.settingsTitle}>Group Settings</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                disabled={groupAction !== null}
+                hitSlop={10}
+                onPress={closeSettings}
+                style={({ pressed }) => [styles.settingsClose, pressed && styles.settingsClosePressed]}
+              >
+                <Ionicons name="close" size={15} color={theme.colors.textSecondary} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.settingsSection}>Danger zone</Text>
+            {isCreator ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Delete Group"
+                disabled={groupAction !== null}
+                onPress={confirmDeleteGroup}
+                style={({ pressed }) => [styles.dangerButton, pressed && groupAction === null && styles.dangerButtonPressed]}
+              >
+                {groupAction === 'delete' ? (
+                  <ActivityIndicator color={theme.colors.danger} />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={18} color={theme.colors.danger} />
+                    <Text style={styles.dangerText}>Delete Group</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : isMember ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Leave Group"
+                disabled={groupAction !== null}
+                onPress={confirmLeaveGroup}
+                style={({ pressed }) => [styles.dangerButton, pressed && groupAction === null && styles.dangerButtonPressed]}
+              >
+                {groupAction === 'leave' ? (
+                  <ActivityIndicator color={theme.colors.danger} />
+                ) : (
+                  <>
+                    <Ionicons name="log-out-outline" size={18} color={theme.colors.danger} />
+                    <Text style={styles.dangerText}>Leave Group</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : (
+              <Text style={styles.settingsEmpty}>You are not a member of this group.</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -923,4 +1077,60 @@ const styles = StyleSheet.create({
   },
   undoButton: { minWidth: 44, minHeight: 32, alignItems: 'flex-end', justifyContent: 'center' },
   undoText: { color: theme.colors.danger, fontSize: 13, fontWeight: '600' },
+  settingsOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  settingsCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    padding: 20,
+  },
+  settingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  settingsTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FAFAFA',
+  },
+  settingsClose: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1C1C21',
+  },
+  settingsClosePressed: { backgroundColor: theme.colors.surfacePressed },
+  settingsSection: {
+    ...theme.typography.sectionLabel,
+    color: theme.colors.textMuted,
+    marginTop: 22,
+    marginBottom: 10,
+  },
+  dangerButton: {
+    height: 48,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(248, 113, 113, 0.12)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(248, 113, 113, 0.35)',
+  },
+  dangerButtonPressed: { opacity: 0.75 },
+  dangerText: {
+    color: '#F87171',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  settingsEmpty: { ...theme.typography.caption, color: theme.colors.textSecondary },
 });

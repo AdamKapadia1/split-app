@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
+import { subscribeGroupList } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
 
 type Group = {
@@ -60,6 +61,10 @@ export default function GroupsScreen() {
       void fetchGroups();
     }, [fetchGroups])
   );
+
+  useEffect(() => subscribeGroupList(() => {
+    void fetchGroups('refresh');
+  }), [fetchGroups]);
 
   const handleCreateGroup = async () => {
     const trimmedName = newGroupName.trim();

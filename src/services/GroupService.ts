@@ -112,6 +112,28 @@ class GroupService {
     }
   }
 
+  async deleteGroup(groupId: string): Promise<void> {
+    try {
+      const client = requireClient();
+      const deleted = await client.rpc('delete_group', { p_group_id: groupId });
+      if (deleted.error) throw deleted.error;
+    } catch (error) {
+      throw asGroupError(error);
+    }
+    notifyGroupList();
+  }
+
+  async leaveGroup(groupId: string): Promise<void> {
+    try {
+      const client = requireClient();
+      const left = await client.rpc('leave_group', { p_group_id: groupId });
+      if (left.error) throw left.error;
+    } catch (error) {
+      throw asGroupError(error);
+    }
+    notifyGroupList();
+  }
+
   async removeMember(groupId: string, userId: string): Promise<void> {
     try {
       const client = requireClient();
@@ -127,6 +149,28 @@ class GroupService {
 }
 
 export const groupService = new GroupService();
+
+type GroupListListener = () => void;
+
+const groupListListeners = new Set<GroupListListener>();
+
+/** Groups tab subscribes so a delete or leave removes the row immediately. */
+export function subscribeGroupList(listener: GroupListListener) {
+  groupListListeners.add(listener);
+  return () => {
+    groupListListeners.delete(listener);
+  };
+}
+
+function notifyGroupList() {
+  groupListListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (error) {
+      console.error('[GroupService] group list listener failed', error);
+    }
+  });
+}
 
 function requireClient() {
   if (!supabase) {
@@ -145,7 +189,12 @@ function asGroupError(error: unknown): GroupServiceError {
   if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
   if (code === '22023') return new GroupServiceError('INVALID_PHONE', 'Enter a valid phone number.');
-  if (code === '42501') return new GroupServiceError('PERMISSION_DENIED', 'You do not have permission to change this group.');
+  if (code === '42501' || /forbidden|not authenticated/i.test(message)) {
+    return new GroupServiceError('PERMISSION_DENIED', message || 'You do not have permission to change this group.');
+  }
+  if (/group not found|not a member/i.test(message)) {
+    return new GroupServiceError('NOT_FOUND', message);
+  }
 
   const detail = [message, code].filter((part) => part.length > 0).join(' ');
   return new GroupServiceError('NETWORK_ERROR', detail || 'Could not update group members.');
