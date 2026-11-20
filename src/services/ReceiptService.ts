@@ -1,12 +1,14 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
-import type { Item, Receipt, ReceiptSplit, ReceiptStatus, Split } from '@/types/database.types';
+import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs, Split } from '@/types/database.types';
 
 const DEFAULT_CURRENCY = 'GBP';
 const MONEY_LIMIT = 99_999_999.99;
 
-type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'SAVE_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
+type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'SAVE_FAILED' | 'SETTLE_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
+
+const RECEIPT_COLUMNS = '*, settled_at, settled_by';
 
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status' | 'merchant_name'> & {
@@ -49,7 +51,7 @@ export class ReceiptService {
           total_amount: 0,
           status: 'scanning' satisfies ReceiptStatus,
         })
-        .select()
+        .select(RECEIPT_COLUMNS)
         .single();
 
       if (error) throw new ReceiptServiceError('INSERT_FAILED', error.message, error);
@@ -89,7 +91,7 @@ export class ReceiptService {
       const id = requireId(receiptId, 'receiptId');
       const payload = normalizeTotals(updates);
       const client = requireClient();
-      const { data, error } = await client.from('receipts').update(payload).eq('id', id).select().single();
+      const { data, error } = await client.from('receipts').update(payload).eq('id', id).select(RECEIPT_COLUMNS).single();
 
       if (error) throw new ReceiptServiceError('UPDATE_FAILED', error.message, error);
       return parseReceipt(data, 'UPDATE_FAILED');
@@ -103,7 +105,7 @@ export class ReceiptService {
       const id = requireId(receiptId, 'receiptId');
       const client = requireClient();
 
-      const receiptResult = await client.from('receipts').select('*').eq('id', id).maybeSingle();
+      const receiptResult = await client.from('receipts').select(RECEIPT_COLUMNS).eq('id', id).maybeSingle();
       if (receiptResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptResult.error.message, receiptResult.error);
       if (!receiptResult.data) return null;
 
@@ -182,6 +184,35 @@ export class ReceiptService {
       if (error) throw new ReceiptServiceError('SAVE_FAILED', error.message, error);
     } catch (caught) {
       throw logged('saveReceiptSplits', 'SAVE_FAILED', 'Could not save the split.', caught);
+    }
+  }
+
+  async setReceiptSettled(receiptId: string, settled: boolean): Promise<Receipt> {
+    const id = requireId(receiptId, 'receiptId');
+    if (typeof settled !== 'boolean') {
+      throw new ReceiptServiceError('VALIDATION_ERROR', 'settled must be a boolean.');
+    }
+
+    try {
+      const client = requireClient();
+      const args: SetReceiptSettledArgs = { p_receipt_id: id, p_settled: settled };
+      const { data, error } = await client.rpc('set_receipt_settled', args);
+      if (error) {
+        console.error('[ReceiptService] [setReceiptSettled]', error);
+        throw new ReceiptServiceError('SETTLE_FAILED', error.message, error);
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      if (!row) {
+        const empty = new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.');
+        console.error('[ReceiptService] [setReceiptSettled]', empty);
+        throw empty;
+      }
+      return parseReceipt(row, 'SETTLE_FAILED');
+    } catch (caught) {
+      if (caught instanceof ReceiptServiceError) throw caught;
+      console.error('[ReceiptService] [setReceiptSettled]', caught);
+      throw new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.', caught instanceof Error ? caught : null);
     }
   }
 }
@@ -291,6 +322,8 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
     total_amount: readStoredMoney(row, 'total_amount', code),
     image_url: readNullableString(row, 'image_url', code),
     status: readStatus(row, code),
+    settled_at: readNullableString(row, 'settled_at', code),
+    settled_by: readNullableString(row, 'settled_by', code),
     created_at: readString(row, 'created_at', code),
   } as Receipt;
 }

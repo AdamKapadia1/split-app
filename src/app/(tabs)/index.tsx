@@ -58,7 +58,7 @@ export default function HomeScreen() {
         setIsLoading(true);
       }
 
-      const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('receipts').select('*, settled_at, settled_by').order('created_at', { ascending: false });
       if (error) throw error;
       setReceipts((data ?? []) as HistoryReceipt[]);
     } catch (error) {

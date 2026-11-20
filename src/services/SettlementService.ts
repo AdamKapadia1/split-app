@@ -87,7 +87,7 @@ class SettlementService {
     try {
       const client = requireClient();
       const [receiptsResult, splitsResult, settlementsResult] = await Promise.all([
-        client.from('receipts').select('*').eq('group_id', groupId).order('created_at', { ascending: false }),
+        client.from('receipts').select('*, settled_at, settled_by').eq('group_id', groupId).order('created_at', { ascending: false }),
         client
           .from('receipt_splits')
           .select('id, receipt_id, user_id, amount_minor, item_ids, updated_at, receipts!inner(group_id)')

@@ -1,5 +1,7 @@
 import {
   calculateNetBalances,
+  latestZeroBalanceAt,
+  partitionGroupReceipts,
   simplifyDebts,
   type SettlementRecordInput,
   type SettlementSplitInput,
@@ -115,6 +117,106 @@ it('stays zero-sum across receipts and odd penny shares', () => {
     transfers.reduce((total, transfer) => total + transfer.amountMinor, 0),
     64,
   );
+});
+
+it('archives a manually settled receipt even when the group has no payments', () => {
+  const partitioned = partitionGroupReceipts(
+    [{ id: 'receipt-1', created_at: '2026-11-01T12:00:00.000Z', settled_at: '2026-11-20T08:00:00.000Z' }],
+    new Set<string>(),
+    null,
+  );
+
+  assertEqual(partitioned.activeReceipts, []);
+  assertEqual(partitioned.settledReceipts.map((receipt) => receipt.id), ['receipt-1']);
+  assertEqual(partitioned.settlementSource, { 'receipt-1': 'manual' });
+});
+
+it('returns a reopened receipt to active unless a zero-balance watermark still covers it', () => {
+  const reopened = {
+    id: 'receipt-1',
+    created_at: '2026-11-01T12:00:00.000Z',
+    settled_at: null,
+  };
+  const splitIds = new Set(['receipt-1']);
+
+  const active = partitionGroupReceipts([reopened], splitIds, null);
+  assertEqual(active.activeReceipts.map((receipt) => receipt.id), ['receipt-1']);
+  assertEqual(active.settledReceipts, []);
+
+  const covered = partitionGroupReceipts([reopened], splitIds, '2026-11-02T00:00:00.000Z');
+  assertEqual(covered.activeReceipts, []);
+  assertEqual(covered.settledReceipts.map((receipt) => receipt.id), ['receipt-1']);
+  assertEqual(covered.settlementSource['receipt-1'], 'automatic');
+
+  const afterWatermark = partitionGroupReceipts(
+    [{ ...reopened, created_at: '2026-11-03T00:00:00.000Z' }],
+    splitIds,
+    '2026-11-02T00:00:00.000Z',
+  );
+  assertEqual(afterWatermark.activeReceipts.map((receipt) => receipt.id), ['receipt-1']);
+  assertEqual(afterWatermark.settledReceipts, []);
+
+  const unsplit = partitionGroupReceipts(
+    [{ ...reopened, id: 'unsplit' }],
+    new Set<string>(),
+    '2026-11-02T00:00:00.000Z',
+  );
+  assertEqual(unsplit.activeReceipts.map((receipt) => receipt.id), ['unsplit']);
+});
+
+it('keeps net balances and simplified debts unchanged when a receipt is manually archived', () => {
+  const open = [{ id: 'receipt-1', paid_by: 'sam', created_at: '2026-11-01T12:00:00.000Z', settled_at: null }];
+  const archived = [{ ...open[0], settled_at: '2026-11-20T08:00:00.000Z' }];
+  const shares: SettlementSplitInput[] = [{ receipt_id: 'receipt-1', user_id: 'alex', amount_minor: 2450 }];
+  const payments: SettlementRecordInput[] = [];
+  const people = ['alex', 'sam'];
+
+  const before = calculateNetBalances(open, shares, payments, people);
+  const after = calculateNetBalances(archived, shares, payments, people);
+
+  assertEqual(before, { alex: -2450, sam: 2450 });
+  assertEqual(after, before);
+  assertEqual(simplifyDebts(after), simplifyDebts(before));
+  assertEqual(simplifyDebts(after), [{ fromUserId: 'alex', toUserId: 'sam', amountMinor: 2450 }]);
+
+  const sum = Object.values(after).reduce((total, amount) => total + amount, 0);
+  assertEqual(sum, 0);
+
+  const partitioned = partitionGroupReceipts(archived, new Set(['receipt-1']), null);
+  assertEqual(partitioned.settledReceipts.map((receipt) => receipt.id), ['receipt-1']);
+  assertEqual(partitioned.settlementSource['receipt-1'], 'manual');
+});
+
+it('sets the automatic watermark on the latest payment that returns the group to zero', () => {
+  const watermark = latestZeroBalanceAt(
+    [
+      { id: 'receipt-1', paid_by: 'sam', created_at: '2026-11-01T10:00:00.000Z' },
+      { id: 'receipt-2', paid_by: 'sam', created_at: '2026-11-03T10:00:00.000Z' },
+    ],
+    [
+      { receipt_id: 'receipt-1', user_id: 'alex', amount_minor: 1000 },
+      { receipt_id: 'receipt-2', user_id: 'alex', amount_minor: 500 },
+    ],
+    [
+      { ...settlement('alex', 'sam', 1000), created_at: '2026-11-02T10:00:00.000Z' },
+      { ...settlement('alex', 'sam', 500), created_at: '2026-11-04T10:00:00.000Z' },
+    ],
+  );
+  assertEqual(watermark, '2026-11-04T10:00:00.000Z');
+
+  const open = latestZeroBalanceAt(
+    [{ id: 'receipt-1', paid_by: 'sam', created_at: '2026-11-01T10:00:00.000Z' }],
+    [{ receipt_id: 'receipt-1', user_id: 'alex', amount_minor: 1000 }],
+    [],
+  );
+  assertEqual(open, null);
+
+  const voided = latestZeroBalanceAt(
+    [{ id: 'receipt-1', paid_by: 'sam', created_at: '2026-11-01T10:00:00.000Z' }],
+    [{ receipt_id: 'receipt-1', user_id: 'alex', amount_minor: 1000 }],
+    [{ ...settlement('alex', 'sam', 1000), voided_at: '2026-11-05T00:00:00.000Z', created_at: '2026-11-02T10:00:00.000Z' }],
+  );
+  assertEqual(voided, null);
 });
 
 function settlement(fromUserId: string, toUserId: string, amountMinor: number): SettlementRecordInput {

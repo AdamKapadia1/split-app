@@ -17,7 +17,7 @@ import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
-import { calculateNetBalances, simplifyDebts, type SimplifiedTransfer } from '@/utils/settlements';
+import { calculateNetBalances, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type SimplifiedTransfer } from '@/utils/settlements';
 
 type GroupReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -103,6 +103,7 @@ export default function GroupLedgerScreen() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
+  const loadedFor = useRef<string | null>(null);
 
   const goBack = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -176,13 +177,41 @@ export default function GroupLedgerScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadLedger();
-    }, [loadLedger]),
+      const returning = loadedFor.current === groupId && groupId !== null;
+      if (groupId) loadedFor.current = groupId;
+      void loadLedger(returning ? 'refresh' : 'load');
+    }, [groupId, loadLedger]),
   );
 
   const spent = receipts.reduce((sum, receipt) => sum + Number(receipt.total_amount || 0), 0);
   const totalSpendMinor = toMinorUnits(spent);
   const splitReceiptIds = useMemo(() => new Set(splits.map((split) => split.receipt_id)), [splits]);
+  const lastSettledAt = useMemo(
+    () => latestZeroBalanceAt(
+      receipts.map((receipt) => ({
+        id: receipt.id,
+        paid_by: receipt.paid_by ?? null,
+        created_at: receipt.created_at,
+      })),
+      splits.map((split) => ({
+        receipt_id: split.receipt_id,
+        user_id: split.user_id,
+        amount_minor: split.amount_minor,
+      })),
+      settlements.map((settlement) => ({
+        from_user_id: settlement.from_user_id,
+        to_user_id: settlement.to_user_id,
+        amount_minor: settlement.amount_minor,
+        voided_at: settlement.voided_at,
+        created_at: settlement.created_at,
+      })),
+    ),
+    [receipts, splits, settlements],
+  );
+  const { activeReceipts, settledReceipts, settlementSource } = useMemo(
+    () => partitionGroupReceipts(receipts, splitReceiptIds, lastSettledAt),
+    [lastSettledAt, receipts, splitReceiptIds],
+  );
   const memberIds = useMemo(() => {
     const ids = members.map((member) => member.userId);
     if (viewerId && !ids.includes(viewerId)) ids.push(viewerId);
@@ -462,6 +491,38 @@ export default function GroupLedgerScreen() {
     });
   }
 
+  function renderReceiptRow(item: GroupReceipt, index: number, source?: 'manual' | 'automatic') {
+    const name = receiptName(item);
+    const archiveLabel = source === 'manual' ? 'Marked settled' : source === 'automatic' ? 'Cleared by payment' : null;
+    return (
+      <View key={item.id}>
+        {index > 0 ? <View style={styles.receiptDivider} /> : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={name}
+          onPress={() => {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
+          }}
+          style={({ pressed }) => [styles.receiptRow, pressed && styles.receiptPressed]}
+        >
+          <View style={styles.monogram}>
+            <Text style={styles.monogramText}>{monogram(name)}</Text>
+          </View>
+          <View style={styles.receiptCopy}>
+            <Text style={styles.receiptName} numberOfLines={1}>{name}</Text>
+            <Text style={styles.receiptMeta} numberOfLines={1}>
+              {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
+              {archiveLabel ? ` · ${archiveLabel}` : ''}
+            </Text>
+          </View>
+          <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />
+          <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </Pressable>
+      </View>
+    );
+  }
+
   const positionLabel = viewerBalance > 0
     ? `You are owed ${formatPence(viewerBalance)}`
     : viewerBalance < 0
@@ -686,39 +747,15 @@ export default function GroupLedgerScreen() {
 
           <View style={styles.section}>
             <Text style={styles.sectionHeading}>Receipts</Text>
-            {receipts.length === 0 ? (
-              <Text style={styles.emptyLine}>Scan a receipt into this group and it will show up here.</Text>
+            {activeReceipts.length === 0 ? (
+              <Text style={styles.emptyLine}>
+                {settledReceipts.length > 0
+                  ? 'Settled receipts are in Settlement History.'
+                  : 'Scan a receipt into this group and it will show up here.'}
+              </Text>
             ) : (
               <View style={styles.card}>
-                {receipts.map((item, index) => {
-                  const name = receiptName(item);
-                  return (
-                    <View key={item.id}>
-                      {index > 0 ? <View style={styles.receiptDivider} /> : null}
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel={name}
-                        onPress={() => {
-                          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
-                        }}
-                        style={({ pressed }) => [styles.receiptRow, pressed && styles.receiptPressed]}
-                      >
-                        <View style={styles.monogram}>
-                          <Text style={styles.monogramText}>{monogram(name)}</Text>
-                        </View>
-                        <View style={styles.receiptCopy}>
-                          <Text style={styles.receiptName} numberOfLines={1}>{name}</Text>
-                          <Text style={styles.receiptMeta} numberOfLines={1}>
-                            {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
-                          </Text>
-                        </View>
-                        <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />
-                        <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-                      </Pressable>
-                    </View>
-                  );
-                })}
+                {activeReceipts.map((item, index) => renderReceiptRow(item, index))}
               </View>
             )}
           </View>
@@ -736,51 +773,63 @@ export default function GroupLedgerScreen() {
             >
               <View style={styles.historyTitle}>
                 <Text style={styles.sectionLabel}>Settlement history</Text>
-                {settlements.length > 0 ? (
+                {settlements.length + settledReceipts.length > 0 ? (
                   <View style={styles.countBadge}>
-                    <Text style={styles.countText}>{settlements.length}</Text>
+                    <Text style={styles.countText}>{settlements.length + settledReceipts.length}</Text>
                   </View>
                 ) : null}
               </View>
               <Ionicons name={historyOpen ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMuted} />
             </Pressable>
             {historyOpen ? (
-              settlements.length === 0 ? (
+              settlements.length === 0 && settledReceipts.length === 0 ? (
                 <Text style={styles.emptyLine}>No payments recorded yet.</Text>
               ) : (
-                <View style={styles.card}>
-                  {settlements.map((settlement, index) => {
-                    const voided = settlement.voided_at !== null;
-                    const when = settlementWhen(settlement.created_at);
-                    return (
-                      <View key={settlement.id}>
-                        {index > 0 ? <View style={styles.historyDivider} /> : null}
-                        <View style={[styles.historyRow, voided && styles.historyVoided]}>
-                          <Text style={[styles.historyCopy, voided && styles.historyStrike]} numberOfLines={2}>
-                            {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
-                            {formatPence(settlement.amount_minor)}
-                            {when ? ` · ${when}` : ''}
-                          </Text>
-                          {voided ? <Text style={styles.voidedPill}>Voided</Text> : null}
-                          {!voided && canVoid(settlement) ? (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel="Undo settlement"
-                              disabled={voidingId !== null}
-                              onPress={() => askVoid(settlement)}
-                              style={styles.undoButton}
-                            >
-                              {voidingId === settlement.id ? (
-                                <ActivityIndicator size="small" color={theme.colors.textMuted} />
-                              ) : (
-                                <Text style={styles.undoText}>Undo</Text>
-                              )}
-                            </Pressable>
-                          ) : null}
-                        </View>
+                <View>
+                  {settledReceipts.length > 0 ? (
+                    <View>
+                      <Text style={styles.historySubheading}>Settled receipts</Text>
+                      <View style={styles.card}>
+                        {settledReceipts.map((item, index) => renderReceiptRow(item, index, settlementSource[item.id]))}
                       </View>
-                    );
-                  })}
+                    </View>
+                  ) : null}
+                  {settlements.length > 0 ? (
+                    <View style={[styles.card, settledReceipts.length > 0 && styles.historyPayments]}>
+                      {settlements.map((settlement, index) => {
+                        const voided = settlement.voided_at !== null;
+                        const when = settlementWhen(settlement.created_at);
+                        return (
+                          <View key={settlement.id}>
+                            {index > 0 ? <View style={styles.historyDivider} /> : null}
+                            <View style={[styles.historyRow, voided && styles.historyVoided]}>
+                              <Text style={[styles.historyCopy, voided && styles.historyStrike]} numberOfLines={2}>
+                                {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
+                                {formatPence(settlement.amount_minor)}
+                                {when ? ` · ${when}` : ''}
+                              </Text>
+                              {voided ? <Text style={styles.voidedPill}>Voided</Text> : null}
+                              {!voided && canVoid(settlement) ? (
+                                <Pressable
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Undo settlement"
+                                  disabled={voidingId !== null}
+                                  onPress={() => askVoid(settlement)}
+                                  style={styles.undoButton}
+                                >
+                                  {voidingId === settlement.id ? (
+                                    <ActivityIndicator size="small" color={theme.colors.textMuted} />
+                                  ) : (
+                                    <Text style={styles.undoText}>Undo</Text>
+                                  )}
+                                </Pressable>
+                              ) : null}
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ) : null}
                 </View>
               )
             ) : null}
@@ -1043,6 +1092,13 @@ const styles = StyleSheet.create({
   receiptName: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   receiptMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
   historySection: { marginHorizontal: 16, marginTop: 24, marginBottom: 40 },
+  historySubheading: {
+    ...theme.typography.sectionLabel,
+    color: theme.colors.textMuted,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  historyPayments: { marginTop: 16 },
   historyHeader: {
     flexDirection: 'row',
     alignItems: 'center',

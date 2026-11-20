@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
@@ -97,6 +97,7 @@ export default function ReceiptLedgerScreen() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [togglingSettled, setTogglingSettled] = useState(false);
 
   useEffect(() => {
     if (!receiptId) return;
@@ -291,6 +292,50 @@ export default function ReceiptLedgerScreen() {
   const blocked = isGroup && unassigned > 0;
   const saveDisabled = saving || blocked || !paidById || members.length === 0;
 
+  function askMarkSettled() {
+    if (togglingSettled) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const sharedGroup = Boolean(receipt.group_id) && members.length > 1;
+    Alert.alert(
+      'Mark receipt as settled?',
+      sharedGroup
+        ? 'This archives the receipt into Settlement History to keep your active list clean. It will not change group cash balances—record a payment in Balances to clear debts.'
+        : 'This moves the receipt out of Active Receipts and into Settlement History. You can reopen it anytime.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Mark Settled', onPress: () => { void commitSettled(true); } },
+      ],
+    );
+  }
+
+  function askReopen() {
+    if (togglingSettled) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert('Move this receipt back to Active Receipts?', undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reopen', onPress: () => { void commitSettled(false); } },
+    ]);
+  }
+
+  async function commitSettled(settled: boolean) {
+    if (togglingSettled) return;
+    setTogglingSettled(true);
+    try {
+      const updated = await receiptService.setReceiptSettled(receipt.id, settled);
+      setReceiptData((current) => (
+        current ? { ...current, receipt: { ...current.receipt, settled_at: updated.settled_at, settled_by: updated.settled_by } } : current
+      ));
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (settled) router.back();
+    } catch (error) {
+      console.error('Failed to update receipt archive:', error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Could not update receipt', error instanceof Error ? error.message : 'Try again.');
+    } finally {
+      setTogglingSettled(false);
+    }
+  }
+
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ headerShown: false, title: merchantName }} />
@@ -320,6 +365,47 @@ export default function ReceiptLedgerScreen() {
           </View>
         ) : null}
       </SafeAreaView>
+
+      {receipt.settled_at ? (
+        <View style={styles.settledBanner}>
+          <View style={styles.settledBannerCopy}>
+            <Ionicons name="checkmark-circle-outline" size={16} color={theme.colors.positive} />
+            <Text style={styles.settledBannerText} numberOfLines={1}>Marked as settled</Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Reopen"
+            disabled={togglingSettled}
+            onPress={askReopen}
+            style={({ pressed }) => [styles.reopenPill, pressed && styles.settlePillPressed]}
+          >
+            {togglingSettled ? (
+              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+            ) : (
+              <Text style={styles.reopenText}>Reopen</Text>
+            )}
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.settleActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Mark Settled"
+            disabled={togglingSettled}
+            onPress={askMarkSettled}
+            style={({ pressed }) => [styles.settlePill, pressed && styles.settlePillPressed]}
+          >
+            {togglingSettled ? (
+              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle-outline" size={14} color={theme.colors.positive} />
+                <Text style={styles.settlePillText}>Mark Settled</Text>
+              </>
+            )}
+          </Pressable>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {receipt.website ? (
@@ -571,6 +657,43 @@ const styles = StyleSheet.create({
   headerDate: { marginTop: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
   progressTrack: { height: 3, width: '100%', backgroundColor: theme.colors.surfaceElevated },
   progressFill: { height: 3 },
+  settleActions: { alignItems: 'flex-end', marginHorizontal: 16, marginTop: 12 },
+  settlePill: {
+    height: 32,
+    paddingHorizontal: 12,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  settlePillPressed: { backgroundColor: theme.colors.surfacePressed },
+  settlePillText: { fontSize: 12, fontWeight: '600', color: theme.colors.textPrimary },
+  settledBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.positiveSubtle,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(52, 211, 153, 0.30)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  settledBannerCopy: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  settledBannerText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: theme.colors.positive },
+  reopenPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  reopenText: { color: theme.colors.textPrimary, fontSize: 12, fontWeight: '600' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
   missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },

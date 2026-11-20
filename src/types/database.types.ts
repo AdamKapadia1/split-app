@@ -101,6 +101,13 @@ export interface Receipt {
   image_url: string | null;
   /** Where this receipt is in the scanning-to-settlement lifecycle. */
   status: ReceiptStatus;
+  /**
+   * When a member archived this receipt into Settlement History.
+   * Null while it is active. This is a visual flag and does not change cash balances.
+   */
+  settled_at: string | null;
+  /** Profile id of the member who archived this receipt. Null while it is active. */
+  settled_by: string | null;
   /** Immutable timestamp recorded when the row was inserted. */
   readonly created_at: string;
 }
@@ -185,4 +192,10 @@ export interface RecordSettlementArgs {
 /** Arguments for the `void_settlement` RPC. */
 export interface VoidSettlementArgs {
   p_settlement_id: string;
+}
+
+/** Arguments for the `set_receipt_settled` RPC. Archives or reopens a receipt without touching balances. */
+export interface SetReceiptSettledArgs {
+  p_receipt_id: string;
+  p_settled: boolean;
 }

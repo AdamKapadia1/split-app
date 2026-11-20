@@ -7,6 +7,32 @@
 export type SettlementReceiptInput = {
   id: string;
   paid_by: string | null;
+  created_at?: string;
+  settled_at?: string | null;
+};
+
+export type PartitionReceiptInput = {
+  id: string;
+  created_at: string;
+  settled_at?: string | null;
+};
+
+export type SettlementSource = 'manual' | 'automatic';
+
+export type PartitionedReceipts<T> = {
+  activeReceipts: T[];
+  settledReceipts: T[];
+  settlementSource: Record<string, SettlementSource>;
+};
+
+export type WatermarkReceiptInput = {
+  id: string;
+  paid_by: string | null;
+  created_at: string;
+};
+
+export type WatermarkSettlementInput = SettlementRecordInput & {
+  created_at: string;
 };
 
 export type SettlementSplitInput = {
@@ -104,6 +130,120 @@ export function simplifyDebts(netBalances: Record<string, number>): SimplifiedTr
   }
 
   return transfers;
+}
+
+/**
+ * Splits receipts into the active list and settlement history.
+ * Manual archive (`settled_at`) wins. Otherwise a split receipt is archived
+ * when it was created at or before the last time a payment zeroed the group.
+ * This does not change balances: callers must still pass every receipt into
+ * `calculateNetBalances`.
+ */
+export function partitionGroupReceipts<T extends PartitionReceiptInput>(
+  receipts: readonly T[],
+  splitReceiptIds: ReadonlySet<string>,
+  lastSettledAt: string | null,
+): PartitionedReceipts<T> {
+  const activeReceipts: T[] = [];
+  const settledReceipts: T[] = [];
+  const settlementSource: Record<string, SettlementSource> = {};
+  const watermark = lastSettledAt === null ? null : new Date(lastSettledAt).getTime();
+
+  for (const receipt of receipts) {
+    if (receipt.settled_at) {
+      settledReceipts.push(receipt);
+      settlementSource[receipt.id] = 'manual';
+      continue;
+    }
+
+    const createdAt = new Date(receipt.created_at).getTime();
+    const automaticallySettled =
+      watermark !== null
+      && !Number.isNaN(watermark)
+      && splitReceiptIds.has(receipt.id)
+      && createdAt <= watermark;
+
+    if (automaticallySettled) {
+      settledReceipts.push(receipt);
+      settlementSource[receipt.id] = 'automatic';
+      continue;
+    }
+
+    activeReceipts.push(receipt);
+  }
+
+  return { activeReceipts, settledReceipts, settlementSource };
+}
+
+/**
+ * Timestamp of the latest non-voided payment after which every balance was zero.
+ * Later receipts can make the group non-zero again without moving this watermark
+ * backwards. Returns null when no payment has cleared the group.
+ */
+export function latestZeroBalanceAt(
+  receipts: readonly WatermarkReceiptInput[],
+  splits: readonly SettlementSplitInput[],
+  settlements: readonly WatermarkSettlementInput[],
+): string | null {
+  const splitsByReceipt = new Map<string, SettlementSplitInput[]>();
+  for (const split of splits) {
+    const existing = splitsByReceipt.get(split.receipt_id);
+    if (existing) existing.push(split);
+    else splitsByReceipt.set(split.receipt_id, [split]);
+  }
+
+  const events: { at: number; order: number; kind: 'receipt' | 'settlement'; index: number }[] = [];
+  receipts.forEach((receipt, index) => {
+    const at = new Date(receipt.created_at).getTime();
+    if (Number.isNaN(at)) return;
+    events.push({ at, order: 0, kind: 'receipt', index });
+  });
+  settlements.forEach((settlement, index) => {
+    if (settlement.voided_at !== null) return;
+    const at = new Date(settlement.created_at).getTime();
+    if (Number.isNaN(at)) return;
+    events.push({ at, order: 1, kind: 'settlement', index });
+  });
+  events.sort((left, right) => left.at - right.at || left.order - right.order || left.index - right.index);
+
+  const balances: Record<string, number> = {};
+  let watermark: string | null = null;
+
+  for (const event of events) {
+    if (event.kind === 'receipt') {
+      const receipt = receipts[event.index];
+      if (!receipt) continue;
+      applyReceiptSplits(balances, receipt.paid_by, splitsByReceipt.get(receipt.id) ?? []);
+      continue;
+    }
+
+    const settlement = settlements[event.index];
+    if (!settlement) continue;
+    ensureBalance(balances, settlement.from_user_id);
+    ensureBalance(balances, settlement.to_user_id);
+    balances[settlement.from_user_id] += settlement.amount_minor;
+    balances[settlement.to_user_id] -= settlement.amount_minor;
+    if (Object.values(balances).every((amount) => amount === 0)) {
+      watermark = settlement.created_at;
+    }
+  }
+
+  return watermark;
+}
+
+function applyReceiptSplits(
+  balances: Record<string, number>,
+  paidBy: string | null,
+  splits: readonly SettlementSplitInput[],
+) {
+  if (!paidBy) return;
+  for (const split of splits) {
+    if (split.amount_minor <= 0) continue;
+    ensureBalance(balances, paidBy);
+    ensureBalance(balances, split.user_id);
+    balances[split.user_id] -= split.amount_minor;
+    balances[paidBy] += split.amount_minor;
+  }
 }
 
 function ensureBalance(balances: Record<string, number>, userId: string) {
