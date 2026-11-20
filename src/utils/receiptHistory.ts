@@ -1,6 +1,27 @@
 import { formatSmartDate } from '@/utils/formatSmartDate';
 import { formatPence } from '@/utils/money';
 
+/** First paint of History. Keeps the ledger uncluttered before the member asks for more. */
+export const HISTORY_PREVIEW_LIMIT = 5;
+
+/** Pages after the preview. Large enough to fill a phone, small enough to stay cheap. */
+export const HISTORY_PAGE_SIZE = 15;
+
+/**
+ * Strict keyset position. `createdAt` is the row's `created_at`; `id` breaks ties.
+ * Both are required so two receipts inserted in the same millisecond stay ordered.
+ */
+export type ReceiptHistoryCursor = {
+  createdAt: string;
+  id: string;
+};
+
+export type ReceiptHistoryPage<T> = {
+  items: T[];
+  hasMore: boolean;
+  nextCursor: ReceiptHistoryCursor | null;
+};
+
 export type HistoryGroupKey = 'all' | 'personal' | (string & {});
 
 /** One ledger row. `total_minor` is integer pence, never a decimal pound amount. */
@@ -12,6 +33,89 @@ export type HistoryReceiptInput = {
   total_minor: number;
   created_at: string;
 };
+
+/** Ledger row rendered by History. `total_minor` is integer pence. */
+export type ReceiptHistoryItem = HistoryReceiptInput & {
+  restaurant_name: string | null;
+};
+
+const CURSOR_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?$/;
+const CURSOR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * PostgREST `or` filter for the next page after `cursor`.
+ * Values are allow-listed and quoted so a `.` or `,` inside a timestamp cannot
+ * change the filter grammar.
+ */
+export function buildReceiptHistoryKeysetFilter(cursor: ReceiptHistoryCursor): string {
+  if (typeof cursor?.createdAt !== 'string' || typeof cursor?.id !== 'string') {
+    throw new Error('Invalid receipt history cursor.');
+  }
+
+  const createdAt = cursor.createdAt.trim();
+  const id = cursor.id.trim();
+  if (!CURSOR_TIMESTAMP.test(createdAt) || !CURSOR_ID.test(id)) {
+    throw new Error('Invalid receipt history cursor.');
+  }
+
+  const createdAtValue = quotePostgrestValue(createdAt);
+  const idValue = quotePostgrestValue(id);
+  return `created_at.lt.${createdAtValue},and(created_at.eq.${createdAtValue},id.lt.${idValue})`;
+}
+
+/**
+ * Turns a `limit + 1` read into a page. The extra row is only a "has more" signal,
+ * so History never asks Postgres for an exact count.
+ */
+export function sliceLookaheadPage<T extends { id: string; created_at: string }>(
+  rows: readonly T[],
+  limit: number,
+): ReceiptHistoryPage<T> {
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows.slice();
+  const last = items[items.length - 1];
+  return {
+    items,
+    hasMore,
+    nextCursor: hasMore && last ? { createdAt: last.created_at, id: last.id } : null,
+  };
+}
+
+/**
+ * Appends a page onto the ledger. A repeated id keeps the incoming copy.
+ * The result is always `created_at DESC, id DESC`, matching the server order.
+ */
+export function mergePaginatedReceipts<T extends { id: string; created_at: string }>(
+  existing: readonly T[],
+  incoming: readonly T[],
+): T[] {
+  const byId = new Map<string, T>();
+  for (const item of existing) byId.set(item.id, item);
+  for (const item of incoming) byId.set(item.id, item);
+  return [...byId.values()].sort(compareNewest);
+}
+
+/**
+ * Drops History back to the 5-receipt cap without a network round trip.
+ * When more rows exist, the cursor is the 5th row so the next page starts at row 6.
+ */
+export function collapseHistoryToPreview<T extends { id: string; created_at: string }>(
+  items: readonly T[],
+  currentHasMore: boolean,
+): ReceiptHistoryPage<T> {
+  const preview = items.slice(0, HISTORY_PREVIEW_LIMIT);
+  const hasMore = currentHasMore || items.length > HISTORY_PREVIEW_LIMIT;
+  const anchor = preview[HISTORY_PREVIEW_LIMIT - 1] ?? (hasMore ? preview[preview.length - 1] : undefined);
+  return {
+    items: preview,
+    hasMore,
+    nextCursor: hasMore && anchor ? { createdAt: anchor.created_at, id: anchor.id } : null,
+  };
+}
+
+function quotePostgrestValue(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
 
 export type HistorySection<T extends HistoryReceiptInput = HistoryReceiptInput> = {
   key: string;
@@ -104,13 +208,18 @@ function sumMinor(receipts: readonly HistoryReceiptInput[]) {
 }
 
 function byNewest(left: HistoryReceiptInput | undefined, right: HistoryReceiptInput | undefined) {
-  const leftTime = timestamp(left?.created_at);
-  const rightTime = timestamp(right?.created_at);
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return compareNewest(left, right);
+}
+
+function compareNewest<T extends { id: string; created_at: string }>(left: T, right: T) {
+  const leftTime = timestamp(left.created_at);
+  const rightTime = timestamp(right.created_at);
   if (leftTime !== rightTime) return rightTime - leftTime;
-  const leftId = left?.id ?? '';
-  const rightId = right?.id ?? '';
-  if (leftId === rightId) return 0;
-  return leftId < rightId ? 1 : -1;
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? 1 : -1;
 }
 
 function timestamp(value: string | undefined) {

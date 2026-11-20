@@ -1,6 +1,13 @@
 import { formatSmartDate } from '../formatSmartDate';
 import { formatPence } from '../money';
-import { filterAndGroupReceipts, type HistoryReceiptInput } from '../receiptHistory';
+import {
+  buildReceiptHistoryKeysetFilter,
+  collapseHistoryToPreview,
+  filterAndGroupReceipts,
+  mergePaginatedReceipts,
+  sliceLookaheadPage,
+  type HistoryReceiptInput,
+} from '../receiptHistory';
 
 const tests: { name: string; run: () => void }[] = [];
 
@@ -114,6 +121,98 @@ it('sums section subtotals and the filtered total in exact integer pence', () =>
     ledger.sections.reduce((sum, section) => sum + section.subtotalMinor, 0),
   );
   assertTrue(Number.isSafeInteger(ledger.filteredTotalMinor), 'filtered total left the safe integer range');
+});
+
+function pageRow(id: string, createdAt: string, copy = id) {
+  return { id, created_at: createdAt, copy };
+}
+
+it('reads a lookahead page without inventing a next page', () => {
+  assertEqual(sliceLookaheadPage([], 5), { items: [], hasMore: false, nextCursor: null });
+
+  const three = [pageRow('c', '2026-11-20T12:00:03.000Z'), pageRow('b', '2026-11-20T12:00:02.000Z'), pageRow('a', '2026-11-20T12:00:01.000Z')];
+  const short = sliceLookaheadPage(three, 5);
+  assertEqual(short.hasMore, false);
+  assertEqual(short.nextCursor, null);
+  assertEqual(short.items.map((row) => row.id), ['c', 'b', 'a']);
+
+  const five = [
+    pageRow('e', '2026-11-20T12:00:05.000Z'),
+    pageRow('d', '2026-11-20T12:00:04.000Z'),
+    pageRow('c', '2026-11-20T12:00:03.000Z'),
+    pageRow('b', '2026-11-20T12:00:02.000Z'),
+    pageRow('a', '2026-11-20T12:00:01.000Z'),
+  ];
+  const exact = sliceLookaheadPage(five, 5);
+  assertEqual(exact.hasMore, false);
+  assertEqual(exact.nextCursor, null);
+  assertEqual(exact.items.length, 5);
+
+  const six = [...five, pageRow('z', '2026-11-20T12:00:00.000Z')];
+  const more = sliceLookaheadPage(six, 5);
+  assertEqual(more.hasMore, true);
+  assertEqual(more.items.map((row) => row.id), ['e', 'd', 'c', 'b', 'a']);
+  assertEqual(more.nextCursor, { createdAt: '2026-11-20T12:00:01.000Z', id: 'a' });
+});
+
+it('appends the next page, keeps the incoming copy, and orders ties by id descending', () => {
+  const newer = '2026-11-21T12:00:00.000Z';
+  const same = '2026-11-20T12:00:00.000Z';
+  const older = '2026-11-19T12:00:00.000Z';
+  const idA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const idB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const idC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const idD = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+  const merged = mergePaginatedReceipts(
+    [pageRow(idA, newer, 'page-1-a'), pageRow(idB, same, 'page-1-b')],
+    [pageRow(idB, same, 'page-2-b'), pageRow(idC, same, 'page-2-c'), pageRow(idD, older, 'page-2-d')],
+  );
+
+  assertEqual(merged.map((row) => row.id), [idA, idC, idB, idD]);
+  assertEqual(merged.map((row) => row.copy), ['page-1-a', 'page-2-c', 'page-2-b', 'page-2-d']);
+  assertEqual(new Set(merged.map((row) => row.id)).size, merged.length);
+});
+
+it('collapses a loaded ledger back to the five-receipt preview', () => {
+  const loaded = Array.from({ length: 12 }, (_, index) => {
+    const position = 12 - index;
+    return pageRow(
+      `00000000-0000-4000-8000-${String(position).padStart(12, '0')}`,
+      `2026-11-20T12:${String(position).padStart(2, '0')}:00.000Z`,
+    );
+  });
+
+  const collapsed = collapseHistoryToPreview(loaded, false);
+  assertEqual(collapsed.items.length, 5);
+  assertEqual(collapsed.hasMore, true);
+  assertEqual(collapsed.nextCursor, {
+    createdAt: loaded[4]?.created_at,
+    id: loaded[4]?.id,
+  });
+  assertEqual(collapsed.items.map((row) => row.id), loaded.slice(0, 5).map((row) => row.id));
+
+  const short = collapseHistoryToPreview(loaded.slice(0, 4), false);
+  assertEqual(short.items.length, 4);
+  assertEqual(short.hasMore, false);
+  assertEqual(short.nextCursor, null);
+});
+
+it('quotes keyset values and rejects a cursor that could rewrite the filter', () => {
+  const createdAt = '2026-11-20T12:00:00.000Z';
+  const id = '11111111-1111-4111-8111-111111111111';
+  assertEqual(
+    buildReceiptHistoryKeysetFilter({ createdAt, id }),
+    `created_at.lt."${createdAt}",and(created_at.eq."${createdAt}",id.lt."${id}")`,
+  );
+
+  let rejected = false;
+  try {
+    buildReceiptHistoryKeysetFilter({ createdAt: `${createdAt},id.gt.injected`, id: 'not-a-uuid' });
+  } catch {
+    rejected = true;
+  }
+  assertTrue(rejected, 'expected a malformed cursor to be rejected');
 });
 
 it('orders sections and rows by most recent activity', () => {

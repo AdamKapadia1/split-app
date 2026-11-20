@@ -2,6 +2,14 @@ import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
 import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs, Split } from '@/types/database.types';
+import { toMinorUnits } from '@/utils/money';
+import {
+  buildReceiptHistoryKeysetFilter,
+  sliceLookaheadPage,
+  type ReceiptHistoryCursor,
+  type ReceiptHistoryItem,
+  type ReceiptHistoryPage,
+} from '@/utils/receiptHistory';
 
 const DEFAULT_CURRENCY = 'GBP';
 const MONEY_LIMIT = 99_999_999.99;
@@ -217,45 +225,64 @@ export class ReceiptService {
   }
 
   /**
-   * History ledger rows with group names resolved in the same round trip.
+   * One keyset page of History, newest first.
+   * Reads `limit + 1` rows so the extra row can say "there is another page"
+   * without a full-table count. Group names are resolved in the same round trip.
    * A missing or deleted group leaves `group_name` null so the row stays Personal.
    */
-  async listHistoryReceipts(): Promise<HistoryReceiptRecord[]> {
+  async fetchReceiptHistoryPage({
+    limit,
+    cursor,
+  }: {
+    limit: number;
+    cursor?: ReceiptHistoryCursor | null;
+  }): Promise<ReceiptHistoryPage<ReceiptHistoryItem>> {
     try {
+      const pageLimit = requirePageLimit(limit);
+      const keyset = cursor ? requireKeysetFilter(cursor) : null;
       const client = requireClient();
+      let receiptsQuery = client
+        .from('receipts')
+        .select(RECEIPT_COLUMNS)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(pageLimit + 1);
+
+      if (keyset) receiptsQuery = receiptsQuery.or(keyset);
+
       const [receiptsResult, groupsResult] = await Promise.all([
-        client.from('receipts').select(RECEIPT_COLUMNS).order('created_at', { ascending: false }),
+        receiptsQuery,
         client.from('groups').select('id, name'),
       ]);
 
       if (receiptsResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptsResult.error.message, receiptsResult.error);
-      if (groupsResult.error) console.error('[ReceiptService] [listHistoryReceipts] groups', groupsResult.error);
+      if (groupsResult.error) console.error('[ReceiptService] [fetchReceiptHistoryPage] groups', groupsResult.error);
 
       const names = groupsResult.error ? new Map<string, string>() : groupNameMap(groupsResult.data);
-      const rows: HistoryReceiptRecord[] = [];
+      const parsed: StoredReceipt[] = [];
       for (const row of receiptsResult.data ?? []) {
         try {
-          const receipt = parseReceipt(row, 'FETCH_FAILED');
-          const groupId = receipt.group_id;
-          rows.push({
-            ...receipt,
-            group_name: groupId ? names.get(groupId) ?? null : null,
-          });
+          parsed.push(parseReceipt(row, 'FETCH_FAILED'));
         } catch (error) {
-          console.error('[ReceiptService] [listHistoryReceipts] row', error);
+          console.error('[ReceiptService] [fetchReceiptHistoryPage] row', error);
         }
       }
-      return rows;
+
+      const page = sliceLookaheadPage(parsed, pageLimit);
+      return {
+        items: page.items.map((receipt) => toReceiptHistoryItem(receipt, names)),
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
+      };
     } catch (caught) {
-      throw logged('listHistoryReceipts', 'FETCH_FAILED', 'Could not load receipt history.', caught);
+      throw logged('fetchReceiptHistoryPage', 'FETCH_FAILED', 'Could not load receipt history.', caught);
     }
   }
 }
 
-export type HistoryReceiptRecord = Receipt & {
-  restaurant_name?: string | null;
-  /** Linked group name. Null for personal receipts and receipts whose group was deleted. */
-  group_name: string | null;
+type StoredReceipt = Receipt & {
+  restaurant_name: string | null;
+  website: string | null;
 };
 
 export const receiptService = new ReceiptService();
@@ -286,6 +313,34 @@ function logged(method: string, code: ReceiptServiceCode, fallback: string, caug
   const error = caught instanceof ReceiptServiceError ? caught : new ReceiptServiceError(code, fallback, caught instanceof Error ? caught : null);
   console.error(`[ReceiptService] [${method}] Error: ${error.message}`, caught);
   return error;
+}
+
+function requirePageLimit(limit: number): number {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new ReceiptServiceError('VALIDATION_ERROR', 'limit must be an integer from 1 to 100.');
+  }
+  return limit;
+}
+
+function requireKeysetFilter(cursor: ReceiptHistoryCursor): string {
+  try {
+    return buildReceiptHistoryKeysetFilter(cursor);
+  } catch (error) {
+    throw new ReceiptServiceError('VALIDATION_ERROR', 'History cursor is invalid.', error instanceof Error ? error : null);
+  }
+}
+
+function toReceiptHistoryItem(receipt: StoredReceipt, names: Map<string, string>): ReceiptHistoryItem {
+  const groupId = receipt.group_id;
+  return {
+    id: receipt.id,
+    group_id: groupId,
+    group_name: groupId ? names.get(groupId) ?? null : null,
+    merchant_name: receipt.merchant_name,
+    restaurant_name: receipt.restaurant_name,
+    total_minor: toMinorUnits(Number(receipt.total_amount || 0)),
+    created_at: receipt.created_at,
+  };
 }
 
 function requireId(value: string, field: string): string {
@@ -360,7 +415,7 @@ function normalizeTotals(updates: ReceiptTotalsUpdate): ReceiptTotalsUpdate {
   return payload;
 }
 
-function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
+function parseReceipt(value: unknown, code: ReceiptServiceCode): StoredReceipt {
   const row = asRecord(value, 'Receipt', code);
   return {
     id: readString(row, 'id', code),
@@ -381,7 +436,7 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): Receipt {
     settled_at: readNullableString(row, 'settled_at', code),
     settled_by: readNullableString(row, 'settled_by', code),
     created_at: readString(row, 'created_at', code),
-  } as Receipt;
+  };
 }
 
 function parseItems(value: unknown, code: ReceiptServiceCode): Item[] {
