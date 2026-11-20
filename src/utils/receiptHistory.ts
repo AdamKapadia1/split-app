@@ -29,10 +29,14 @@ const GROUP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /**
  * Trims, collapses internal whitespace, and caps the merchant query.
+ * iOS smart quotes are folded to straight ASCII so they match the stored merchant name.
  * Whitespace-only input becomes an empty string so it does not count as a filter.
  */
 export function normalizeHistorySearchQuery(raw: string): string {
-  return raw.trim().replace(/\s+/g, ' ').slice(0, HISTORY_SEARCH_MAX_LENGTH);
+  const ascii = raw
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"');
+  return ascii.trim().replace(/\s+/g, ' ').slice(0, HISTORY_SEARCH_MAX_LENGTH);
 }
 
 /**

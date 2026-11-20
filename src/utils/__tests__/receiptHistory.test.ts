@@ -239,6 +239,8 @@ it('orders sections and rows by most recent activity', () => {
 
 it('normalizes a history search before it is sent to the ledger', () => {
   assertEqual(normalizeHistorySearchQuery('  Nando   \t  House \n '), 'Nando House');
+  assertEqual(normalizeHistorySearchQuery('Mollie\u2019s'), "Mollie's");
+  assertEqual(normalizeHistorySearchQuery('\u201CMollie\u2019s\u201D'), '"Mollie\'s"');
   assertEqual(normalizeHistorySearchQuery('   '), '');
   assertEqual(normalizeHistorySearchQuery(''), '');
   assertEqual(normalizeHistorySearchQuery('\n\t'), '');
