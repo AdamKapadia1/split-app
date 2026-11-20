@@ -277,11 +277,12 @@ export class ReceiptService {
         groupsQuery,
       ]);
 
+      if (signal?.aborted || isAbortError(receiptsResult.error)) throw abortError(receiptsResult.error);
       if (receiptsResult.error) {
-        if (isAbortError(receiptsResult.error)) throw abortError(receiptsResult.error);
         throw new ReceiptServiceError('FETCH_FAILED', receiptsResult.error.message, receiptsResult.error);
       }
-      if (groupsResult.error && !isAbortError(groupsResult.error)) {
+      if (signal?.aborted || isAbortError(groupsResult.error)) throw abortError(groupsResult.error);
+      if (groupsResult.error) {
         console.error('[ReceiptService] [fetchReceiptHistoryPage] groups', groupsResult.error);
       }
 
@@ -302,7 +303,7 @@ export class ReceiptService {
         nextCursor: page.nextCursor,
       };
     } catch (caught) {
-      if (isAbortError(caught)) throw abortError(caught);
+      if (signal?.aborted || isAbortError(caught)) throw abortError(caught);
       throw logged('fetchReceiptHistoryPage', 'FETCH_FAILED', 'Could not load receipt history.', caught);
     }
   }
@@ -318,22 +319,18 @@ export function isAbortError(err: unknown): boolean {
   const record = err as {
     name?: unknown;
     message?: unknown;
-    hint?: unknown;
-    code?: unknown;
-    cause?: unknown;
+    signal?: { aborted?: boolean } | null;
     originalError?: unknown;
   };
+  if (record.signal?.aborted === true) return true;
+
   const name = typeof record.name === 'string' ? record.name : '';
   const message = typeof record.message === 'string' ? record.message : '';
-  const hint = typeof record.hint === 'string' ? record.hint : '';
-  const code = typeof record.code === 'string' ? record.code : '';
+  if (name === 'AbortError') return true;
+  if (message.length > 0 && (/abort/i.test(message) || /the operation was aborted/i.test(message))) return true;
 
-  if (name === 'AbortError' || code === 'ABORT_ERR') return true;
-  if (/^AbortError\b/i.test(message)) return true;
-  if (/user aborted a request/i.test(message)) return true;
-  if (/request was aborted/i.test(hint) || /aborted locally/i.test(hint)) return true;
-  if (record.cause && record.cause !== err && isAbortError(record.cause)) return true;
-  if (record.originalError && record.originalError !== err && isAbortError(record.originalError)) return true;
+  const original = record.originalError;
+  if (original && original !== err && isAbortError(original)) return true;
   return false;
 }
 
