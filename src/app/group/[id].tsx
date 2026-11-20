@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
+import { ActivityIndicator, Alert, LayoutAnimation, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddMemberModal } from '@/components/AddMemberModal';
@@ -25,6 +25,12 @@ type GroupReceipt = Receipt & {
 
 const GROUP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VISIBLE_AVATARS = 5;
+const SETTLED_RECEIPTS_PREVIEW_LIMIT = 5;
+
+function animateHistoryLayout() {
+  if (Platform.OS !== 'ios') return;
+  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+}
 
 function firstParam(value: string | string[] | undefined) {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -96,7 +102,10 @@ export default function GroupLedgerScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [missing, setMissing] = useState(!isValidId);
   const [rosterOpen, setRosterOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(true);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [showAllSettledReceipts, setShowAllSettledReceipts] = useState(false);
+  const [historyGroupId, setHistoryGroupId] = useState(groupId);
+  const [wasHistoryExpanded, setWasHistoryExpanded] = useState(historyExpanded);
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [groupAction, setGroupAction] = useState<'delete' | 'leave' | null>(null);
@@ -104,6 +113,15 @@ export default function GroupLedgerScreen() {
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const loadedFor = useRef<string | null>(null);
+
+  if (groupId !== historyGroupId) {
+    setHistoryGroupId(groupId);
+    setShowAllSettledReceipts(false);
+  }
+  if (historyExpanded !== wasHistoryExpanded) {
+    setWasHistoryExpanded(historyExpanded);
+    if (!historyExpanded) setShowAllSettledReceipts(false);
+  }
 
   const goBack = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -208,7 +226,7 @@ export default function GroupLedgerScreen() {
     ),
     [receipts, splits, settlements],
   );
-  const { activeReceipts, settledReceipts, settlementSource } = useMemo(
+  const { activeReceipts, settledReceipts } = useMemo(
     () => partitionGroupReceipts(receipts, splitReceiptIds, lastSettledAt),
     [lastSettledAt, receipts, splitReceiptIds],
   );
@@ -240,6 +258,30 @@ export default function GroupLedgerScreen() {
     }
   }, [receipts, splits, settlements, memberIds]);
   const transfers = useMemo(() => simplifyDebts(balances), [balances]);
+  const totalHistoryCount = useMemo(
+    () => settlements.length + settledReceipts.length,
+    [settledReceipts.length, settlements.length],
+  );
+  const sortedSettledReceipts = useMemo(
+    () => [...settledReceipts].sort((left, right) => {
+      const leftAt = Date.parse(left.settled_at ?? left.created_at);
+      const rightAt = Date.parse(right.settled_at ?? right.created_at);
+      const leftTime = Number.isNaN(leftAt) ? 0 : leftAt;
+      const rightTime = Number.isNaN(rightAt) ? 0 : rightAt;
+      return rightTime - leftTime;
+    }),
+    [settledReceipts],
+  );
+  const visibleSettledReceipts = useMemo(
+    () => (showAllSettledReceipts
+      ? sortedSettledReceipts
+      : sortedSettledReceipts.slice(0, SETTLED_RECEIPTS_PREVIEW_LIMIT)),
+    [showAllSettledReceipts, sortedSettledReceipts],
+  );
+  const hiddenSettledCount = useMemo(
+    () => Math.max(0, sortedSettledReceipts.length - SETTLED_RECEIPTS_PREVIEW_LIMIT),
+    [sortedSettledReceipts],
+  );
   const viewerBalance = viewerId ? (balances[viewerId] ?? 0) : 0;
   const viewerIsOwner = members.some((member) => member.userId === viewerId && member.role === 'owner') || (viewerId !== null && viewerId === createdBy);
   const isCreator = viewerId !== null && (createdBy ? viewerId === createdBy : members.some((member) => member.userId === viewerId && member.role === 'owner'));
@@ -483,7 +525,10 @@ export default function GroupLedgerScreen() {
       scrollRef.current?.scrollTo({ y: Math.max(balancesOffset.current - 8, 0), animated: true });
       return;
     }
-    setHistoryOpen(true);
+    if (!historyExpanded) {
+      animateHistoryLayout();
+      setHistoryExpanded(true);
+    }
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
@@ -491,9 +536,20 @@ export default function GroupLedgerScreen() {
     });
   }
 
-  function renderReceiptRow(item: GroupReceipt, index: number, source?: 'manual' | 'automatic') {
+  function toggleHistory() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    animateHistoryLayout();
+    setHistoryExpanded((expanded) => !expanded);
+  }
+
+  function toggleSettledReceipts() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    animateHistoryLayout();
+    setShowAllSettledReceipts((showAll) => !showAll);
+  }
+
+  function renderReceiptRow(item: GroupReceipt, index: number) {
     const name = receiptName(item);
-    const archiveLabel = source === 'manual' ? 'Marked settled' : source === 'automatic' ? 'Cleared by payment' : null;
     return (
       <View key={item.id}>
         {index > 0 ? <View style={styles.receiptDivider} /> : null}
@@ -513,7 +569,6 @@ export default function GroupLedgerScreen() {
             <Text style={styles.receiptName} numberOfLines={1}>{name}</Text>
             <Text style={styles.receiptMeta} numberOfLines={1}>
               {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
-              {archiveLabel ? ` · ${archiveLabel}` : ''}
             </Text>
           </View>
           <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />
@@ -763,75 +818,133 @@ export default function GroupLedgerScreen() {
           <View style={styles.historySection}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Settlement history"
-              accessibilityState={{ expanded: historyOpen }}
-              onPress={() => {
-                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                setHistoryOpen((open) => !open);
-              }}
-              style={styles.historyHeader}
+              accessibilityLabel="Toggle settlement history"
+              accessibilityState={{ expanded: historyExpanded }}
+              onPress={toggleHistory}
+              style={({ pressed }) => [styles.historyHeader, pressed && styles.historyHeaderPressed]}
             >
               <View style={styles.historyTitle}>
-                <Text style={styles.sectionLabel}>Settlement history</Text>
-                {settlements.length + settledReceipts.length > 0 ? (
-                  <View style={styles.countBadge}>
-                    <Text style={styles.countText}>{settlements.length + settledReceipts.length}</Text>
+                <Text style={styles.historyLabel}>SETTLEMENT HISTORY</Text>
+                {totalHistoryCount > 0 ? (
+                  <View style={styles.historyCount}>
+                    <Text style={styles.historyCountText}>{String(totalHistoryCount)}</Text>
                   </View>
                 ) : null}
               </View>
-              <Ionicons name={historyOpen ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMuted} />
+              <View style={styles.historyHintRow}>
+                <Text style={styles.historyHint}>{historyExpanded ? 'Hide' : 'Show'}</Text>
+                <Ionicons name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMuted} />
+              </View>
             </Pressable>
-            {historyOpen ? (
-              settlements.length === 0 && settledReceipts.length === 0 ? (
-                <Text style={styles.emptyLine}>No payments recorded yet.</Text>
-              ) : (
-                <View>
-                  {settledReceipts.length > 0 ? (
-                    <View>
-                      <Text style={styles.historySubheading}>Settled receipts</Text>
-                      <View style={styles.card}>
-                        {settledReceipts.map((item, index) => renderReceiptRow(item, index, settlementSource[item.id]))}
+            {historyExpanded ? (
+              <View style={styles.historyBody}>
+                {settlements.length === 0 && settledReceipts.length === 0 ? (
+                  <View style={styles.historyEmpty}>
+                    <Text style={styles.historyEmptyText}>No payments or settled receipts yet.</Text>
+                  </View>
+                ) : (
+                  <>
+                    {settlements.length > 0 ? (
+                      <View>
+                        <Text style={styles.historySubLabel}>PAYMENTS</Text>
+                        <View style={styles.historyCard}>
+                          {settlements.map((settlement, index) => {
+                            const voided = settlement.voided_at !== null;
+                            const when = settlementWhen(settlement.created_at);
+                            return (
+                              <View key={settlement.id}>
+                                {index > 0 ? <View style={styles.historyDivider} /> : null}
+                                <View style={[styles.historyRow, voided && styles.historyVoided]}>
+                                  <Text style={[styles.historyCopy, voided && styles.historyStrike]} numberOfLines={2}>
+                                    {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
+                                    {formatPence(settlement.amount_minor)}
+                                    {when ? ` · ${when}` : ''}
+                                  </Text>
+                                  {voided ? <Text style={styles.voidedPill}>Voided</Text> : null}
+                                  {!voided && canVoid(settlement) ? (
+                                    <Pressable
+                                      accessibilityRole="button"
+                                      accessibilityLabel="Undo settlement"
+                                      disabled={voidingId !== null}
+                                      onPress={() => askVoid(settlement)}
+                                      style={styles.undoButton}
+                                    >
+                                      {voidingId === settlement.id ? (
+                                        <ActivityIndicator size="small" color={theme.colors.textMuted} />
+                                      ) : (
+                                        <Text style={styles.undoText}>Undo</Text>
+                                      )}
+                                    </Pressable>
+                                  ) : null}
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
                       </View>
-                    </View>
-                  ) : null}
-                  {settlements.length > 0 ? (
-                    <View style={[styles.card, settledReceipts.length > 0 && styles.historyPayments]}>
-                      {settlements.map((settlement, index) => {
-                        const voided = settlement.voided_at !== null;
-                        const when = settlementWhen(settlement.created_at);
-                        return (
-                          <View key={settlement.id}>
-                            {index > 0 ? <View style={styles.historyDivider} /> : null}
-                            <View style={[styles.historyRow, voided && styles.historyVoided]}>
-                              <Text style={[styles.historyCopy, voided && styles.historyStrike]} numberOfLines={2}>
-                                {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
-                                {formatPence(settlement.amount_minor)}
-                                {when ? ` · ${when}` : ''}
-                              </Text>
-                              {voided ? <Text style={styles.voidedPill}>Voided</Text> : null}
-                              {!voided && canVoid(settlement) ? (
+                    ) : null}
+                    {settledReceipts.length > 0 ? (
+                      <View>
+                        <View style={styles.historySubRow}>
+                          <Text style={styles.historySubLabelInline}>SETTLED RECEIPTS</Text>
+                          <Text style={styles.historyArchiveCount}>{sortedSettledReceipts.length} archived</Text>
+                        </View>
+                        <View style={styles.historyCard}>
+                          {visibleSettledReceipts.map((item, index) => {
+                            const name = receiptName(item);
+                            return (
+                              <View key={item.id}>
+                                {index > 0 ? <View style={styles.settledDivider} /> : null}
                                 <Pressable
                                   accessibilityRole="button"
-                                  accessibilityLabel="Undo settlement"
-                                  disabled={voidingId !== null}
-                                  onPress={() => askVoid(settlement)}
-                                  style={styles.undoButton}
+                                  accessibilityLabel={name}
+                                  onPress={() => {
+                                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                    router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
+                                  }}
+                                  style={({ pressed }) => [styles.settledRow, pressed && styles.settledRowPressed]}
                                 >
-                                  {voidingId === settlement.id ? (
-                                    <ActivityIndicator size="small" color={theme.colors.textMuted} />
-                                  ) : (
-                                    <Text style={styles.undoText}>Undo</Text>
-                                  )}
+                                  <View style={styles.settledMonogram}>
+                                    <Text style={styles.settledMonogramText}>{monogram(name)}</Text>
+                                  </View>
+                                  <View style={styles.settledCopy}>
+                                    <Text style={styles.settledName} numberOfLines={1}>{name}</Text>
+                                    <Text style={styles.settledDate}>{receiptWhen(item.settled_at ?? item.created_at)}</Text>
+                                  </View>
+                                  <View style={styles.settledTrailing}>
+                                    <View style={styles.settledPill}>
+                                      <Text style={styles.settledPillText}>Settled</Text>
+                                    </View>
+                                    <Text style={styles.settledAmount}>{formatPence(toMinorUnits(Number(item.total_amount || 0)))}</Text>
+                                    <Ionicons name="chevron-forward" size={14} color={theme.colors.textMuted} />
+                                  </View>
                                 </Pressable>
-                              ) : null}
-                            </View>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  ) : null}
-                </View>
-              )
+                              </View>
+                            );
+                          })}
+                          {sortedSettledReceipts.length > SETTLED_RECEIPTS_PREVIEW_LIMIT ? (
+                            <>
+                              <View style={styles.settledFooterDivider} />
+                              <Pressable
+                                accessibilityRole="button"
+                                accessibilityLabel={showAllSettledReceipts ? 'Show fewer settled receipts' : `Show ${hiddenSettledCount} more settled receipts`}
+                                onPress={toggleSettledReceipts}
+                                style={({ pressed }) => [styles.settledFooter, pressed && styles.settledRowPressed]}
+                              >
+                                <Text style={showAllSettledReceipts ? styles.settledFooterMuted : styles.settledFooterAccent}>
+                                  {showAllSettledReceipts
+                                    ? 'Show fewer'
+                                    : `Show ${hiddenSettledCount} more settled ${hiddenSettledCount === 1 ? 'receipt' : 'receipts'}`}
+                                </Text>
+                              </Pressable>
+                            </>
+                          ) : null}
+                        </View>
+                      </View>
+                    ) : null}
+                  </>
+                )}
+              </View>
             ) : null}
           </View>
         </ScrollView>
@@ -1032,7 +1145,6 @@ const styles = StyleSheet.create({
   rosterMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
   section: { marginHorizontal: 16, marginTop: 24 },
   sectionHeading: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 8, marginLeft: 4 },
-  sectionLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted },
   card: {
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.lg,
@@ -1091,32 +1203,113 @@ const styles = StyleSheet.create({
   receiptCopy: { flex: 1, minWidth: 0, marginLeft: 6 },
   receiptName: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   receiptMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
-  historySection: { marginHorizontal: 16, marginTop: 24, marginBottom: 40 },
-  historySubheading: {
-    ...theme.typography.sectionLabel,
-    color: theme.colors.textMuted,
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  historyPayments: { marginTop: 16 },
+  historySection: { marginHorizontal: 16, marginTop: 24 },
   historyHeader: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
+  },
+  historyHeaderPressed: { backgroundColor: theme.colors.surfaceElevated },
+  historyTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  historyLabel: { ...theme.typography.sectionLabel, color: theme.colors.textSecondary },
+  historyCount: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  historyCountText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: theme.colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+  },
+  historyHintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  historyHint: { fontSize: 12, fontWeight: '500', color: theme.colors.textMuted },
+  historyBody: { marginTop: 10, marginBottom: 40, gap: 14 },
+  historyEmpty: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  historyEmptyText: { fontSize: 13, color: theme.colors.textMuted },
+  historySubLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 1,
+    color: theme.colors.textMuted,
+    marginBottom: 6,
+    marginLeft: 4,
+  },
+  historySubRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
     paddingHorizontal: 4,
   },
-  historyTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  countBadge: {
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 5,
-    borderRadius: theme.radius.full,
+  historySubLabelInline: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 1,
+    color: theme.colors.textMuted,
+  },
+  historyArchiveCount: { fontSize: 11, color: theme.colors.textMuted },
+  historyCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  settledDivider: { height: StyleSheet.hairlineWidth, marginLeft: 58, backgroundColor: theme.colors.border },
+  settledRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  settledRowPressed: { backgroundColor: theme.colors.surfaceElevated },
+  settledMonogram: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: theme.colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  countText: { ...theme.typography.micro, color: theme.colors.textSecondary, fontVariant: ['tabular-nums'] },
+  settledMonogramText: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '600' },
+  settledCopy: { flex: 1, minWidth: 0, marginLeft: 10, marginRight: 8 },
+  settledName: { fontSize: 14, fontWeight: '500', color: theme.colors.textSecondary },
+  settledDate: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
+  settledTrailing: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  settledPill: {
+    backgroundColor: theme.colors.positiveSubtle,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: theme.radius.full,
+  },
+  settledPillText: { fontSize: 10, fontWeight: '600', color: theme.colors.positive },
+  settledAmount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+  },
+  settledFooterDivider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
+  settledFooter: { paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
+  settledFooterAccent: { fontSize: 13, fontWeight: '600', color: theme.colors.accent },
+  settledFooterMuted: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
   historyDivider: { height: StyleSheet.hairlineWidth, marginLeft: 14, backgroundColor: theme.colors.border },
   historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 14 },
   historyVoided: { opacity: 0.55 },
