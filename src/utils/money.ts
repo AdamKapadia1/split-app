@@ -70,6 +70,15 @@ export function allocateByItems(
   return shares;
 }
 
+/**
+ * Pence still to share on top of the line items.
+ * Returns 0 when those lines already add up to the bill, so a tax figure
+ * that is included in the prices is not added a second time.
+ */
+export function extrasMinor(lineItemsMinor: number, totalMinor: number): number {
+  return Math.max(0, Math.round(totalMinor) - Math.round(lineItemsMinor));
+}
+
 /** Formats integer pence as `£X.XX` without going back through floating point. */
 export function formatPence(amountMinor: number): string {
   const minor = Math.round(amountMinor);

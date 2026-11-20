@@ -16,7 +16,7 @@ import { SnapPressable, useSnapScale } from '@/lib/use-snap-scale';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { receiptService } from '@/services/ReceiptService';
 import type { Item, Receipt, Split } from '@/types/database.types';
-import { allocateByItems, formatPence, toMinorUnits } from '@/utils/money';
+import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
 
 const PEOPLE = [
   { id: '11111111-1111-4111-a111-111111111111', name: 'Me', initial: 'M', color: '#38BDF8' },
@@ -97,6 +97,10 @@ function lineMinor(item: Item) {
   return toMinorUnits(item.price) * item.quantity;
 }
 
+function receiptExtrasMinor(items: Item[], receipt: Receipt) {
+  return extrasMinor(items.reduce((sum, item) => sum + lineMinor(item), 0), toMinorUnits(receipt.total_amount));
+}
+
 function memberShares(items: Item[], claims: Record<string, string[]>, memberIds: string[], receipt: Receipt) {
   return allocateByItems(
     items.map((item) => ({
@@ -104,7 +108,7 @@ function memberShares(items: Item[], claims: Record<string, string[]>, memberIds
       priceMinor: lineMinor(item),
       assignedUserIds: claims[item.id] ?? [],
     })),
-    toMinorUnits(receipt.tax_amount) + toMinorUnits(receipt.service_charge) + toMinorUnits(receipt.tip_amount),
+    receiptExtrasMinor(items, receipt),
     memberIds,
   );
 }
@@ -218,9 +222,8 @@ export default function SplitScreen() {
           const initialClaims: Record<string, string[]> = {};
           data.splits.forEach(split => {
             if (!initialClaims[split.item_id]) initialClaims[split.item_id] = [];
-            // In a real app we'd map auth UUIDs to our mock PEOPLE array.
-            // For now, if user_id matches a mock ID, use it, else default to 'me'
-            const pid = PEOPLE.some(p => p.id === split.user_id) ? split.user_id : 'me';
+            // Claims from a personal receipt stay on the matching mock person, otherwise Me.
+            const pid = PEOPLE.some(p => p.id === split.user_id) ? split.user_id : PEOPLE[0].id;
             if (!initialClaims[split.item_id].includes(pid)) {
                initialClaims[split.item_id].push(pid);
             }
@@ -360,6 +363,7 @@ export default function SplitScreen() {
     isGroup ? formatPence(groupShares[personId] ?? 0) : money(shareFor(items, claims, personId, Number(receipt.subtotal), Number(receipt.service_charge)).owed)
   );
   const unassigned = isGroup ? items.reduce((sum, item) => ((claims[item.id] ?? []).length === 0 ? sum + lineMinor(item) : sum), 0) : 0;
+  const taxIncluded = isGroup && receiptExtrasMinor(items, receipt) === 0 && Number(receipt.tax_amount || 0) > 0;
 
   return (
     <NightScreen>
@@ -467,6 +471,7 @@ export default function SplitScreen() {
           </View>
           {isGroup ? (
             <View style={styles.saveBlock}>
+              {taxIncluded ? <Text style={styles.includedText}>Tax is included in the item prices</Text> : null}
               {unassigned > 0 ? <Text style={styles.unassignedText}>{formatPence(unassigned)} still unassigned</Text> : null}
               {saveError ? <Text style={styles.saveError}>{saveError}</Text> : null}
               <TouchableOpacity
@@ -605,6 +610,7 @@ const styles = StyleSheet.create({
   saveButtonDisabled: { opacity: 0.55 },
   saveButtonText: { color: NAVY, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
   saveError: { color: '#FCA5A5', fontSize: 13, fontWeight: '600', paddingHorizontal: Spacing.four },
+  includedText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
   unassignedText: { color: '#FBBF24', fontSize: 13, fontWeight: '700' },
   content: { paddingTop: Spacing.two },
   thumbnail: { width: '100%', height: 168, marginBottom: Spacing.three },

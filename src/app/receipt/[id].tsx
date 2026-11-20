@@ -6,7 +6,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, Vi
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { receiptService } from '@/services/ReceiptService';
 import type { Item, Receipt, Split } from '@/types/database.types';
-import { allocateByItems, formatPence, toMinorUnits } from '@/utils/money';
+import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
 
 type LedgerReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -232,6 +232,7 @@ export default function ReceiptLedgerScreen() {
   const memberIds = members.map((member) => member.userId);
   const shares = isGroup ? memberShares(items, claims, memberIds, receipt) : {};
   const unassigned = isGroup ? unassignedMinor(items, claims) : 0;
+  const isTaxIncluded = receiptExtrasMinor(items, receipt) === 0 && Number(receipt.tax_amount || 0) > 0;
 
   return (
     <View style={styles.container}>
@@ -346,7 +347,7 @@ export default function ReceiptLedgerScreen() {
             <Text style={styles.totalValue}>£{Number(receipt.subtotal || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Tax</Text>
+            <Text style={styles.totalLabel}>{isTaxIncluded ? 'Tax included' : 'Tax'}</Text>
             <Text style={styles.totalValue}>£{Number(receipt.tax_amount || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.totalRow}>
@@ -430,6 +431,10 @@ function lineMinor(item: Item) {
   return toMinorUnits(item.price) * item.quantity;
 }
 
+function receiptExtrasMinor(items: Item[], receipt: Receipt) {
+  return extrasMinor(items.reduce((sum, item) => sum + lineMinor(item), 0), toMinorUnits(receipt.total_amount));
+}
+
 function memberShares(items: Item[], claims: Record<string, string[]>, memberIds: string[], receipt: Receipt) {
   return allocateByItems(
     items.map((item) => ({
@@ -437,7 +442,7 @@ function memberShares(items: Item[], claims: Record<string, string[]>, memberIds
       priceMinor: lineMinor(item),
       assignedUserIds: claims[item.id] ?? [],
     })),
-    toMinorUnits(receipt.tax_amount) + toMinorUnits(receipt.service_charge) + toMinorUnits(receipt.tip_amount),
+    receiptExtrasMinor(items, receipt),
     memberIds,
   );
 }
