@@ -16,7 +16,7 @@ import { groupService, type AccountProfile } from '@/services/GroupService';
 import { receiptService, type HistoryReceiptRecord } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import { formatSmartDate } from '@/utils/formatSmartDate';
-import { formatPence, toMinorUnits } from '@/utils/money';
+import { toMinorUnits } from '@/utils/money';
 import { filterAndGroupReceipts, type HistoryReceiptInput } from '@/utils/receiptHistory';
 
 type LedgerReceipt = HistoryReceiptInput & {
@@ -355,7 +355,6 @@ export default function HomeScreen() {
                       <Text style={styles.sectionTitle} numberOfLines={1} ellipsizeMode="tail">{section.title}</Text>
                     </View>
                   )}
-                  <Text style={styles.sectionMeta}>{`${formatPence(section.subtotalMinor)} · ${section.data.length}`}</Text>
                 </View>
                 <View style={styles.card}>
                   {section.data.map((item, index) => (
@@ -557,18 +556,15 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 8,
     paddingHorizontal: 4,
-    gap: 12,
   },
-  sectionTitleRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sectionTitleRow: { maxWidth: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
   sectionTitle: {
-    flex: 1,
+    flexShrink: 1,
     ...theme.typography.sectionLabel,
     color: theme.colors.textSecondary,
   },
-  sectionMeta: { fontSize: 12, fontWeight: '600', color: theme.colors.textMuted, fontVariant: ['tabular-nums'] },
   emptyCard: { marginHorizontal: 16 },
   card: {
     backgroundColor: theme.colors.surface,

@@ -2,7 +2,7 @@ import 'react-native-url-polyfill/auto';
 
 import { createClient, type SupportedStorage } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -111,3 +111,17 @@ export const supabase =
         },
       })
     : null;
+
+if (supabase) {
+  const client = supabase;
+  if (AppState.currentState !== 'active') {
+    client.auth.stopAutoRefresh();
+  }
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+      client.auth.startAutoRefresh();
+    } else {
+      client.auth.stopAutoRefresh();
+    }
+  });
+}
