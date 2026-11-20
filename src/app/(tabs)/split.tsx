@@ -1,14 +1,13 @@
 import { BlurTargetView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState, type ComponentRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
-import { PayoutSetup, type PayoutBank } from '@/components/payout-setup';
 import { Colors, Spacing } from '@/constants/theme';
 import { theme } from '@/theme/theme';
 import { mediumHaptic, successHaptic, tickHaptic } from '@/lib/haptics';
@@ -162,9 +161,6 @@ export default function SplitScreen() {
     : {};
   
   const scrollAnchor = useRef(0);
-  const blurTarget = useRef<ComponentRef<typeof View>>(null);
-  const [payoutOpen, setPayoutOpen] = useState(false);
-  const [payout, setPayout] = useState<PayoutBank | null>(null);
 
   // Load the live data from Supabase
   useEffect(() => {
@@ -364,7 +360,7 @@ export default function SplitScreen() {
 
   return (
     <NightScreen>
-      <BlurTargetView ref={blurTarget} style={styles.flex}>
+      <BlurTargetView style={styles.flex}>
       <View style={[styles.peopleBar, { paddingTop: Platform.OS === 'web' ? 88 : insets.top + Spacing.three }]}>
         {isGroup ? (
           <View style={styles.paidByBlock}>
@@ -481,15 +477,6 @@ export default function SplitScreen() {
       </View>
 
       </BlurTargetView>
-      <PayoutSetup
-        blurTarget={blurTarget}
-        visible={payoutOpen}
-        onClose={() => setPayoutOpen(false)}
-        onConnected={(bank) => {
-          setPayoutOpen(false);
-          setTimeout(() => setPayout(bank), 360);
-        }}
-      />
     </NightScreen>
   );
 }

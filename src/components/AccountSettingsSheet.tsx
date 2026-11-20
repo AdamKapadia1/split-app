@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { PayoutSetup } from '@/components/payout-setup';
 import { groupService } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
 
@@ -29,6 +30,7 @@ export function AccountSettingsSheet({
   onLogout,
 }: AccountSettingsSheetProps) {
   const [editingLink, setEditingLink] = useState(false);
+  const [payoutOpen, setPayoutOpen] = useState(false);
   const [draft, setDraft] = useState(paymentLink ?? '');
   const [saving, setSaving] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -43,6 +45,7 @@ export function AccountSettingsSheet({
   function close() {
     if (saving) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPayoutOpen(false);
     onClose();
   }
 
@@ -162,6 +165,19 @@ export function AccountSettingsSheet({
                 </View>
               </Pressable>
               <View style={styles.divider} />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Payout details"
+                onPress={() => {
+                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setPayoutOpen(true);
+                }}
+                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+              >
+                <Text style={styles.rowLabel}>Payout details</Text>
+                <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+              </Pressable>
+              <View style={styles.divider} />
               <View style={styles.row}>
                 <Text style={styles.rowLabel}>Currency</Text>
                 <Text style={styles.currencyValue}>GBP (£)</Text>
@@ -181,6 +197,7 @@ export function AccountSettingsSheet({
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+      <PayoutSetup visible={payoutOpen} userId={userId} onClose={() => setPayoutOpen(false)} />
     </Modal>
   );
 }

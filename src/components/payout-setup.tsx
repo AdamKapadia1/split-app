@@ -1,300 +1,376 @@
-import { BlurView } from 'expo-blur';
-import type { BlurViewProps } from 'expo-blur';
-import { Image } from 'expo-image';
-import { SymbolView } from 'expo-symbols';
-import { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { Easing, FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { Colors, Spacing } from '@/constants/theme';
+import { PayoutServiceError, payoutService, type PayoutMethodKind } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
-import { successHaptic, tickHaptic } from '@/lib/haptics';
-import { useHoldScale } from '@/lib/use-snap-scale';
-
-const BANKS = [
-  {
-    id: 'monzo',
-    name: 'Monzo',
-    hint: 'Personal account',
-    mask: '1234',
-    logo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/11/Monzo_2016_logo.svg/330px-Monzo_2016_logo.svg.png',
-  },
-  {
-    id: 'revolut',
-    name: 'Revolut',
-    hint: 'Personal account',
-    mask: '4821',
-    logo: 'https://cdn.simpleicons.org/revolut/0A0A0A',
-  },
-  {
-    id: 'barclays',
-    name: 'Barclays',
-    hint: 'Current account',
-    mask: '9090',
-    logo: 'https://cdn.simpleicons.org/barclays/00AEEF',
-  },
-  {
-    id: 'manual',
-    name: 'Manual Bank Transfer',
-    hint: 'Sort code and account',
-    mask: '2210',
-    logo: null,
-  },
-] as const;
-
-export type PayoutBank = (typeof BANKS)[number];
+import {
+  normalizeAccountNumber,
+  normalizeSortCode,
+  sanitizePaymentHandle,
+} from '@/utils/paymentLinks';
 
 type PayoutSetupProps = {
   visible: boolean;
-  blurTarget?: BlurViewProps['blurTarget'];
+  userId: string | null;
   onClose: () => void;
-  onConnected: (bank: PayoutBank) => void;
 };
 
-export function payoutRouteLabel(bank: Pick<PayoutBank, 'id' | 'name' | 'mask'>) {
-  if (bank.id === 'manual') {
-    return `Routing to your bank (•••• ${bank.mask})`;
+const METHODS: { id: PayoutMethodKind; label: string }[] = [
+  { id: 'monzo', label: 'Monzo' },
+  { id: 'revolut', label: 'Revolut' },
+  { id: 'paypal', label: 'PayPal' },
+  { id: 'bank', label: 'Bank' },
+];
+
+export function PayoutSetup({ visible, userId, onClose }: PayoutSetupProps) {
+  const [preferred, setPreferred] = useState<PayoutMethodKind | null>(null);
+  const [monzo, setMonzo] = useState('');
+  const [revolut, setRevolut] = useState('');
+  const [paypal, setPaypal] = useState('');
+  const [accountName, setAccountName] = useState('');
+  const [sortCode, setSortCode] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const openKey = visible && userId ? userId : null;
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  if (loadedKey !== openKey) {
+    setLoadedKey(openKey);
+    setLoading(openKey !== null);
+    setPreferred(null);
+    setMonzo('');
+    setRevolut('');
+    setPaypal('');
+    setAccountName('');
+    setSortCode('');
+    setAccountNumber('');
+    setSaving(false);
+    setMessage(null);
   }
 
-  return `Routing to ${bank.name} (•••• ${bank.mask})`;
-}
+  useEffect(() => {
+    if (!openKey) return;
+    let cancelled = false;
+    void payoutService.getMyPayoutMethod()
+      .then((method) => {
+        if (cancelled || !method) return;
+        setPreferred(method.preferredMethod);
+        setMonzo(method.monzoHandle ?? '');
+        setRevolut(method.revolutHandle ?? '');
+        setPaypal(method.paypalHandle ?? '');
+        setAccountName(method.bankAccountName ?? '');
+        setSortCode(method.bankSortCode ? formatTypingSortCode(method.bankSortCode) : '');
+        setAccountNumber(method.bankAccountNumber ?? '');
+      })
+      .catch(() => {
+        if (!cancelled) setMessage('Could not load your payout details.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-export function PayoutSetup({ visible, blurTarget, onClose, onConnected }: PayoutSetupProps) {
-  const insets = useSafeAreaInsets();
-  const [linkingId, setLinkingId] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    return () => {
+      cancelled = true;
+    };
+  }, [openKey]);
 
-  function linkBank(bank: PayoutBank) {
-    if (linkingId) {
-      return;
+  function clearDraft() {
+    setPreferred(null);
+    setMonzo('');
+    setRevolut('');
+    setPaypal('');
+    setAccountName('');
+    setSortCode('');
+    setAccountNumber('');
+    setSaving(false);
+    setMessage(null);
+  }
+
+  const monzoHandle = sanitizePaymentHandle('monzo', monzo);
+  const revolutHandle = sanitizePaymentHandle('revolut', revolut);
+  const paypalHandle = sanitizePaymentHandle('paypal', paypal);
+  const sortDigits = normalizeSortCode(sortCode);
+  const accountDigits = normalizeAccountNumber(accountNumber);
+  const name = accountName.trim();
+  const bankReady = name.length >= 2 && name.length <= 70 && sortDigits !== null && accountDigits !== null;
+  const bankStarted = name.length > 0 || sortCode.trim().length > 0 || accountNumber.trim().length > 0;
+  const handlesInvalid = (monzo.trim().length > 0 && !monzoHandle)
+    || (revolut.trim().length > 0 && !revolutHandle)
+    || (paypal.trim().length > 0 && !paypalHandle);
+  const saveBlocked = saving || loading || !userId || handlesInvalid || (bankStarted && !bankReady);
+
+  function close() {
+    if (saving) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onClose();
+  }
+
+  async function save() {
+    if (!userId || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const nextPreferred = preferred
+        ?? (monzoHandle ? 'monzo' : revolutHandle ? 'revolut' : paypalHandle ? 'paypal' : bankReady ? 'bank' : null);
+      if (!monzoHandle && !revolutHandle && !paypalHandle && !bankReady) {
+        await payoutService.deleteMyPayoutMethod();
+      } else {
+        await payoutService.upsertMyPayoutMethod({
+          preferredMethod: nextPreferred,
+          monzoHandle: monzo,
+          revolutHandle: revolut,
+          paypalHandle: paypal,
+          bankAccountName: bankReady ? name : null,
+          bankSortCode: bankReady ? sortDigits : null,
+          bankAccountNumber: bankReady ? accountDigits : null,
+        });
+      }
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onClose();
+    } catch (error) {
+      const text = error instanceof PayoutServiceError ? error.message : 'Could not save payout details.';
+      setMessage(text);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setSaving(false);
     }
+  }
 
-    tickHaptic();
-    setLinkingId(bank.id);
-    timer.current = setTimeout(() => {
-      successHaptic();
-      onConnected(bank);
-    }, 1500);
+  async function removeBankDetails() {
+    if (saving) return;
+    setAccountName('');
+    setSortCode('');
+    setAccountNumber('');
+    if (preferred === 'bank') setPreferred(monzoHandle ? 'monzo' : revolutHandle ? 'revolut' : paypalHandle ? 'paypal' : null);
+    setMessage('Bank details cleared. Save to update what other members can see.');
+    void Haptics.selectionAsync();
+  }
+
+  async function clearAll() {
+    if (!userId || saving) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      await payoutService.deleteMyPayoutMethod();
+      clearDraft();
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onClose();
+    } catch (error) {
+      const text = error instanceof PayoutServiceError ? error.message : 'Could not remove payout details.';
+      setMessage(text);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
-    <View
-      accessibilityViewIsModal={visible}
-      importantForAccessibility={visible ? 'yes' : 'no-hide-descendants'}
-      pointerEvents={visible ? 'auto' : 'none'}
-      style={styles.overlay}>
-      {visible ? (
-        <>
-          <Animated.View entering={FadeIn.duration(280)} exiting={FadeOut.duration(240)} style={styles.backdrop}>
-            <BlurView
-              blurMethod="dimezisBlurViewSdk31Plus"
-              blurTarget={blurTarget}
-              intensity={42}
-              tint="systemThickMaterialDark"
-              style={styles.fill}>
-              <Pressable
-                accessibilityLabel="Dismiss payout setup"
-                accessibilityRole="button"
-                disabled={linkingId !== null}
-                onPress={onClose}
-                style={styles.fill}
-              />
-            </BlurView>
-          </Animated.View>
-
-          <Animated.View
-            entering={SlideInDown.duration(460).easing(Easing.out(Easing.cubic))}
-            exiting={SlideOutDown.duration(320).easing(Easing.in(Easing.cubic))}
-            style={styles.sheet}>
-            <View style={[styles.sheetFill, { paddingBottom: Math.max(insets.bottom, Spacing.four) }]}>
-              <View style={styles.handle} />
-              <Text style={styles.title}>Where should the money go?</Text>
-              <View style={styles.list}>
-                {BANKS.map((bank) => (
-                  <BankCard
-                    key={bank.id}
-                    bank={bank}
-                    linking={linkingId === bank.id}
-                    dimmed={linkingId !== null && linkingId !== bank.id}
-                    onPress={() => linkBank(bank)}
-                  />
-                ))}
-              </View>
-            </View>
-          </Animated.View>
-        </>
-      ) : null}
-    </View>
-  );
-}
-
-function BankLogo({ logo }: { logo: string | null }) {
-  return (
-    <View style={styles.logoWell}>
-      {logo ? (
-        <Image accessible={false} contentFit="contain" source={{ uri: logo }} style={styles.logo} />
-      ) : (
-        <SymbolView
-          name={{ ios: 'building.columns.fill', android: 'account_balance', web: 'account_balance' }}
-          size={20}
-          tintColor={theme.colors.accentText}
-        />
-      )}
-    </View>
-  );
-}
-
-function BankCard({
-  bank,
-  linking,
-  dimmed,
-  onPress,
-}: {
-  bank: PayoutBank;
-  linking: boolean;
-  dimmed: boolean;
-  onPress: () => void;
-}) {
-  const scaleStyle = useHoldScale(linking);
-
-  return (
-    <Animated.View style={[scaleStyle, dimmed && styles.dimmed]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={bank.name}
-        accessibilityState={{ busy: linking, disabled: dimmed }}
-        disabled={dimmed || linking}
-        onPress={onPress}>
-        <View style={styles.card}>
-          <View style={[styles.cardBody, linking && styles.cardBodyDim]}>
-            <BankLogo logo={bank.logo} />
-            <View style={styles.copy}>
-              <Text style={styles.name} numberOfLines={1}>
-                {bank.name}
-              </Text>
-              <Text style={styles.hint} numberOfLines={1}>
-                {bank.hint}
-              </Text>
-            </View>
+    <Modal visible={visible} animationType="slide" transparent statusBarTranslucent onRequestClose={close}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss payout details" disabled={saving} onPress={close} style={StyleSheet.absoluteFill} />
+        <View style={styles.sheet}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Payout details</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close payout details" disabled={saving} hitSlop={10} onPress={close} style={styles.close}>
+              <Ionicons name="close" size={16} color={theme.colors.textSecondary} />
+            </Pressable>
           </View>
-          {linking ? (
-            <ActivityIndicator color={theme.colors.textPrimary} />
-          ) : (
-            <SymbolView
-              name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-              size={16}
-              tintColor={Colors.textSecondary}
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+            {loading ? <ActivityIndicator color={theme.colors.accent} /> : null}
+            <Text style={styles.privacy}>Your payout details are only visible to people you share a group or split with.</Text>
+            <Text style={styles.label}>Preferred method</Text>
+            <View style={styles.chips}>
+              {METHODS.map((method) => {
+                const selected = preferred === method.id;
+                return (
+                  <Pressable
+                    key={method.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={method.label}
+                    accessibilityState={{ selected }}
+                    onPress={() => setPreferred(method.id)}
+                    style={[styles.chip, selected ? styles.chipOn : styles.chipOff]}
+                  >
+                    <Text style={[styles.chipText, selected ? styles.chipTextOn : styles.chipTextOff]}>{method.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <HandleField
+              label="Monzo.me"
+              value={monzo}
+              placeholder="yourname"
+              error={monzo.trim().length > 0 && !monzoHandle ? 'Use 2–64 letters, numbers, dots, underscores, or hyphens.' : null}
+              preview={monzoHandle ? `https://monzo.me/${monzoHandle}` : null}
+              onChangeText={setMonzo}
             />
-          )}
+            <HandleField
+              label="Revolut.me"
+              value={revolut}
+              placeholder="yourname"
+              error={revolut.trim().length > 0 && !revolutHandle ? 'Use 2–64 letters, numbers, dots, underscores, or hyphens.' : null}
+              preview={revolutHandle ? `https://revolut.me/${revolutHandle}` : null}
+              onChangeText={setRevolut}
+            />
+            <HandleField
+              label="PayPal.me"
+              value={paypal}
+              placeholder="yourname"
+              error={paypal.trim().length > 0 && !paypalHandle ? 'PayPal handles are letters and numbers only.' : null}
+              preview={paypalHandle ? `https://paypal.me/${paypalHandle}` : null}
+              onChangeText={setPaypal}
+            />
+
+            <Text style={styles.label}>UK bank details</Text>
+            <TextInput accessibilityLabel="Account name" autoCorrect={false} placeholder="Account name" placeholderTextColor={theme.colors.textMuted} value={accountName} onChangeText={setAccountName} style={styles.input} />
+            {accountName.trim().length > 0 && (name.length < 2 || name.length > 70) ? <Text style={styles.error}>Account name must be 2 to 70 characters.</Text> : null}
+            <TextInput
+              accessibilityLabel="Sort code"
+              keyboardType="number-pad"
+              placeholder="Sort code"
+              placeholderTextColor={theme.colors.textMuted}
+              value={sortCode}
+              onChangeText={(value) => setSortCode(formatTypingSortCode(value))}
+              style={styles.input}
+            />
+            {sortCode.length > 0 && !sortDigits ? <Text style={styles.error}>Enter a 6-digit sort code.</Text> : null}
+            <TextInput
+              accessibilityLabel="Account number"
+              keyboardType="number-pad"
+              placeholder="Account number"
+              placeholderTextColor={theme.colors.textMuted}
+              value={accountNumber}
+              onChangeText={(value) => setAccountNumber(value.replace(/\D/g, '').slice(0, 8))}
+              style={styles.input}
+            />
+            {accountNumber.length > 0 && !accountDigits ? <Text style={styles.error}>Enter an 8-digit account number.</Text> : null}
+            {bankStarted && !bankReady ? <Text style={styles.error}>Name, sort code, and account number must be saved together.</Text> : null}
+
+            {message ? <Text style={styles.message}>{message}</Text> : null}
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save payout details"
+              disabled={saveBlocked}
+              onPress={() => { void save(); }}
+              style={({ pressed }) => [styles.save, pressed && !saving && styles.savePressed, saveBlocked && styles.disabled]}
+            >
+              {saving ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.saveText}>Save</Text>}
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Remove bank details" disabled={saving} onPress={() => { void removeBankDetails(); }} style={styles.quiet}>
+              <Text style={styles.quietText}>Remove Bank Details</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Clear payout details" disabled={saving} onPress={() => { void clearAll(); }} style={styles.quiet}>
+              <Text style={styles.dangerText}>Clear</Text>
+            </Pressable>
+          </ScrollView>
         </View>
-      </Pressable>
-    </Animated.View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
+}
+
+function HandleField({
+  label,
+  value,
+  placeholder,
+  error,
+  preview,
+  onChangeText,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  error: string | null;
+  preview: string | null;
+  onChangeText: (value: string) => void;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        accessibilityLabel={label}
+        autoCapitalize="none"
+        autoCorrect={false}
+        placeholder={placeholder}
+        placeholderTextColor={theme.colors.textMuted}
+        value={value}
+        onChangeText={onChangeText}
+        style={styles.input}
+      />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {preview ? <Text style={styles.preview}>{preview}</Text> : null}
+    </View>
+  );
+}
+
+function formatTypingSortCode(raw: string) {
+  const digits = raw.replace(/\D/g, '').slice(0, 6);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    zIndex: 30,
-    justifyContent: 'flex-end',
-  },
-  fill: {
-    flex: 1,
-  },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-  },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: theme.colors.scrim },
   sheet: {
+    maxHeight: '92%',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    overflow: 'hidden',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.borderStrong,
-  },
-  sheetFill: {
     backgroundColor: theme.colors.surface,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
-    gap: Spacing.four,
+    paddingTop: 18,
+    paddingBottom: 24,
   },
-  handle: {
-    alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: theme.colors.borderStrong,
-  },
-  title: {
-    color: Colors.text,
-    fontSize: 18,
-    lineHeight: 26,
-    fontWeight: '700',
-    letterSpacing: 1.8,
-  },
-  list: {
-    gap: Spacing.two,
-  },
-  card: {
-    minHeight: 76,
-    borderRadius: 18,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 18,
-    flexDirection: 'row',
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
+  title: { fontSize: 20, lineHeight: 26, fontWeight: '700', color: theme.colors.textPrimary },
+  close: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
-    gap: Spacing.three,
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  body: { paddingHorizontal: 20, paddingTop: 16, gap: 10 },
+  privacy: { fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  label: { marginTop: 6, fontSize: 12, lineHeight: 16, fontWeight: '600', color: theme.colors.textMuted },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { height: 34, paddingHorizontal: 12, borderRadius: theme.radius.full, alignItems: 'center', justifyContent: 'center' },
+  chipOn: { backgroundColor: theme.colors.accentSubtle, borderWidth: 1, borderColor: theme.colors.accentBorder },
+  chipOff: { backgroundColor: theme.colors.surfaceElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border },
+  chipText: { fontSize: 13 },
+  chipTextOn: { fontWeight: '600', color: theme.colors.accent },
+  chipTextOff: { fontWeight: '500', color: theme.colors.textSecondary },
+  field: { gap: 6 },
+  input: {
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 14,
     backgroundColor: theme.colors.surfaceElevated,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
+    color: theme.colors.textPrimary,
+    fontSize: 15,
   },
-  cardBody: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
-  },
-  cardBodyDim: {
-    opacity: 0.4,
-  },
-  logoWell: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.textPrimary,
+  error: { fontSize: 12, lineHeight: 16, color: theme.colors.danger },
+  preview: { fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
+  message: { fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  save: {
+    marginTop: 8,
+    minHeight: 48,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    backgroundColor: theme.colors.accent,
   },
-  logo: {
-    width: 28,
-    height: 28,
-  },
-  copy: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  name: {
-    color: Colors.text,
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  hint: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    letterSpacing: -0.1,
-  },
-  dimmed: {
-    opacity: 0.4,
-  },
+  savePressed: { backgroundColor: theme.colors.accentPressed },
+  saveText: { fontSize: 15, fontWeight: '700', color: theme.colors.accentText },
+  quiet: { minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  quietText: { fontSize: 14, fontWeight: '600', color: theme.colors.textSecondary },
+  dangerText: { fontSize: 14, fontWeight: '600', color: theme.colors.danger },
+  disabled: { opacity: 0.55 },
 });

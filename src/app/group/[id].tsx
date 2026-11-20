@@ -2,17 +2,18 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, LayoutAnimation, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
+import { ActivityIndicator, Alert, LayoutAnimation, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddMemberModal } from '@/components/AddMemberModal';
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
+import { PaymentSheetModal, type MarkPaidResult } from '@/components/PaymentSheetModal';
 import { StatusPill } from '@/components/StatusPill';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { compareGroupMembers, GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
-import { createIdempotencyKey, SettlementServiceError, settlementService } from '@/services/SettlementService';
+import { createIdempotencyKey, SettlementServiceError, settlementService, type GroupLedgerData } from '@/services/SettlementService';
 import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatSmartDate } from '@/utils/formatSmartDate';
@@ -68,13 +69,31 @@ function displayName(members: GroupMemberProfile[], userId: string) {
   return memberById(members, userId)?.fullName ?? 'Member';
 }
 
-function paymentLinkFor(members: GroupMemberProfile[], userId: string) {
-  const link = memberById(members, userId)?.paymentLink?.trim();
-  return link ? link : null;
-}
-
 function transferKey(transfer: SimplifiedTransfer) {
   return `${transfer.fromUserId}->${transfer.toUserId}:${transfer.amountMinor}`;
+}
+
+function transferStillOpen(data: GroupLedgerData, memberIds: readonly string[], transfer: SimplifiedTransfer) {
+  const balances = calculateNetBalances(
+    data.receipts.map((receipt) => ({ id: receipt.id, paid_by: receipt.paid_by ?? null })),
+    data.splits.map((split) => ({
+      receipt_id: split.receipt_id,
+      user_id: split.user_id,
+      amount_minor: split.amount_minor,
+    })),
+    data.settlements.map((settlement) => ({
+      from_user_id: settlement.from_user_id,
+      to_user_id: settlement.to_user_id,
+      amount_minor: settlement.amount_minor,
+      voided_at: settlement.voided_at,
+    })),
+    memberIds,
+  );
+  return simplifyDebts(balances).some((row) => (
+    row.fromUserId === transfer.fromUserId
+    && row.toUserId === transfer.toUserId
+    && row.amountMinor === transfer.amountMinor
+  ));
 }
 
 function settlementWhen(iso: string) {
@@ -111,6 +130,7 @@ export default function GroupLedgerScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [groupAction, setGroupAction] = useState<'delete' | 'leave' | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [payTarget, setPayTarget] = useState<SimplifiedTransfer | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const loadedFor = useRef<string | null>(null);
@@ -347,36 +367,29 @@ export default function GroupLedgerScreen() {
     ]);
   }
 
-  function markPaid(transfer: SimplifiedTransfer) {
+  function openPayment(transfer: SimplifiedTransfer) {
     if (!groupId || savingKey) return;
     const key = transferKey(transfer);
-    const existingKey = idempotencyKeys.current.get(key);
-    const idempotencyKey = existingKey ?? createIdempotencyKey();
-    if (!existingKey) idempotencyKeys.current.set(key, idempotencyKey);
-
-    Alert.alert('Mark as paid', `Mark ${formatPence(transfer.amountMinor)} as paid?`, [
-      {
-        text: 'Cancel',
-        style: 'cancel',
-        onPress: () => {
-          if (savingKey !== key) idempotencyKeys.current.delete(key);
-        },
-      },
-      {
-        text: 'Mark as Paid',
-        onPress: () => {
-          void confirmPaid(transfer, idempotencyKey);
-        },
-      },
-    ]);
+    if (!idempotencyKeys.current.has(key)) idempotencyKeys.current.set(key, createIdempotencyKey());
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPayTarget(transfer);
   }
 
-  async function confirmPaid(transfer: SimplifiedTransfer, idempotencyKey: string) {
-    if (!groupId) return;
+  async function confirmSheetPaid(): Promise<MarkPaidResult> {
+    if (!groupId || !payTarget) return 'unavailable';
+    const transfer = payTarget;
     const key = transferKey(transfer);
+    const idempotencyKey = idempotencyKeys.current.get(key) ?? createIdempotencyKey();
     setSavingKey(key);
 
     try {
+      const fresh = await settlementService.getGroupLedgerData(groupId);
+      if (!transferStillOpen(fresh, memberIds, transfer)) {
+        idempotencyKeys.current.delete(key);
+        await loadLedger('refresh');
+        return 'already_settled';
+      }
+
       await settlementService.recordSettlement({
         groupId,
         fromUserId: transfer.fromUserId,
@@ -388,22 +401,14 @@ export default function GroupLedgerScreen() {
       idempotencyKeys.current.delete(key);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await loadLedger('refresh');
+      return 'paid';
     } catch (error) {
-      console.error('Failed to record settlement:', error);
+      console.error('Failed to record settlement:', error instanceof SettlementServiceError ? error.code : 'SAVE_FAILED');
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message = error instanceof SettlementServiceError ? error.message : 'Try again in a moment.';
-      Alert.alert('Could not mark as paid', message);
+      throw error;
     } finally {
       setSavingKey(null);
     }
-  }
-
-  function openPayLink(link: string) {
-    const target = /^[a-z][a-z0-9+.-]*:/i.test(link) ? link : `https://${link}`;
-    void Linking.openURL(target).catch((error: unknown) => {
-      console.error('Failed to open payment link:', error);
-      Alert.alert('Could not open payment link', 'Check the link and try again.');
-    });
   }
 
   function canVoid(settlement: Settlement) {
@@ -793,9 +798,9 @@ export default function GroupLedgerScreen() {
               <View style={styles.card}>
                 {transfers.map((transfer, index) => {
                   const key = transferKey(transfer);
-                  const link = paymentLinkFor(members, transfer.toUserId);
                   const saving = savingKey === key;
                   const fromName = displayName(members, transfer.fromUserId);
+                  const amountLabel = formatPence(transfer.amountMinor);
                   return (
                     <View key={key}>
                       {index > 0 ? <View style={styles.transferDivider} /> : null}
@@ -805,36 +810,22 @@ export default function GroupLedgerScreen() {
                           <Text style={styles.transferTitle} numberOfLines={2}>
                             {fromName} owes {displayName(members, transfer.toUserId)}
                           </Text>
-                          <Text style={styles.transferAmount}>{formatPence(transfer.amountMinor)}</Text>
+                          <Text style={styles.transferAmount}>{amountLabel}</Text>
                         </View>
-                        <View style={styles.transferActions}>
-                          {link ? (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel={`Pay ${displayName(members, transfer.toUserId)}`}
-                              onPress={() => {
-                                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                openPayLink(link);
-                              }}
-                              style={({ pressed }) => [styles.payPill, pressed && styles.payPillPressed]}
-                            >
-                              <Text style={styles.payText}>Pay</Text>
-                            </Pressable>
-                          ) : null}
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Mark ${formatPence(transfer.amountMinor)} as paid`}
-                            disabled={saving || savingKey !== null}
-                            onPress={() => markPaid(transfer)}
-                            style={({ pressed }) => [styles.markPaid, (saving || pressed) && styles.markPaidBusy]}
-                          >
-                            {saving ? (
-                              <ActivityIndicator size="small" color={theme.colors.accent} />
-                            ) : (
-                              <Text style={styles.markPaidText}>Mark paid</Text>
-                            )}
-                          </Pressable>
-                        </View>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Pay ${amountLabel} to ${displayName(members, transfer.toUserId)}`}
+                          accessibilityState={{ disabled: savingKey !== null, busy: saving }}
+                          disabled={savingKey !== null}
+                          onPress={() => openPayment(transfer)}
+                          style={({ pressed }) => [styles.payPill, pressed && styles.payPillPressed, saving && styles.markPaidBusy]}
+                        >
+                          {saving ? (
+                            <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+                          ) : (
+                            <Text style={styles.payText}>Pay {amountLabel}</Text>
+                          )}
+                        </Pressable>
                       </View>
                     </View>
                   );
@@ -1002,6 +993,16 @@ export default function GroupLedgerScreen() {
           </View>
         </ScrollView>
       )}
+
+      <PaymentSheetModal
+        visible={payTarget !== null}
+        hostUserId={payTarget?.toUserId ?? null}
+        hostName={payTarget ? displayName(members, payTarget.toUserId) : ''}
+        amountPence={payTarget?.amountMinor ?? 0}
+        reference={groupName}
+        onClose={() => setPayTarget(null)}
+        onMarkPaid={confirmSheetPaid}
+      />
 
       {groupId ? (
         <AddMemberModal
