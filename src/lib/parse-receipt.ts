@@ -1,8 +1,4 @@
-import { Platform } from 'react-native';
-
-const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
-const ANTHROPIC_VERSION = '2026-10-21';
-const MODEL = 'claude-sonnet-5-5';
+import { VisionService } from '@/services/VisionService';
 
 export type ReceiptItem = {
   quantity: number;
@@ -20,80 +16,25 @@ export type ParsedReceipt = {
   currency: string;
 };
 
-type AnthropicMessage = {
-  content?: { type: string; text?: string }[];
-  error?: { message?: string };
-};
-
 export async function parseReceiptImage(image: string): Promise<ParsedReceipt> {
-  const apiKey = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('Set EXPO_PUBLIC_ANTHROPIC_API_KEY in a .env file, then restart Expo.');
+  if (/^(file|content|ph|assets-library):/i.test(image)) {
+    throw new Error("Couldn't read this photo.");
   }
 
-  const data = normalizeImage(image).replace(/^data:image\/[a-z]+;base64,/, '');
-  const response = await fetch(ANTHROPIC_MESSAGES_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': ANTHROPIC_VERSION,
-      Authorization: `Bearer ${apiKey}`,
-      'x-api-key': apiKey,
-      ...(Platform.OS === 'web' ? { 'anthropic-dangerous-direct-browser-access': 'true' } : {}),
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1024,
-      system:
-        'You extract structured data from receipt photos. Reply with JSON only, with no markdown.',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: 'image/jpeg',
-                data,
-              },
-            },
-            {
-              type: 'text',
-              text: [
-                'Read this receipt and return JSON with this shape:',
-                '{',
-                '  "restaurant_name": string,',
-                '  "website": string,',
-                '  "items": [{ "quantity": number, "name": string, "amount": number }],',
-                '  "subtotal": number,',
-                '  "serviceCharge": number,',
-                '  "total": number,',
-                '  "currency": string',
-                '}',
-                'amount is the line total, not the unit price. quantity is how many of that item were bought.',
-                'Use an ISO currency code. Use 0 when service charge is not printed.',
-                'If subtotal or total are missing, calculate them from the line items.',
-                'CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items.',
-              ].join('\n'),
-            },
-          ],
-        },
-      ],
-    }),
-  });
-
-  const body = (await response.json().catch(() => null)) as AnthropicMessage | null;
-  if (!response.ok) {
-    throw new Error(body?.error?.message ?? `Couldn't read this receipt (${response.status}).`);
-  }
-
-  const text = body?.content?.flatMap((block) => (block.type === 'text' && block.text ? [block.text] : [])).join('\n');
-  if (!text) {
-    throw new Error("Couldn't read this receipt.");
-  }
-
-  return parseReceiptJson(text);
+  const scanned = await VisionService.analyzeReceipt(image);
+  return {
+    restaurant_name: scanned.merchant_name,
+    website: scanned.website,
+    items: scanned.items.map((item) => ({
+      quantity: 1,
+      name: item.name,
+      amount: item.price,
+    })),
+    subtotal: scanned.subtotal,
+    serviceCharge: 0,
+    total: scanned.total,
+    currency: 'GBP',
+  };
 }
 
 export function parseReceiptParam(value: string | undefined): ParsedReceipt | null {
@@ -106,14 +47,6 @@ export function parseReceiptParam(value: string | undefined): ParsedReceipt | nu
   } catch {
     return null;
   }
-}
-
-function normalizeImage(image: string) {
-  if (/^(file|content|ph|assets-library):/i.test(image)) {
-    throw new Error("Couldn't read this photo.");
-  }
-
-  return image.replace(/\s/g, '');
 }
 
 function parseReceiptJson(text: string): ParsedReceipt {

@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase';
 
 import { theme } from '@/theme/theme';
 import { receiptService } from '../../services/ReceiptService';
-import { VisionService } from '../../services/VisionService';
+import { ReceiptScanError, VisionService } from '../../services/VisionService';
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -79,7 +79,8 @@ export default function ScannerScreen() {
     } catch (error) {
       console.error(error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Failed to parse receipt', 'Could not read the line items. Please try again.');
+      const message = error instanceof ReceiptScanError ? error.message : 'Could not read the line items. Please try again.';
+      Alert.alert('Failed to parse receipt', message);
     } finally {
       setPendingPhotoBase64(null);
       setIsCapturing(false);

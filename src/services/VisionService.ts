@@ -1,66 +1,203 @@
-export const VisionService = {
-  async analyzeReceipt(base64: string) {
-    try {
-      console.log("🚀 Sending receipt to Anthropic Vision API...");
+import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/supabase-js';
 
-      const cleanBase64 = base64.replace(/^data:image\/(jpeg|png|jpg);base64,/, '');
+import { supabase } from '@/lib/supabase';
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY as string,
-          'anthropic-version': '2026-10-21',
-          'content-type': 'application/json',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-5-5',
-          max_tokens: 1000,
-          thinking: { type: 'between_tools' },
-          system: "You are a raw data extraction API. Return ONLY a valid JSON object. Do not include markdown blocks. All prices and totals must be raw floats (e.g., 3.80) with NO currency symbols. CRITICAL: Read the receipt strictly from top to bottom, line by line. You MUST preserve the exact original layout order of the items. merchant_name: look at the top logo, header, address block, or footer for the business name. Clean it into a readable display name (for example, convert \"MOLLIES MOTEL & DINER LTD #04\" to \"Mollie's\", or \"TESCO STORES 2314\" to \"Tesco\"). Return null only when no business name is visible at all. Schema: { \"merchant_name\": string | null, \"website\": string | null, \"items\": [{ \"name\": \"string\", \"price\": number }], \"subtotal\": number, \"tax\": number, \"total\": number }",
-          messages: [{
-            role: 'user',
-            content: [{
-              type: 'image',
-              source: { 
-                type: 'base64', 
-                media_type: 'image/jpeg', 
-                data: cleanBase64 
-              }
-            }]
-          }]
-        })
-      });
+const MAX_IMAGE_BASE64_CHARS = 6_800_000;
+const SCAN_TIMEOUT_MS = 35_000;
 
-      const responseText = await response.text();
-      const data = JSON.parse(responseText);
-
-      if (!response.ok || data.error) {
-        throw new Error(data.error?.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const rawText = data.content?.[0]?.text || JSON.stringify(data);
-      
-      const startIndex = rawText.indexOf('{');
-      const endIndex = rawText.lastIndexOf('}');
-
-      if (startIndex === -1 || endIndex === -1) {
-        throw new Error("No JSON object found in the LLM response.");
-      }
-
-      const cleanText = rawText.substring(startIndex, endIndex + 1);
-      const parsed = JSON.parse(cleanText);
-      return {
-        ...parsed,
-        merchant_name: readMerchantName(parsed),
-      };
-
-    } catch (error) {
-      console.error("🚨 Vision API Error:", error);
-      throw error;
-    }
-  }
+export type ScannedReceiptItem = {
+  name: string;
+  price: number;
 };
+
+export type ScannedReceipt = {
+  merchant_name: string | null;
+  website: string | null;
+  items: ScannedReceiptItem[];
+  subtotal: number;
+  tax: number;
+  total: number;
+};
+
+export type ReceiptScanErrorCode =
+  | 'RATE_LIMITED'
+  | 'IMAGE_TOO_LARGE'
+  | 'UNAUTHORIZED'
+  | 'TIMEOUT'
+  | 'UPSTREAM_ERROR'
+  | 'INVALID_PAYLOAD'
+  | 'CONFIG_ERROR';
+
+const FILE_URI = /^(file|content|ph|assets-library):/i;
+
+export class ReceiptScanError extends Error {
+  readonly code: ReceiptScanErrorCode;
+  readonly retryAfterSeconds: number | null;
+
+  constructor(code: ReceiptScanErrorCode, message: string, retryAfterSeconds: number | null = null) {
+    super(message);
+    this.name = 'ReceiptScanError';
+    this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+type ScanPayload = {
+  error?: unknown;
+  code?: unknown;
+  retryAfterSeconds?: unknown;
+  receipt?: unknown;
+};
+
+export const VisionService = {
+  async analyzeReceipt(base64: string): Promise<ScannedReceipt> {
+    if (!supabase) {
+      throw new ReceiptScanError('CONFIG_ERROR', 'Receipt scanning is temporarily unavailable.');
+    }
+
+    const image = prepareImage(base64);
+    const { data, error, response } = await supabase.functions.invoke<ScanPayload>('scan-receipt', {
+      body: {
+        imageBase64: image.imageBase64,
+        mediaType: image.mediaType,
+      },
+      timeout: SCAN_TIMEOUT_MS,
+    });
+
+    if (error) {
+      throw await scanError(error, response);
+    }
+
+    const receipt = normalizeReceipt(data?.receipt);
+    if (!receipt) {
+      throw new ReceiptScanError('UPSTREAM_ERROR', 'Could not read the line items. Please try again.');
+    }
+    return receipt;
+  },
+};
+
+export function formatScanLimitMessage(retryAfterSeconds: number): string {
+  const seconds = Math.max(0, Math.round(retryAfterSeconds));
+  if (seconds <= 1) {
+    return "You've reached your scan limit. Please try again in a moment.";
+  }
+  if (seconds < 60) {
+    return `You've reached your scan limit. Please try again in ${seconds} seconds.`;
+  }
+
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) {
+    const unit = minutes === 1 ? 'minute' : 'minutes';
+    return `You've reached your scan limit. Please try again in ${minutes} ${unit}.`;
+  }
+
+  const hours = Math.ceil(minutes / 60);
+  const unit = hours === 1 ? 'hour' : 'hours';
+  return `You've reached your scan limit. Please try again in ${hours} ${unit}.`;
+}
+
+function prepareImage(image: string): { imageBase64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/webp' } {
+  const trimmed = image.trim();
+  if (FILE_URI.test(trimmed)) {
+    throw new ReceiptScanError('INVALID_PAYLOAD', "Couldn't read this photo. Try retaking it.");
+  }
+
+  const dataUrl = trimmed.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([\s\S]+)$/i);
+  let mediaType: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg';
+  let payload = trimmed;
+  if (dataUrl?.[1] && dataUrl[2]) {
+    const type = dataUrl[1].toLowerCase();
+    mediaType = type === 'image/png' ? 'image/png' : type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+    payload = dataUrl[2];
+  } else {
+    payload = trimmed.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
+  }
+
+  const imageBase64 = payload.replace(/\s/g, '');
+  if (!imageBase64) {
+    throw new ReceiptScanError('INVALID_PAYLOAD', "Couldn't read this photo. Try retaking it.");
+  }
+  if (imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
+    throw new ReceiptScanError('IMAGE_TOO_LARGE', 'This image is too large to scan. Try retaking the photo.');
+  }
+  return { imageBase64, mediaType };
+}
+
+async function scanError(error: unknown, response: Response | undefined): Promise<ReceiptScanError> {
+  if (error instanceof FunctionsFetchError || error instanceof FunctionsRelayError) {
+    return new ReceiptScanError('TIMEOUT', 'Receipt scan timed out. Please try again.');
+  }
+
+  const httpResponse = response ?? (error instanceof FunctionsHttpError ? asResponse(error.context) : undefined);
+  const status = httpResponse?.status ?? 0;
+  const body = await readBody(httpResponse);
+  const code = typeof body?.code === 'string' ? body.code : '';
+
+  if (status === 429 || code === 'RATE_LIMITED') {
+    const retryAfterSeconds = nonNegativeNumber(body?.retryAfterSeconds);
+    return new ReceiptScanError('RATE_LIMITED', formatScanLimitMessage(retryAfterSeconds), retryAfterSeconds);
+  }
+  if (status === 413 || code === 'IMAGE_TOO_LARGE') {
+    return new ReceiptScanError('IMAGE_TOO_LARGE', 'This image is too large to scan. Try retaking the photo.');
+  }
+  if (status === 401 || code === 'UNAUTHORIZED') {
+    return new ReceiptScanError('UNAUTHORIZED', 'Your session expired. Please sign in again.');
+  }
+  if (status === 504 || code === 'UPSTREAM_TIMEOUT') {
+    return new ReceiptScanError('TIMEOUT', 'Receipt scan timed out. Please try again.');
+  }
+  if (status === 400 || code === 'INVALID_PAYLOAD') {
+    return new ReceiptScanError('INVALID_PAYLOAD', "Couldn't read this photo. Try retaking it.");
+  }
+  return new ReceiptScanError('UPSTREAM_ERROR', 'Could not read the line items. Please try again.');
+}
+
+function asResponse(value: unknown): Response | undefined {
+  return typeof Response !== 'undefined' && value instanceof Response ? value : undefined;
+}
+
+async function readBody(response: Response | undefined): Promise<ScanPayload | null> {
+  if (!response) return null;
+  try {
+    const body = (await response.json()) as unknown;
+    return body && typeof body === 'object' ? (body as ScanPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeReceipt(value: unknown): ScannedReceipt | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as {
+    merchant_name?: unknown;
+    restaurantName?: unknown;
+    restaurant_name?: unknown;
+    website?: unknown;
+    items?: unknown;
+    subtotal?: unknown;
+    tax?: unknown;
+    total?: unknown;
+  };
+
+  const items = Array.isArray(record.items)
+    ? record.items.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const row = item as { name?: unknown; price?: unknown };
+        const name = typeof row.name === 'string' ? row.name.trim() : '';
+        if (!name) return [];
+        return [{ name, price: asMoney(row.price) }];
+      })
+    : [];
+
+  return {
+    merchant_name: readMerchantName(record),
+    website: typeof record.website === 'string' && record.website.trim() ? record.website.trim() : null,
+    items,
+    subtotal: asMoney(record.subtotal),
+    tax: asMoney(record.tax),
+    total: asMoney(record.total),
+  };
+}
 
 function readMerchantName(parsed: { merchant_name?: unknown; restaurantName?: unknown; restaurant_name?: unknown }) {
   const raw = parsed.merchant_name ?? parsed.restaurantName ?? parsed.restaurant_name;
@@ -68,4 +205,16 @@ function readMerchantName(parsed: { merchant_name?: unknown; restaurantName?: un
   const name = raw.trim();
   if (!name || name.toLowerCase() === 'null') return null;
   return name;
+}
+
+function asMoney(value: unknown) {
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round(number * 100) / 100;
+}
+
+function nonNegativeNumber(value: unknown) {
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, number);
 }

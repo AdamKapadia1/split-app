@@ -1,0 +1,7 @@
+# The function verifies the user JWT itself via auth.getUser.
+# Gateway verification is off so OPTIONS preflight reaches the handler
+# and rejected tokens return the function's structured 401 body.
+project_id = "split-app"
+
+[functions.scan-receipt]
+verify_jwt = false
