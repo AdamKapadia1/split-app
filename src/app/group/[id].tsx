@@ -1,17 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Linking, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, type ScrollViewInstance } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddMemberModal } from '@/components/AddMemberModal';
+import { AvatarBadge } from '@/components/AvatarBadge';
+import { MoneyText } from '@/components/MoneyText';
+import { StatusPill } from '@/components/StatusPill';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { compareGroupMembers, groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { createIdempotencyKey, SettlementServiceError, settlementService } from '@/services/SettlementService';
+import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
-import { formatPence } from '@/utils/money';
+import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
 import { calculateNetBalances, simplifyDebts, type SimplifiedTransfer } from '@/utils/settlements';
 
@@ -20,7 +24,6 @@ type GroupReceipt = Receipt & {
 };
 
 const GROUP_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AVATAR_COLORS = ['#38BDF8', '#C084FC', '#22D3EE', '#F472B6', '#A3E635', '#FBBF24', '#FB7185'];
 const VISIBLE_AVATARS = 5;
 
 function firstParam(value: string | string[] | undefined) {
@@ -41,25 +44,13 @@ function receiptName(receipt: GroupReceipt) {
   return `Receipt from ${date}`;
 }
 
-function accentFor(userId: string) {
-  let hash = 0;
-  for (const char of userId) hash = (hash + char.charCodeAt(0)) % AVATAR_COLORS.length;
-  return AVATAR_COLORS[hash] ?? AVATAR_COLORS[0];
+function receiptWhen(iso: string) {
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function initials(member: GroupMemberProfile) {
-  const source = member.fullName.trim() || member.email;
-  const parts = source.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) return `${parts[0]?.[0] ?? ''}${parts[1]?.[0] ?? ''}`.toUpperCase();
-  return source.slice(0, 2).toUpperCase();
-}
-
-function MemberAvatar({ member, size = 34 }: { member: GroupMemberProfile; size?: number }) {
-  return (
-    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: `${accentFor(member.userId)}22` }]}>
-      <Text style={[styles.avatarText, { color: accentFor(member.userId), fontSize: size > 34 ? 14 : 12 }]}>{initials(member)}</Text>
-    </View>
-  );
+function monogram(name: string) {
+  const letter = name.trim().charAt(0).toUpperCase();
+  return letter || '?';
 }
 
 function memberById(members: GroupMemberProfile[], userId: string) {
@@ -79,26 +70,10 @@ function transferKey(transfer: SimplifiedTransfer) {
   return `${transfer.fromUserId}->${transfer.toUserId}:${transfer.amountMinor}`;
 }
 
-function positionCopy(balanceMinor: number) {
-  if (balanceMinor > 0) return { text: `You are owed ${formatPence(balanceMinor)}`, color: '#4ade80' };
-  if (balanceMinor < 0) return { text: `You owe ${formatPence(Math.abs(balanceMinor))}`, color: '#fbbf24' };
-  return { text: 'All settled up', color: '#94a3b8' };
-}
-
 function settlementWhen(iso: string) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
-
-function PersonAvatar({ userId, members, size = 32 }: { userId: string; members: GroupMemberProfile[]; size?: number }) {
-  const member = memberById(members, userId);
-  if (member) return <MemberAvatar member={member} size={size} />;
-  return (
-    <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: '#1e293b' }]}>
-      <Text style={[styles.avatarText, { color: '#94a3b8', fontSize: 12 }]}>?</Text>
-    </View>
-  );
 }
 
 export default function GroupLedgerScreen() {
@@ -108,6 +83,8 @@ export default function GroupLedgerScreen() {
   const groupId = firstParam(idParam);
   const isValidId = groupId !== null && GROUP_ID.test(groupId);
   const viewerId = session?.user.id ?? null;
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const balancesOffset = useRef(0);
 
   const [groupName, setGroupName] = useState('Group');
   const [createdBy, setCreatedBy] = useState<string | null>(null);
@@ -202,6 +179,8 @@ export default function GroupLedgerScreen() {
   );
 
   const spent = receipts.reduce((sum, receipt) => sum + Number(receipt.total_amount || 0), 0);
+  const totalSpendMinor = toMinorUnits(spent);
+  const splitReceiptIds = useMemo(() => new Set(splits.map((split) => split.receipt_id)), [splits]);
   const memberIds = useMemo(() => {
     const ids = members.map((member) => member.userId);
     if (viewerId && !ids.includes(viewerId)) ids.push(viewerId);
@@ -231,7 +210,6 @@ export default function GroupLedgerScreen() {
   }, [receipts, splits, settlements, memberIds]);
   const transfers = useMemo(() => simplifyDebts(balances), [balances]);
   const viewerBalance = viewerId ? (balances[viewerId] ?? 0) : 0;
-  const position = positionCopy(viewerBalance);
   const viewerIsOwner = members.some((member) => member.userId === viewerId && member.role === 'owner') || (viewerId !== null && viewerId === createdBy);
   const visibleMembers = members.slice(0, VISIBLE_AVATARS);
   const overflow = Math.max(members.length - VISIBLE_AVATARS, 0);
@@ -366,32 +344,80 @@ export default function GroupLedgerScreen() {
     }
   }
 
+  function toggleRoster() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setRosterOpen((open) => !open);
+  }
+
+  function openAddMember() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAddOpen(true);
+  }
+
+  function scanBill() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push('/scanner');
+  }
+
+  function settleUp() {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (transfers.length > 0) {
+      scrollRef.current?.scrollTo({ y: Math.max(balancesOffset.current - 8, 0), animated: true });
+      return;
+    }
+    setHistoryOpen(true);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+  }
+
+  const positionLabel = viewerBalance > 0
+    ? `You are owed ${formatPence(viewerBalance)}`
+    : viewerBalance < 0
+      ? `You owe ${formatPence(Math.abs(viewerBalance))}`
+      : 'All settled up';
+
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={goBack}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          style={styles.backButton}
-        >
-          <Ionicons name="chevron-back" size={22} color="#38BDF8" />
-          <Text style={styles.backLabel}>Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1}>
-          {missing ? 'Group' : groupName}
-        </Text>
-        {missing ? <Text style={styles.subtitle}>This group is not available.</Text> : null}
-      </View>
+      <SafeAreaView edges={['top']} style={styles.navSafe}>
+        <View style={styles.navBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Groups"
+            onPress={goBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={styles.backButton}
+          >
+            <Ionicons name="chevron-back" size={22} color={theme.colors.textPrimary} />
+            <Text style={styles.backLabel}>Groups</Text>
+          </Pressable>
+          {missing ? <View style={styles.gearSpacer} /> : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Group settings"
+              accessibilityState={{ expanded: rosterOpen }}
+              onPress={toggleRoster}
+              style={({ pressed }) => [styles.gear, pressed && styles.gearPressed]}
+            >
+              <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
+            </Pressable>
+          )}
+        </View>
+      </SafeAreaView>
 
       {isLoading ? (
-        <ActivityIndicator size="large" color="#38BDF8" style={styles.loader} />
+        <ActivityIndicator size="large" color={theme.colors.accent} style={styles.loader} />
+      ) : missing ? (
+        <View style={styles.missing}>
+          <Text style={styles.missingTitle}>Group unavailable</Text>
+          <Text style={styles.missingCopy}>This group could not be opened. Go back and choose a saved group.</Text>
+        </View>
       ) : (
-        <FlatList
-          data={missing ? [] : receipts}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -399,225 +425,279 @@ export default function GroupLedgerScreen() {
               onRefresh={() => {
                 void loadLedger('refresh');
               }}
-              tintColor="#38BDF8"
+              tintColor={theme.colors.accent}
             />
           }
-          ListHeaderComponent={
-            missing ? undefined : (
-              <View>
-                <LinearGradient colors={['#1E293B', '#0F172A']} style={styles.hero}>
-                  <Text style={styles.heroLabel}>TOTAL GROUP SPEND</Text>
-                  <Text style={styles.heroAmount}>£{spent.toFixed(2)}</Text>
-                </LinearGradient>
+        >
+          <View style={styles.hero}>
+            <Text accessibilityRole="header" style={styles.groupName} numberOfLines={2}>{groupName}</Text>
+            <Text style={styles.heroLabel}>Total group spend</Text>
+            <MoneyText amountMinor={totalSpendMinor} size="hero" splitDecimals />
+            <View style={styles.heroPill}>
+              <StatusPill variant={viewerBalance < 0 ? 'warning' : 'positive'} label={positionLabel} />
+            </View>
+          </View>
 
-                <View style={styles.membersBar}>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Group members"
-                    style={styles.memberStackButton}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setRosterOpen((open) => !open);
-                    }}
-                  >
-                    <View style={styles.avatarStack}>
-                      {visibleMembers.map((member, index) => (
-                        <View key={member.userId} style={[styles.stackedAvatar, index > 0 && styles.stackedAvatarOverlap]}>
-                          <MemberAvatar member={member} />
-                        </View>
-                      ))}
-                      {overflow > 0 ? (
-                        <View style={[styles.overflowBadge, styles.stackedAvatarOverlap]}>
-                          <Text style={styles.overflowText}>+{overflow}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text style={styles.memberCount}>{members.length} {members.length === 1 ? 'member' : 'members'}</Text>
-                    <Ionicons name={rosterOpen ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
-                  </TouchableOpacity>
+          <View style={styles.actions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Scan bill" onPress={scanBill} style={styles.action}>
+              {({ pressed }) => (
+                <>
+                  <View style={[styles.actionCircle, pressed && styles.actionCirclePressed]}>
+                    <Ionicons name="scan-outline" size={20} color={theme.colors.accent} />
+                  </View>
+                  <Text style={styles.actionLabel}>Scan Bill</Text>
+                </>
+              )}
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Add member" onPress={openAddMember} style={styles.action}>
+              {({ pressed }) => (
+                <>
+                  <View style={[styles.actionCircle, pressed && styles.actionCirclePressed]}>
+                    <Ionicons name="person-add-outline" size={20} color={theme.colors.textPrimary} />
+                  </View>
+                  <Text style={styles.actionLabel}>Add Member</Text>
+                </>
+              )}
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Settle up" onPress={settleUp} style={styles.action}>
+              {({ pressed }) => (
+                <>
+                  <View style={[styles.actionCircle, pressed && styles.actionCirclePressed]}>
+                    <Ionicons name="checkmark-circle-outline" size={20} color={theme.colors.textPrimary} />
+                  </View>
+                  <Text style={styles.actionLabel}>Settle Up</Text>
+                </>
+              )}
+            </Pressable>
+          </View>
 
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel="Add member"
-                    style={styles.addPill}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setAddOpen(true);
-                    }}
-                  >
-                    <Ionicons name="add" size={16} color="#38BDF8" />
-                    <Text style={styles.addPillText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {rosterOpen ? (
-                  <View style={styles.roster}>
-                    {members.length === 0 ? <Text style={styles.rosterEmpty}>No members yet.</Text> : null}
-                    {members.map((member) => (
-                      <View key={member.userId} style={styles.rosterRow}>
-                        <MemberAvatar member={member} size={40} />
-                        <View style={styles.rosterCopy}>
-                          <View style={styles.rosterNameRow}>
-                            <Text style={styles.rosterName} numberOfLines={1}>{member.fullName}</Text>
-                            {member.role === 'owner' ? <Text style={styles.ownerBadge}>Owner</Text> : null}
-                          </View>
-                          <Text style={styles.rosterEmail} numberOfLines={1}>{member.phone ? maskPhoneNumber(member.phone) : member.email}</Text>
-                        </View>
-                        {viewerIsOwner && member.role !== 'owner' ? (
-                          <TouchableOpacity
-                            accessibilityRole="button"
-                            accessibilityLabel={`Remove ${member.fullName}`}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            onPress={() => confirmRemove(member)}
-                          >
-                            <Ionicons name="person-remove-outline" size={18} color="#94A3B8" />
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
-                    ))}
+          <View style={styles.memberCard}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Group members"
+              accessibilityState={{ expanded: rosterOpen }}
+              onPress={toggleRoster}
+              style={styles.memberMain}
+            >
+              <View style={styles.avatarStack}>
+                {visibleMembers.map((member, index) => (
+                  <View key={member.userId} style={[styles.stackCutout, index > 0 && styles.stackOverlap]}>
+                    <AvatarBadge name={member.fullName} userId={member.userId} size={28} />
+                  </View>
+                ))}
+                {overflow > 0 ? (
+                  <View style={[styles.overflowBadge, styles.stackOverlap]}>
+                    <Text style={styles.overflowText}>+{overflow}</Text>
                   </View>
                 ) : null}
+              </View>
+              <Text style={styles.memberCount}>{members.length} {members.length === 1 ? 'member' : 'members'}</Text>
+              <Ionicons name={rosterOpen ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMuted} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Invite member"
+              onPress={openAddMember}
+              style={({ pressed }) => [styles.invitePill, pressed && styles.invitePressed]}
+            >
+              <Text style={styles.inviteText}>+ Invite</Text>
+            </Pressable>
+          </View>
 
-                <View style={styles.balanceCard}>
-                  <Text style={styles.sectionLabel}>BALANCES</Text>
-                  <Text style={[styles.positionText, { color: position.color }]}>{position.text}</Text>
-                  {transfers.map((transfer) => {
-                    const key = transferKey(transfer);
-                    const link = paymentLinkFor(members, transfer.toUserId);
-                    const saving = savingKey === key;
-                    return (
-                      <View key={key} style={styles.transferBlock}>
-                        <View style={styles.transferRow}>
-                          <PersonAvatar userId={transfer.fromUserId} members={members} />
-                          <Text style={styles.transferCopy} numberOfLines={2}>
-                            {displayName(members, transfer.fromUserId)} owes {displayName(members, transfer.toUserId)}
+          {rosterOpen ? (
+            <View style={styles.roster}>
+              {members.length === 0 ? <Text style={styles.rosterEmpty}>No members yet.</Text> : null}
+              {members.map((member, index) => (
+                <View key={member.userId}>
+                  {index > 0 ? <View style={styles.rosterDivider} /> : null}
+                  <View style={styles.rosterRow}>
+                    <AvatarBadge name={member.fullName} userId={member.userId} size={40} />
+                    <View style={styles.rosterCopy}>
+                      <View style={styles.rosterNameRow}>
+                        <Text style={styles.rosterName} numberOfLines={1}>{member.fullName}</Text>
+                        {member.role === 'owner' ? <Text style={styles.ownerBadge}>Owner</Text> : null}
+                      </View>
+                      <Text style={styles.rosterMeta} numberOfLines={1}>{member.phone ? maskPhoneNumber(member.phone) : member.email}</Text>
+                    </View>
+                    {viewerIsOwner && member.role !== 'owner' ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${member.fullName}`}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        onPress={() => confirmRemove(member)}
+                      >
+                        <Ionicons name="person-remove-outline" size={18} color={theme.colors.textMuted} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {transfers.length > 0 ? (
+            <View
+              style={styles.section}
+              onLayout={(event) => {
+                balancesOffset.current = event.nativeEvent.layout.y;
+              }}
+            >
+              <Text style={styles.sectionHeading}>Balances</Text>
+              <View style={styles.card}>
+                {transfers.map((transfer, index) => {
+                  const key = transferKey(transfer);
+                  const link = paymentLinkFor(members, transfer.toUserId);
+                  const saving = savingKey === key;
+                  const fromName = displayName(members, transfer.fromUserId);
+                  return (
+                    <View key={key}>
+                      {index > 0 ? <View style={styles.transferDivider} /> : null}
+                      <View style={styles.transferRow}>
+                        <AvatarBadge name={fromName} userId={transfer.fromUserId} size={36} />
+                        <View style={styles.transferCopy}>
+                          <Text style={styles.transferTitle} numberOfLines={2}>
+                            {fromName} owes {displayName(members, transfer.toUserId)}
                           </Text>
-                          <PersonAvatar userId={transfer.toUserId} members={members} />
                           <Text style={styles.transferAmount}>{formatPence(transfer.amountMinor)}</Text>
                         </View>
                         <View style={styles.transferActions}>
                           {link ? (
-                            <TouchableOpacity
+                            <Pressable
                               accessibilityRole="button"
                               accessibilityLabel={`Pay ${displayName(members, transfer.toUserId)}`}
-                              style={styles.payButton}
-                              activeOpacity={0.8}
                               onPress={() => {
                                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                                 openPayLink(link);
                               }}
+                              style={({ pressed }) => [styles.payPill, pressed && styles.payPillPressed]}
                             >
-                              <Text style={styles.payButtonText}>Pay</Text>
-                            </TouchableOpacity>
+                              <Text style={styles.payText}>Pay</Text>
+                            </Pressable>
                           ) : null}
-                          <TouchableOpacity
+                          <Pressable
                             accessibilityRole="button"
                             accessibilityLabel={`Mark ${formatPence(transfer.amountMinor)} as paid`}
-                            style={[styles.paidButton, saving && styles.buttonBusy]}
-                            activeOpacity={0.8}
                             disabled={saving || savingKey !== null}
                             onPress={() => markPaid(transfer)}
+                            style={({ pressed }) => [styles.markPaid, (saving || pressed) && styles.markPaidBusy]}
                           >
                             {saving ? (
-                              <ActivityIndicator size="small" color="#0f172a" />
+                              <ActivityIndicator size="small" color={theme.colors.accent} />
                             ) : (
-                              <Text style={styles.paidButtonText}>Mark as Paid</Text>
+                              <Text style={styles.markPaidText}>Mark paid</Text>
                             )}
-                          </TouchableOpacity>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.section}>
+            <Text style={styles.sectionHeading}>Receipts</Text>
+            {receipts.length === 0 ? (
+              <Text style={styles.emptyLine}>Scan a receipt into this group and it will show up here.</Text>
+            ) : (
+              <View style={styles.card}>
+                {receipts.map((item, index) => {
+                  const name = receiptName(item);
+                  return (
+                    <View key={item.id}>
+                      {index > 0 ? <View style={styles.receiptDivider} /> : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={name}
+                        onPress={() => {
+                          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
+                        }}
+                        style={({ pressed }) => [styles.receiptRow, pressed && styles.receiptPressed]}
+                      >
+                        <View style={styles.monogram}>
+                          <Text style={styles.monogramText}>{monogram(name)}</Text>
+                        </View>
+                        <View style={styles.receiptCopy}>
+                          <Text style={styles.receiptName} numberOfLines={1}>{name}</Text>
+                          <Text style={styles.receiptMeta} numberOfLines={1}>
+                            {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
+                          </Text>
+                        </View>
+                        <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />
+                        <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.historySection}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Settlement history"
+              accessibilityState={{ expanded: historyOpen }}
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setHistoryOpen((open) => !open);
+              }}
+              style={styles.historyHeader}
+            >
+              <View style={styles.historyTitle}>
+                <Text style={styles.sectionLabel}>Settlement history</Text>
+                {settlements.length > 0 ? (
+                  <View style={styles.countBadge}>
+                    <Text style={styles.countText}>{settlements.length}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Ionicons name={historyOpen ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMuted} />
+            </Pressable>
+            {historyOpen ? (
+              settlements.length === 0 ? (
+                <Text style={styles.emptyLine}>No payments recorded yet.</Text>
+              ) : (
+                <View style={styles.card}>
+                  {settlements.map((settlement, index) => {
+                    const voided = settlement.voided_at !== null;
+                    const when = settlementWhen(settlement.created_at);
+                    return (
+                      <View key={settlement.id}>
+                        {index > 0 ? <View style={styles.historyDivider} /> : null}
+                        <View style={[styles.historyRow, voided && styles.historyVoided]}>
+                          <Text style={[styles.historyCopy, voided && styles.historyStrike]} numberOfLines={2}>
+                            {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
+                            {formatPence(settlement.amount_minor)}
+                            {when ? ` · ${when}` : ''}
+                          </Text>
+                          {voided ? <Text style={styles.voidedPill}>Voided</Text> : null}
+                          {!voided && canVoid(settlement) ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel="Undo settlement"
+                              disabled={voidingId !== null}
+                              onPress={() => askVoid(settlement)}
+                              style={styles.undoButton}
+                            >
+                              {voidingId === settlement.id ? (
+                                <ActivityIndicator size="small" color={theme.colors.textMuted} />
+                              ) : (
+                                <Text style={styles.undoText}>Undo</Text>
+                              )}
+                            </Pressable>
+                          ) : null}
                         </View>
                       </View>
                     );
                   })}
                 </View>
-              </View>
-            )
-          }
-          ListFooterComponent={
-            missing ? undefined : (
-              <View style={styles.historyCard}>
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  accessibilityLabel="Settlement history"
-                  style={styles.historyHeader}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    setHistoryOpen((open) => !open);
-                  }}
-                >
-                  <Text style={styles.sectionLabel}>SETTLEMENT HISTORY</Text>
-                  <Ionicons name={historyOpen ? 'chevron-up' : 'chevron-down'} size={16} color="#94A3B8" />
-                </TouchableOpacity>
-                {historyOpen ? (
-                  settlements.length === 0 ? (
-                    <Text style={styles.historyEmpty}>No payments recorded yet.</Text>
-                  ) : (
-                    settlements.map((settlement) => {
-                      const voided = settlement.voided_at !== null;
-                      const when = settlementWhen(settlement.created_at);
-                      return (
-                        <View key={settlement.id} style={styles.historyRow}>
-                          <Text style={[styles.historyCopy, voided && styles.historyVoided]} numberOfLines={2}>
-                            {displayName(members, settlement.from_user_id)} paid {displayName(members, settlement.to_user_id)}{' '}
-                            {formatPence(settlement.amount_minor)}
-                            {when ? ` · ${when}` : ''}
-                          </Text>
-                          {voided ? <Text style={styles.voidedBadge}>Voided</Text> : null}
-                          {!voided && canVoid(settlement) ? (
-                            <TouchableOpacity
-                              accessibilityRole="button"
-                              accessibilityLabel="Undo settlement"
-                              style={styles.undoButton}
-                              disabled={voidingId !== null}
-                              onPress={() => askVoid(settlement)}
-                            >
-                              {voidingId === settlement.id ? (
-                                <ActivityIndicator size="small" color="#94a3b8" />
-                              ) : (
-                                <Text style={styles.undoText}>Undo</Text>
-                              )}
-                            </TouchableOpacity>
-                          ) : null}
-                        </View>
-                      );
-                    })
-                  )
-                ) : null}
-              </View>
-            )
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name={missing ? 'alert-circle-outline' : 'receipt-outline'} size={64} color="#334155" />
-              <Text style={styles.emptyTitle}>{missing ? 'Group unavailable' : 'No receipts yet'}</Text>
-              <Text style={styles.emptySubtitle}>
-                {missing
-                  ? 'This group could not be opened. Go back and choose a saved group.'
-                  : 'Scan a receipt into this group and it will show up here.'}
-              </Text>
-            </View>
-          }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.receiptCard}
-              activeOpacity={0.7}
-              onPress={() => {
-                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
-              }}
-            >
-              <View style={styles.receiptInfo}>
-                <Text style={styles.receiptName} numberOfLines={1}>{receiptName(item)}</Text>
-                <Text style={styles.dateText}>
-                  {new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </Text>
-              </View>
-              <Text style={styles.totalText}>£{Number(item.total_amount || 0).toFixed(2)}</Text>
-            </TouchableOpacity>
-          )}
-        />
+              )
+            ) : null}
+          </View>
+        </ScrollView>
       )}
 
       {groupId ? (
@@ -634,167 +714,213 @@ export default function GroupLedgerScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B1120' },
-  header: { paddingHorizontal: 24, paddingTop: 64, paddingBottom: 16 },
-  backButton: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginLeft: -6, marginBottom: 12 },
-  backLabel: { color: '#38BDF8', fontSize: 16, fontWeight: '600' },
-  title: { fontSize: 32, fontWeight: '800', color: '#F8FAFC', letterSpacing: -0.5 },
-  subtitle: { marginTop: 8, color: '#94A3B8', fontSize: 15, fontWeight: '500' },
-  loader: { marginTop: 60 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 40, flexGrow: 1 },
-  hero: {
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.2)',
-  },
-  heroLabel: { color: '#94A3B8', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
-  heroAmount: { marginTop: 14, color: '#FFFFFF', fontSize: 36, fontWeight: '800', letterSpacing: -1, fontVariant: ['tabular-nums'] },
-  membersBar: {
+  container: { flex: 1, backgroundColor: theme.colors.canvas },
+  navSafe: { backgroundColor: theme.colors.canvas },
+  navBar: {
+    height: 52,
+    paddingHorizontal: theme.spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#151F32',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    gap: 12,
   },
-  memberStackButton: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  backButton: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -6 },
+  backLabel: { ...theme.typography.body, color: theme.colors.textSecondary },
+  gear: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  gearPressed: { backgroundColor: theme.colors.surfacePressed },
+  gearSpacer: { width: 36, height: 36 },
+  loader: { marginTop: 48 },
+  missing: { flex: 1, justifyContent: 'center', paddingHorizontal: theme.spacing.xxl },
+  missingTitle: { ...theme.typography.bodyStrong, color: theme.colors.textPrimary, fontSize: 20, lineHeight: 26 },
+  missingCopy: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: theme.spacing.sm },
+  scrollContent: { paddingBottom: 24 },
+  hero: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 },
+  groupName: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, marginBottom: 16 },
+  heroLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 4 },
+  heroPill: { marginTop: 10 },
+  actions: {
+    marginTop: 20,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    gap: 16,
+  },
+  action: { flex: 1, alignItems: 'center' },
+  actionCircle: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  actionCirclePressed: { backgroundColor: theme.colors.surfaceElevated },
+  actionLabel: { marginTop: 6, fontSize: 12, lineHeight: 16, fontWeight: '500', color: theme.colors.textSecondary, textAlign: 'center' },
+  memberCard: {
+    marginHorizontal: 16,
+    marginTop: 20,
+    backgroundColor: theme.colors.surface,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  memberMain: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 28 },
   avatarStack: { flexDirection: 'row', alignItems: 'center' },
-  stackedAvatar: { borderWidth: 2, borderColor: '#0B1120', borderRadius: 999 },
-  stackedAvatarOverlap: { marginLeft: -10 },
-  avatar: { alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontWeight: '800' },
+  stackCutout: { borderWidth: 2, borderColor: theme.colors.surface, borderRadius: theme.radius.full },
+  stackOverlap: { marginLeft: -8 },
   overflowBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 2,
-    borderColor: '#0B1120',
-    backgroundColor: '#1E293B',
+    borderColor: theme.colors.surface,
+    backgroundColor: theme.colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  overflowText: { color: '#F8FAFC', fontSize: 12, fontWeight: '800' },
-  memberCount: { color: '#F8FAFC', fontSize: 14, fontWeight: '700' },
-  addPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: 'rgba(56, 189, 248, 0.14)',
-    borderColor: 'rgba(56, 189, 248, 0.3)',
-    borderWidth: 1,
-    borderRadius: 999,
+  overflowText: { ...theme.typography.micro, color: theme.colors.textPrimary },
+  memberCount: { marginLeft: 10, flex: 1, fontSize: 14, lineHeight: 18, fontWeight: '500', color: theme.colors.textPrimary },
+  invitePill: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.accentSubtle,
   },
-  addPillText: { color: '#38BDF8', fontSize: 14, fontWeight: '800' },
+  invitePressed: { opacity: 0.7 },
+  inviteText: { color: theme.colors.accent, fontSize: 13, lineHeight: 18, fontWeight: '600' },
   roster: {
-    backgroundColor: '#151F32',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    padding: 8,
-    marginBottom: 16,
+    marginHorizontal: 16,
+    marginTop: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
   },
-  rosterEmpty: { color: '#94A3B8', fontSize: 14, padding: 12 },
-  rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 8, paddingVertical: 10 },
+  rosterEmpty: { ...theme.typography.caption, color: theme.colors.textMuted, padding: 14 },
+  rosterDivider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
+  rosterRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 },
   rosterCopy: { flex: 1 },
   rosterNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rosterName: { flexShrink: 1, color: '#F8FAFC', fontSize: 15, fontWeight: '700' },
+  rosterName: { flexShrink: 1, ...theme.typography.bodyStrong, color: theme.colors.textPrimary },
   ownerBadge: {
-    color: '#38BDF8',
-    fontSize: 11,
-    fontWeight: '800',
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-    borderRadius: 999,
+    ...theme.typography.micro,
+    color: theme.colors.accent,
+    backgroundColor: theme.colors.accentSubtle,
+    borderRadius: theme.radius.full,
     overflow: 'hidden',
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  rosterEmail: { marginTop: 2, color: '#94A3B8', fontSize: 13 },
-  sectionLabel: { color: '#94A3B8', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
-  balanceCard: {
-    backgroundColor: '#1e293b',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    padding: 16,
-    marginBottom: 16,
+  rosterMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
+  section: { marginHorizontal: 16, marginTop: 24 },
+  sectionHeading: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 8, marginLeft: 4 },
+  sectionLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted },
+  card: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
   },
-  positionText: { marginTop: 10, fontSize: 22, fontWeight: '800', letterSpacing: -0.4, fontVariant: ['tabular-nums'] },
-  transferBlock: { marginTop: 16, gap: 10 },
-  transferRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  transferCopy: { flex: 1, color: '#F8FAFC', fontSize: 15, fontWeight: '600', lineHeight: 20 },
-  transferAmount: { color: '#F8FAFC', fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  transferActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
-  payButton: {
-    borderWidth: 1,
-    borderColor: '#4ade80',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    minWidth: 64,
-    alignItems: 'center',
+  transferDivider: { height: StyleSheet.hairlineWidth, marginLeft: 56, backgroundColor: theme.colors.border },
+  transferRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14 },
+  transferCopy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
+  transferTitle: { fontSize: 14, lineHeight: 19, fontWeight: '500', color: theme.colors.textPrimary },
+  transferAmount: {
+    marginTop: 2,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: theme.colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
-  payButtonText: { color: '#4ade80', fontSize: 14, fontWeight: '800' },
-  paidButton: {
-    backgroundColor: '#4ade80',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    minWidth: 118,
-    minHeight: 36,
+  transferActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  payPill: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  payPillPressed: { backgroundColor: theme.colors.surfacePressed },
+  payText: { color: theme.colors.textPrimary, fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  markPaid: {
+    backgroundColor: theme.colors.accentSubtle,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    minWidth: 84,
+    minHeight: 30,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  paidButtonText: { color: '#0f172a', fontSize: 14, fontWeight: '800' },
-  buttonBusy: { opacity: 0.8 },
-  historyCard: {
-    backgroundColor: '#1e293b',
+  markPaidBusy: { opacity: 0.7 },
+  markPaidText: { color: theme.colors.accent, fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  emptyLine: { ...theme.typography.caption, color: theme.colors.textMuted, paddingLeft: 4 },
+  receiptDivider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
+  receiptRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 14 },
+  receiptPressed: { backgroundColor: theme.colors.surfaceElevated },
+  monogram: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-    padding: 16,
-    marginTop: 4,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  historyHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  historyEmpty: { marginTop: 12, color: '#94A3B8', fontSize: 14 },
-  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
-  historyCopy: { flex: 1, color: '#F8FAFC', fontSize: 14, fontWeight: '600', lineHeight: 20, fontVariant: ['tabular-nums'] },
-  historyVoided: { color: '#64748b', textDecorationLine: 'line-through' },
-  voidedBadge: {
-    color: '#94a3b8',
-    fontSize: 11,
-    fontWeight: '800',
-    backgroundColor: 'rgba(148, 163, 184, 0.12)',
-    borderRadius: 999,
+  monogramText: { color: theme.colors.accent, fontSize: 16, fontWeight: '700' },
+  receiptCopy: { flex: 1, minWidth: 0, marginLeft: 6 },
+  receiptName: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  receiptMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
+  historySection: { marginHorizontal: 16, marginTop: 24, marginBottom: 40 },
+  historyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  historyTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  countBadge: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countText: { ...theme.typography.micro, color: theme.colors.textSecondary, fontVariant: ['tabular-nums'] },
+  historyDivider: { height: StyleSheet.hairlineWidth, marginLeft: 14, backgroundColor: theme.colors.border },
+  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 14 },
+  historyVoided: { opacity: 0.55 },
+  historyCopy: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: '500', color: theme.colors.textPrimary, fontVariant: ['tabular-nums'] },
+  historyStrike: { textDecorationLine: 'line-through' },
+  voidedPill: {
+    ...theme.typography.micro,
+    color: theme.colors.textMuted,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderRadius: theme.radius.full,
     overflow: 'hidden',
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  undoButton: { minWidth: 48, alignItems: 'flex-end', justifyContent: 'center' },
-  undoText: { color: '#94a3b8', fontSize: 13, fontWeight: '700' },
-  receiptCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#151F32',
-    padding: 20,
-    borderRadius: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.14)',
-  },
-  receiptInfo: { flex: 1, paddingRight: 12 },
-  receiptName: { fontSize: 18, fontWeight: '700', color: '#F8FAFC', marginBottom: 6, letterSpacing: -0.3 },
-  dateText: { fontSize: 14, color: '#94A3B8', fontWeight: '500' },
-  totalText: { fontSize: 20, fontWeight: '800', color: '#38BDF8', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
-  emptyState: { alignItems: 'center', padding: 32 },
-  emptyTitle: { fontSize: 22, fontWeight: '800', color: '#F8FAFC', marginTop: 20, marginBottom: 8, letterSpacing: -0.5 },
-  emptySubtitle: { fontSize: 16, color: '#94A3B8', textAlign: 'center', lineHeight: 24 },
+  undoButton: { minWidth: 44, minHeight: 32, alignItems: 'flex-end', justifyContent: 'center' },
+  undoText: { color: theme.colors.danger, fontSize: 13, fontWeight: '600' },
 });

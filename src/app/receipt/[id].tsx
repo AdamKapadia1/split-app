@@ -1,10 +1,15 @@
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AvatarBadge } from '@/components/AvatarBadge';
+import { MoneyText } from '@/components/MoneyText';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { receiptService } from '@/services/ReceiptService';
+import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
 import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
 
@@ -19,34 +24,58 @@ type Ledger = {
   splits: Split[];
 };
 
-const MEMBER_COLORS = ['#38BDF8', '#C084FC', '#22D3EE', '#4ADE80', '#F472B6', '#FBBF24', '#FB7185', '#A78BFA'];
-
 type Assignee = {
   id: string;
   name: string;
-  initial: string;
-  color: string;
 };
 
-const LedgerItem = memo(function LedgerItem({ item, priceLabel, isSelected, assignees, onToggle }: { item: Item; priceLabel: string; isSelected: boolean; assignees: Assignee[]; onToggle: (id: string) => void }) {
+const LedgerItem = memo(function LedgerItem({
+  item,
+  priceMinor,
+  highlighted,
+  assignees,
+  activeMemberId,
+  onToggle,
+}: {
+  item: Item;
+  priceMinor: number;
+  highlighted: boolean;
+  assignees: Assignee[];
+  activeMemberId: string | null;
+  onToggle: (id: string) => void;
+}) {
+  const quantity = Number(item.quantity);
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected: highlighted }}
       onPress={() => onToggle(item.id)}
-      style={[styles.itemCard, isSelected && styles.itemCardSelected]}
+      style={({ pressed }) => [styles.itemRow, pressed && styles.itemRowPressed, highlighted && styles.itemRowSelected]}
     >
-      <View style={styles.itemCopy}>
-        <Text style={styles.itemName}>{item.display_name || item.original_name}</Text>
-        {assignees.length > 0 ? (
-          <View style={styles.assigneeRow}>
-            {assignees.map((person) => (
-              <View key={person.id} style={[styles.assigneeBadge, { borderColor: person.color }]}>
-                <Text style={[styles.assigneeBadgeText, { color: person.color }]}>{person.initial}</Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
+      <View style={styles.itemTop}>
+        <View style={styles.itemIdentity}>
+          {quantity > 1 ? (
+            <View style={styles.quantityPill}>
+              <Text style={styles.quantityText}>{quantity}x</Text>
+            </View>
+          ) : null}
+          <Text style={styles.itemName} numberOfLines={2}>{item.display_name || item.original_name}</Text>
+        </View>
+        <MoneyText amountMinor={priceMinor} size="md" color={theme.colors.textPrimary} />
       </View>
-      <Text style={styles.itemPrice}>{priceLabel}</Text>
+      {assignees.length > 0 ? (
+        <View style={styles.assigneeRow}>
+          {assignees.map((person) => (
+            <AvatarBadge
+              key={person.id}
+              name={person.name}
+              userId={person.id}
+              size={20}
+              active={person.id === activeMemberId}
+            />
+          ))}
+        </View>
+      ) : null}
     </Pressable>
   );
 });
@@ -171,7 +200,7 @@ export default function ReceiptLedgerScreen() {
     setClaims(next);
     setSaved(false);
     setSaveError(null);
-    void Haptics.selectionAsync();
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, [members, receiptData]);
 
   const saveSplit = useCallback(async () => {
@@ -205,201 +234,284 @@ export default function ReceiptLedgerScreen() {
     }
   }, [claims, members, paidById, receiptData, saving]);
 
+  const goBack = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.back();
+  };
+
   if (isLoading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#4ade80" />
+      <View style={styles.container}>
+        <SafeAreaView edges={['top']} style={styles.headerSafe}>
+          <View style={styles.headerRow}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={goBack} hitSlop={12}>
+              <Ionicons name="chevron-back" size={22} color={theme.colors.textPrimary} />
+            </Pressable>
+          </View>
+        </SafeAreaView>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={theme.colors.accent} />
+        </View>
       </View>
     );
   }
 
   if (notFound || !receiptData) {
     return (
-      <View style={styles.centerContainer}>
-        <Text style={styles.missingTitle}>Receipt not found</Text>
-        <Text style={styles.missingSubtitle}>This receipt was deleted or is no longer available.</Text>
-        <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.missingButton}>
-          <Text style={styles.missingButtonText}>Go back</Text>
-        </Pressable>
+      <View style={styles.container}>
+        <SafeAreaView edges={['top']} style={styles.headerSafe}>
+          <View style={styles.headerRow}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={goBack} hitSlop={12} style={styles.backRow}>
+              <Ionicons name="chevron-back" size={22} color={theme.colors.textPrimary} />
+              <Text style={styles.backLabel}>Back</Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+        <View style={styles.center}>
+          <Text style={styles.missingTitle}>Receipt not found</Text>
+          <Text style={styles.missingSubtitle}>This receipt was deleted or is no longer available.</Text>
+        </View>
       </View>
     );
   }
 
   const { receipt, items } = receiptData;
   const isGroup = Boolean(receipt.group_id);
-  const people = members.map((member, index) => toAssignee(member, index));
+  const people = members.map((member) => toAssignee(member));
   const activeMember = people.find((person) => person.id === activeMemberId) ?? null;
   const memberIds = members.map((member) => member.userId);
   const shares = isGroup ? memberShares(items, claims, memberIds, receipt) : {};
   const unassigned = isGroup ? unassignedMinor(items, claims) : 0;
   const isTaxIncluded = receiptExtrasMinor(items, receipt) === 0 && Number(receipt.tax_amount || 0) > 0;
+  const merchantName = receipt.restaurant_name || receipt.merchant_name || 'Ledger';
+  const receiptDate = new Date(receipt.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const lineTotalMinor = items.reduce((sum, item) => sum + lineMinor(item), 0);
+  const assignedMinor = Math.max(0, lineTotalMinor - unassigned);
+  const progress = Math.min(100, Math.round((assignedMinor / Math.max(1, lineTotalMinor)) * 100));
+  const blocked = isGroup && unassigned > 0;
+  const saveDisabled = saving || blocked || !paidById || members.length === 0;
 
   return (
     <View style={styles.container}>
-      <Stack.Screen
-        options={{
-          title: 'Ledger',
-          headerStyle: { backgroundColor: '#0f172a' },
-          headerTintColor: '#fff',
-          headerLeft: () => (
-            <Pressable onPress={() => router.back()} style={{ padding: 8, marginLeft: -8 }}>
-              <Text style={{ color: '#4ade80', fontSize: 16, fontWeight: '600' }}>Back</Text>
-            </Pressable>
-          )
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false, title: merchantName }} />
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-
-        <View style={styles.headerContainer}>
-          <Text style={styles.restaurantName}>
-            {receipt.restaurant_name || receipt.merchant_name || 'Ledger'}
-          </Text>
-
-          {receipt.website ? (
-            <Pressable
-              onPress={() => Linking.openURL(receipt.website!.startsWith('http') ? receipt.website! : `https://${receipt.website}`)}
-              style={styles.bookButton}
-            >
-              <Text style={styles.bookButtonText}>Book again</Text>
-            </Pressable>
-          ) : null}
+      <SafeAreaView edges={['top']} style={styles.headerSafe}>
+        <View style={styles.headerRow}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={goBack} hitSlop={12}>
+            <Ionicons name="chevron-back" size={22} color={theme.colors.textPrimary} />
+          </Pressable>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle} numberOfLines={1}>{merchantName}</Text>
+            <Text style={styles.headerDate} numberOfLines={1}>{receiptDate}</Text>
+          </View>
+          <MoneyText amountMinor={toMinorUnits(Number(receipt.total_amount || 0))} size="lg" color={theme.colors.textPrimary} />
         </View>
+        {isGroup ? (
+          <View style={styles.progressTrack}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${progress}%`,
+                  backgroundColor: unassigned === 0 ? theme.colors.positive : theme.colors.accent,
+                },
+              ]}
+            />
+          </View>
+        ) : null}
+      </SafeAreaView>
+
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {receipt.website ? (
+          <Pressable
+            accessibilityRole="link"
+            onPress={() => Linking.openURL(receipt.website!.startsWith('http') ? receipt.website! : `https://${receipt.website}`)}
+            style={styles.bookLink}
+          >
+            <Text style={styles.bookLinkText}>Book again</Text>
+          </Pressable>
+        ) : null}
 
         {isGroup ? (
-          <View style={styles.groupSection}>
-            <Text style={styles.sectionLabel}>Paid by</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillRow}>
-              {people.map((person) => {
-                const selected = person.id === paidById;
-                return (
-                  <Pressable
-                    key={person.id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    onPress={() => {
-                      setPaidById(person.id);
-                      setSaved(false);
-                      setSaveError(null);
-                      void Haptics.selectionAsync();
-                    }}
-                    style={[styles.paidPill, selected && styles.paidPillSelected]}
-                  >
-                    <Text style={[styles.paidPillText, selected && styles.paidPillTextSelected]}>{person.name}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+          <View>
+            <View style={styles.block}>
+              <Text style={[styles.sectionLabel, styles.paidLabel]}>Paid by</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillScroller}>
+                {people.map((person) => {
+                  const selected = person.id === paidById;
+                  return (
+                    <Pressable
+                      key={person.id}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      onPress={() => {
+                        setPaidById(person.id);
+                        setSaved(false);
+                        setSaveError(null);
+                        void Haptics.selectionAsync();
+                      }}
+                      style={[styles.paidPill, selected && styles.paidPillSelected]}
+                    >
+                      <Text style={[styles.paidPillText, selected && styles.paidPillTextSelected]}>{person.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
 
-            <Text style={styles.sectionLabel}>Assign to</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillRow}>
-              {people.map((person) => {
-                const selected = person.id === activeMemberId;
-                return (
-                  <Pressable
-                    key={person.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${person.name}, ${formatPence(shares[person.id] ?? 0)}`}
-                    accessibilityState={{ selected }}
-                    onPress={() => {
-                      setActiveMemberId(person.id);
-                      void Haptics.selectionAsync();
-                    }}
-                    style={[styles.memberChip, selected && { borderColor: person.color }]}
-                  >
-                    <View style={[styles.memberMark, { borderColor: person.color, backgroundColor: `${person.color}22` }]}>
-                      <Text style={[styles.memberInitial, { color: person.color }]}>{person.initial}</Text>
-                    </View>
-                    <View style={styles.memberCopy}>
-                      <Text style={styles.memberName} numberOfLines={1}>{person.name}</Text>
-                      <Text style={[styles.memberShare, selected && { color: person.color }]}>{formatPence(shares[person.id] ?? 0)}</Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <Pressable accessibilityRole="button" onPress={splitEqually} style={styles.equalButton}>
-              <Text style={styles.equalButtonText}>Split equally</Text>
-            </Pressable>
+            <View style={styles.assignBlock}>
+              <View style={styles.assignHeader}>
+                <Text style={styles.sectionLabel}>Assign to</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={splitEqually}
+                  style={({ pressed }) => [styles.equalPill, pressed && styles.equalPillPressed]}
+                >
+                  <Text style={styles.equalText}>Split equally</Text>
+                </Pressable>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.memberScroller}>
+                {people.map((person) => {
+                  const selected = person.id === activeMemberId;
+                  const share = shares[person.id] ?? 0;
+                  return (
+                    <Pressable
+                      key={person.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${person.name}, ${formatPence(share)}`}
+                      accessibilityState={{ selected }}
+                      onPress={() => {
+                        setActiveMemberId(person.id);
+                        void Haptics.selectionAsync();
+                      }}
+                      style={[styles.memberCard, selected ? styles.memberCardActive : styles.memberCardIdle]}
+                    >
+                      <AvatarBadge name={person.name} userId={person.id} size={28} active={selected} />
+                      <View style={styles.memberCopy}>
+                        <Text style={styles.memberName} numberOfLines={1}>{person.name}</Text>
+                        <MoneyText
+                          amountMinor={share}
+                          size="sm"
+                          color={share > 0 ? theme.colors.textPrimary : theme.colors.textSecondary}
+                        />
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
             <Text style={styles.assignHint}>
-              {activeMember ? `Tap a line to assign it to ${activeMember.name}.` : 'Choose a person, then tap a line.'}
+              {activeMember ? `Tap any item below to assign it to ${activeMember.name}` : 'Choose a person, then tap a line.'}
             </Text>
             {groupError ? <Text style={styles.errorText}>{groupError}</Text> : null}
           </View>
         ) : null}
 
-        <View style={styles.itemsContainer}>
-          {items.map((item) => (
-            <LedgerItem
-              key={item.id}
-              item={item}
-              priceLabel={isGroup ? formatPence(lineMinor(item)) : `£${Number(item.price).toFixed(2)}`}
-              isSelected={isGroup ? (claims[item.id] ?? []).includes(activeMemberId ?? '') : selectedItemIds.has(item.id)}
-              assignees={isGroup ? people.filter((person) => (claims[item.id] ?? []).includes(person.id)) : []}
-              onToggle={isGroup ? toggleAssignment : toggleItem}
-            />
-          ))}
-        </View>
+        <View style={styles.ledger}>
+          {items.map((item, index) => {
+            const assigned = people.filter((person) => (claims[item.id] ?? []).includes(person.id));
+            const highlighted = isGroup
+              ? (claims[item.id] ?? []).includes(activeMemberId ?? '')
+              : selectedItemIds.has(item.id);
+            return (
+              <View key={item.id}>
+                {index > 0 ? <View style={styles.itemDivider} /> : null}
+                <LedgerItem
+                  item={item}
+                  priceMinor={isGroup ? lineMinor(item) : toMinorUnits(Number(item.price))}
+                  highlighted={highlighted && !isGroup}
+                  assignees={isGroup ? assigned : []}
+                  activeMemberId={activeMemberId}
+                  onToggle={isGroup ? toggleAssignment : toggleItem}
+                />
+              </View>
+            );
+          })}
 
-        <View style={styles.totalsContainer}>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Subtotal</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.subtotal || 0).toFixed(2)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>{isTaxIncluded ? 'Tax included' : 'Tax'}</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.tax_amount || 0).toFixed(2)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Service Charge</Text>
-            <Text style={styles.totalValue}>£{Number(receipt.service_charge || 0).toFixed(2)}</Text>
-          </View>
-          {Number(receipt.tip_amount) > 0 ? (
+          <View style={styles.footerDivider} />
+          <View style={styles.footer}>
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Tip</Text>
-              <Text style={styles.totalValue}>£{Number(receipt.tip_amount).toFixed(2)}</Text>
+              <Text style={styles.metaLabel}>Subtotal</Text>
+              <MoneyText amountMinor={toMinorUnits(Number(receipt.subtotal || 0))} size="sm" color={theme.colors.textSecondary} />
             </View>
-          ) : null}
-          <View style={[styles.totalRow, styles.grandTotalRow]}>
-            <Text style={styles.grandTotalLabel}>Total</Text>
-            <Text style={styles.grandTotalValue}>£{Number(receipt.total_amount || 0).toFixed(2)}</Text>
-          </View>
-          {unassigned > 0 ? (
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Unassigned</Text>
-              <Text style={styles.unassignedValue}>{formatPence(unassigned)}</Text>
+              <Text style={styles.metaLabel}>{isTaxIncluded ? 'Tax included' : 'Tax'}</Text>
+              <MoneyText amountMinor={toMinorUnits(Number(receipt.tax_amount || 0))} size="sm" color={theme.colors.textSecondary} />
             </View>
-          ) : null}
+            <View style={styles.totalRow}>
+              <Text style={styles.metaLabel}>Service Charge</Text>
+              <MoneyText amountMinor={toMinorUnits(Number(receipt.service_charge || 0))} size="sm" color={theme.colors.textSecondary} />
+            </View>
+            {Number(receipt.tip_amount) > 0 ? (
+              <View style={styles.totalRow}>
+                <Text style={styles.metaLabel}>Tip</Text>
+                <MoneyText amountMinor={toMinorUnits(Number(receipt.tip_amount))} size="sm" color={theme.colors.textSecondary} />
+              </View>
+            ) : null}
+            <View style={styles.grandRow}>
+              <Text style={styles.grandLabel}>Total</Text>
+              <MoneyText amountMinor={toMinorUnits(Number(receipt.total_amount || 0))} size="lg" color={theme.colors.textPrimary} />
+            </View>
+            {unassigned > 0 ? (
+              <View style={styles.totalRow}>
+                <Text style={styles.unassignedLabel}>Unassigned</Text>
+                <MoneyText amountMinor={unassigned} size="sm" color={theme.colors.warning} />
+              </View>
+            ) : null}
+          </View>
         </View>
-
-        {isGroup ? (
-          <>
-            {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
-            <Pressable
-              accessibilityRole="button"
-              disabled={saving || !paidById || members.length === 0}
-              onPress={() => {
-                void saveSplit();
-              }}
-              style={[styles.continueButton, (saving || !paidById || members.length === 0) && styles.buttonDisabled]}
-            >
-              {saving ? (
-                <ActivityIndicator color="#0f172a" />
-              ) : (
-                <Text style={styles.continueButtonText}>{saved ? 'Saved' : 'Save Split'}</Text>
-              )}
-            </Pressable>
-          </>
-        ) : null}
-
-        <Pressable
-          onPress={() => router.push({ pathname: '/split', params: { id: receiptId } })}
-          style={isGroup ? styles.secondaryButton : styles.continueButton}
-        >
-          <Text style={isGroup ? styles.secondaryButtonText : styles.continueButtonText}>Continue to Split</Text>
-        </Pressable>
-
       </ScrollView>
+
+      <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
+        {saveError ? <Text style={styles.barError}>{saveError}</Text> : null}
+        {isGroup ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saveDisabled, busy: saving }}
+            disabled={saveDisabled}
+            onPress={() => {
+              void saveSplit();
+            }}
+            style={({ pressed }) => [
+              styles.cta,
+              saving && styles.ctaSaving,
+              !saving && blocked && styles.ctaBlocked,
+              !saving && !blocked && saved && styles.ctaSaved,
+              !saving && !blocked && !saved && styles.ctaReady,
+              !saving && !blocked && !saved && pressed && styles.ctaReadyPressed,
+              saveDisabled && !saving && !blocked && !saved && styles.ctaUnavailable,
+            ]}
+          >
+            {saving ? (
+              <ActivityIndicator color={theme.colors.accentText} />
+            ) : blocked ? (
+              <Text style={styles.ctaBlockedText}>{formatPence(unassigned)} left to assign</Text>
+            ) : saved ? (
+              <Text style={styles.ctaSavedText}>Split Saved ✓</Text>
+            ) : (
+              <Text style={styles.ctaReadyText}>Save Split</Text>
+            )}
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push({ pathname: '/split', params: { id: receiptId } })}
+            style={({ pressed }) => [styles.cta, styles.ctaReady, pressed && styles.ctaReadyPressed]}
+          >
+            <Text style={styles.ctaReadyText}>Continue to Split</Text>
+          </Pressable>
+        )}
+        {isGroup ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push({ pathname: '/split', params: { id: receiptId } })}
+            style={styles.continueLink}
+          >
+            <Text style={styles.continueLinkText}>Continue to Split</Text>
+          </Pressable>
+        ) : null}
+      </SafeAreaView>
     </View>
   );
 }
@@ -411,20 +523,11 @@ function preferredMemberId(receipt: Receipt, roster: GroupMemberProfile[]) {
   return roster[0]?.userId ?? null;
 }
 
-function toAssignee(member: GroupMemberProfile, index: number): Assignee {
+function toAssignee(member: GroupMemberProfile): Assignee {
   return {
     id: member.userId,
     name: member.fullName,
-    initial: initials(member.fullName),
-    color: MEMBER_COLORS[index % MEMBER_COLORS.length],
   };
-}
-
-function initials(fullName: string) {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
 function lineMinor(item: Item) {
@@ -452,54 +555,149 @@ function unassignedMinor(items: Item[], claims: Record<string, string[]>) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a' },
-  centerContainer: { flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
-  missingTitle: { color: 'white', fontSize: 24, fontWeight: '800', letterSpacing: -0.4, textAlign: 'center' },
-  missingSubtitle: { marginTop: 8, color: '#94a3b8', fontSize: 16, lineHeight: 24, textAlign: 'center' },
-  missingButton: { marginTop: 24, backgroundColor: '#1e293b', borderRadius: 12, borderWidth: 1, borderColor: '#334155', paddingHorizontal: 20, paddingVertical: 14 },
-  missingButtonText: { color: '#4ade80', fontSize: 16, fontWeight: '700' },
-  scrollContent: { padding: 16, paddingBottom: 40 },
-  headerContainer: { alignItems: 'center', marginBottom: 24 },
-  restaurantName: { color: 'white', fontSize: 24, fontWeight: 'bold', textAlign: 'center' },
-  bookButton: { marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#1e293b', borderRadius: 8, borderWidth: 1, borderColor: '#334155' },
-  bookButtonText: { color: '#4ade80', fontSize: 14, fontWeight: '600' },
-  groupSection: { marginBottom: 20, gap: 10 },
-  sectionLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
-  pillRow: { gap: 8, paddingVertical: 2 },
-  paidPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155' },
-  paidPillSelected: { borderColor: '#4ade80', backgroundColor: '#14532d' },
-  paidPillText: { color: '#e2e8f0', fontSize: 14, fontWeight: '600' },
-  paidPillTextSelected: { color: '#4ade80' },
-  memberChip: { width: 148, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 14, backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155' },
-  memberMark: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  memberInitial: { fontSize: 11, fontWeight: '700' },
-  memberCopy: { flex: 1 },
-  memberName: { color: 'white', fontSize: 14, fontWeight: '700' },
-  memberShare: { color: '#94a3b8', fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  equalButton: { alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#334155', backgroundColor: '#1e293b' },
-  equalButtonText: { color: '#e2e8f0', fontSize: 13, fontWeight: '700' },
-  assignHint: { color: '#94a3b8', fontSize: 13 },
-  errorText: { color: '#fca5a5', fontSize: 14, marginTop: 8 },
-  itemsContainer: { gap: 12, marginBottom: 32 },
-  itemCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e293b', padding: 16, borderRadius: 12, borderWidth: 2, borderColor: 'transparent' },
-  itemCardSelected: { borderColor: '#4ade80', backgroundColor: '#1e293b' },
-  itemCopy: { flex: 1, marginRight: 12, gap: 8 },
-  itemName: { color: 'white', fontSize: 16, fontWeight: '600' },
-  itemPrice: { color: '#38bdf8', fontSize: 16, fontWeight: '600' },
-  assigneeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  assigneeBadge: { minWidth: 26, height: 22, paddingHorizontal: 6, borderRadius: 999, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  assigneeBadgeText: { fontSize: 11, fontWeight: '700' },
-  totalsContainer: { borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 16, gap: 8 },
+  container: { flex: 1, backgroundColor: theme.colors.canvas },
+  headerSafe: { backgroundColor: theme.colors.canvas },
+  headerRow: {
+    height: 52,
+    paddingHorizontal: theme.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  backLabel: { ...theme.typography.body, color: theme.colors.textSecondary },
+  headerCenter: { flex: 1, minWidth: 0, marginHorizontal: 12 },
+  headerTitle: { fontSize: 16, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  headerDate: { marginTop: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
+  progressTrack: { height: 3, width: '100%', backgroundColor: theme.colors.surfaceElevated },
+  progressFill: { height: 3 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
+  missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },
+  scrollContent: { paddingTop: 16, paddingBottom: 120 },
+  bookLink: { alignSelf: 'flex-start', marginLeft: 16, marginBottom: 16, paddingVertical: 4 },
+  bookLinkText: { color: theme.colors.accent, fontSize: 13, fontWeight: '600' },
+  block: { marginBottom: 18 },
+  sectionLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted },
+  paidLabel: { marginBottom: 8, marginHorizontal: 16 },
+  pillScroller: { paddingHorizontal: 16, gap: 8 },
+  paidPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  paidPillSelected: {
+    backgroundColor: theme.colors.accentSubtle,
+    borderWidth: 1,
+    borderColor: theme.colors.accentBorder,
+  },
+  paidPillText: { color: theme.colors.textSecondary, fontSize: 14, lineHeight: 18, fontWeight: '500' },
+  paidPillTextSelected: { color: theme.colors.accent, fontWeight: '600' },
+  assignBlock: { marginBottom: 18 },
+  assignHeader: {
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  equalPill: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: theme.radius.full,
+  },
+  equalPillPressed: { backgroundColor: theme.colors.surfacePressed },
+  equalText: { color: theme.colors.accent, fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  memberScroller: { paddingHorizontal: 16, gap: 10 },
+  memberCard: {
+    minWidth: 124,
+    padding: 10,
+    borderRadius: theme.radius.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  memberCardActive: { borderWidth: 1.5, borderColor: theme.colors.accent, backgroundColor: '#181822' },
+  memberCardIdle: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  memberCopy: { flexShrink: 1, minWidth: 0 },
+  memberName: { fontSize: 13, lineHeight: 17, fontWeight: '600', color: theme.colors.textPrimary },
+  assignHint: { paddingHorizontal: 16, marginBottom: 10, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
+  errorText: { color: theme.colors.danger, fontSize: 14, lineHeight: 20, marginHorizontal: 16, marginBottom: 10 },
+  ledger: {
+    marginHorizontal: 16,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  itemDivider: { height: StyleSheet.hairlineWidth, marginLeft: 14, backgroundColor: theme.colors.border },
+  itemRow: { paddingHorizontal: 14, paddingVertical: 14 },
+  itemRowPressed: { backgroundColor: theme.colors.surfaceElevated },
+  itemRowSelected: { backgroundColor: theme.colors.accentSubtle },
+  itemTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  itemIdentity: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  quantityPill: {
+    backgroundColor: theme.colors.surfaceElevated,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  quantityText: { ...theme.typography.micro, color: theme.colors.textSecondary },
+  itemName: { flexShrink: 1, fontSize: 15, lineHeight: 20, fontWeight: '500', color: theme.colors.textPrimary },
+  assigneeRow: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  footerDivider: { height: 1, backgroundColor: 'rgba(255, 255, 255, 0.10)' },
+  footer: { padding: 14, gap: 8 },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  totalLabel: { color: '#94a3b8', fontSize: 14 },
-  totalValue: { color: 'white', fontSize: 14 },
-  unassignedValue: { color: '#fbbf24', fontSize: 14, fontWeight: '700' },
-  grandTotalRow: { marginTop: 8 },
-  grandTotalLabel: { color: 'white', fontSize: 20, fontWeight: 'bold' },
-  grandTotalValue: { color: '#38bdf8', fontSize: 20, fontWeight: 'bold' },
-  continueButton: { backgroundColor: '#4ade80', padding: 16, borderRadius: 12, marginTop: 32, alignItems: 'center' },
-  continueButtonText: { color: '#0f172a', fontSize: 18, fontWeight: 'bold' },
-  secondaryButton: { marginTop: 12, padding: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#334155', backgroundColor: '#1e293b' },
-  secondaryButtonText: { color: '#e2e8f0', fontSize: 16, fontWeight: '700' },
-  buttonDisabled: { opacity: 0.55 },
+  metaLabel: { ...theme.typography.caption, color: theme.colors.textSecondary },
+  grandRow: {
+    marginTop: 4,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  grandLabel: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: theme.colors.textPrimary },
+  unassignedLabel: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: theme.colors.warning },
+  bottomBar: {
+    backgroundColor: theme.colors.canvas,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  barError: { color: theme.colors.danger, fontSize: 13, lineHeight: 18, marginBottom: 8 },
+  cta: { height: 52, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  ctaReady: { backgroundColor: theme.colors.accent },
+  ctaReadyPressed: { backgroundColor: theme.colors.accentPressed },
+  ctaUnavailable: { opacity: 0.45 },
+  ctaSaving: { backgroundColor: theme.colors.accent, opacity: 0.75 },
+  ctaBlocked: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(251, 146, 60, 0.30)',
+  },
+  ctaSaved: {
+    backgroundColor: theme.colors.positiveSubtle,
+    borderWidth: 1,
+    borderColor: theme.colors.positive,
+  },
+  ctaReadyText: { color: theme.colors.accentText, fontSize: 16, fontWeight: '700' },
+  ctaBlockedText: { color: theme.colors.warning, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  ctaSavedText: { color: theme.colors.positive, fontSize: 16, fontWeight: '600' },
+  continueLink: { alignItems: 'center', paddingTop: 10, paddingBottom: 2 },
+  continueLinkText: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '500' },
 });
