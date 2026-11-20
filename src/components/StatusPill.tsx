@@ -4,11 +4,11 @@ import { theme } from '@/theme/theme';
 
 export type StatusPillVariant = 'positive' | 'warning' | 'accent' | 'neutral';
 
-const VARIANTS: Record<StatusPillVariant, { backgroundColor: string; color: string }> = {
-  positive: { backgroundColor: theme.colors.positiveSubtle, color: theme.colors.positive },
-  warning: { backgroundColor: theme.colors.warningSubtle, color: theme.colors.warning },
-  accent: { backgroundColor: theme.colors.accentSubtle, color: theme.colors.accent },
-  neutral: { backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textSecondary },
+const VARIANTS: Record<StatusPillVariant, { backgroundColor: string; color: string; dot: string }> = {
+  positive: { backgroundColor: theme.colors.positiveSubtle, color: theme.colors.positive, dot: theme.colors.positive },
+  warning: { backgroundColor: theme.colors.warningSubtle, color: theme.colors.warning, dot: theme.colors.warning },
+  accent: { backgroundColor: theme.colors.accentSubtle, color: theme.colors.accent, dot: theme.colors.accent },
+  neutral: { backgroundColor: theme.colors.surfaceElevated, color: theme.colors.textSecondary, dot: theme.colors.textMuted },
 };
 
 type StatusPillProps = {
@@ -28,7 +28,7 @@ export function StatusPill({ variant, label, bordered = false }: StatusPillProps
         bordered && styles.bordered,
       ]}
     >
-      <View style={[styles.dot, { backgroundColor: colors.color }]} />
+      <View style={[styles.dot, { backgroundColor: colors.dot }]} />
       <Text style={[styles.label, { color: colors.color }]}>{label}</Text>
     </View>
   );

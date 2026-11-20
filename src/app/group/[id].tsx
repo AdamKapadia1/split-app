@@ -569,6 +569,9 @@ export default function GroupLedgerScreen() {
     );
   }
 
+  const hasReceipts = receipts.length > 0;
+  const balancesSettled = hasReceipts && transfers.length === 0;
+  const canSettle = hasReceipts && transfers.length > 0;
   const positionLabel = viewerBalance > 0
     ? `You are owed ${formatPence(viewerBalance)}`
     : viewerBalance < 0
@@ -629,7 +632,13 @@ export default function GroupLedgerScreen() {
             <Text style={styles.heroLabel}>Total group spend</Text>
             <MoneyText amountMinor={totalSpendMinor} size="hero" splitDecimals />
             <View style={styles.heroPill}>
-              <StatusPill variant={viewerBalance < 0 ? 'warning' : 'positive'} label={positionLabel} />
+              {!hasReceipts ? (
+                <StatusPill variant="neutral" label="No bills yet" />
+              ) : transfers.length === 0 ? (
+                <StatusPill variant="positive" label="All settled up" />
+              ) : (
+                <StatusPill variant={viewerBalance < 0 ? 'warning' : 'positive'} label={positionLabel} />
+              )}
             </View>
           </View>
 
@@ -656,23 +665,28 @@ export default function GroupLedgerScreen() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={transfers.length === 0 ? 'All balances settled' : 'Settle up'}
-              accessibilityState={{ disabled: transfers.length === 0 }}
-              disabled={transfers.length === 0}
+              accessibilityLabel={canSettle ? 'Settle up' : balancesSettled ? 'All balances settled' : 'Settle up'}
+              accessibilityState={{ disabled: !canSettle }}
+              disabled={!canSettle}
               onPress={settleUp}
               style={styles.action}
             >
               {({ pressed }) => (
                 <>
-                  <View style={[styles.actionCircle, transfers.length === 0 && styles.actionCircleSettled, transfers.length > 0 && pressed && styles.actionCirclePressed]}>
+                  <View style={[
+                    styles.actionCircle,
+                    !hasReceipts && styles.actionCircleEmpty,
+                    balancesSettled && styles.actionCircleSettled,
+                    canSettle && pressed && styles.actionCirclePressed,
+                  ]}>
                     <Ionicons
-                      name={transfers.length === 0 ? 'checkmark' : 'checkmark-circle-outline'}
+                      name={balancesSettled ? 'checkmark' : 'checkmark-circle-outline'}
                       size={20}
-                      color={transfers.length === 0 ? theme.colors.positive : theme.colors.accent}
+                      color={!hasReceipts ? theme.colors.textMuted : balancesSettled ? theme.colors.positive : theme.colors.accent}
                     />
                   </View>
-                  <Text style={[styles.actionLabel, transfers.length === 0 ? styles.actionLabelSettled : styles.actionLabelActive]}>
-                    {transfers.length === 0 ? 'Settled' : 'Settle Up'}
+                  <Text style={[styles.actionLabel, canSettle ? styles.actionLabelActive : styles.actionLabelSettled]}>
+                    {balancesSettled ? 'Settled' : 'Settle Up'}
                   </Text>
                 </>
               )}
@@ -1093,7 +1107,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
   },
-  actionCircleSettled: { opacity: 0.48 },
+  actionCircleEmpty: { opacity: 0.45 },
+  actionCircleSettled: { opacity: 0.55 },
   actionCirclePressed: { backgroundColor: theme.colors.surfaceElevated },
   actionLabel: { marginTop: 6, fontSize: 12, lineHeight: 16, fontWeight: '500', color: theme.colors.textSecondary, textAlign: 'center' },
   actionLabelActive: { color: theme.colors.textPrimary },

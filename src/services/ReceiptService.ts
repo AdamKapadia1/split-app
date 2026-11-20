@@ -215,9 +215,65 @@ export class ReceiptService {
       throw new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.', caught instanceof Error ? caught : null);
     }
   }
+
+  /**
+   * History ledger rows with group names resolved in the same round trip.
+   * A missing or deleted group leaves `group_name` null so the row stays Personal.
+   */
+  async listHistoryReceipts(): Promise<HistoryReceiptRecord[]> {
+    try {
+      const client = requireClient();
+      const [receiptsResult, groupsResult] = await Promise.all([
+        client.from('receipts').select(RECEIPT_COLUMNS).order('created_at', { ascending: false }),
+        client.from('groups').select('id, name'),
+      ]);
+
+      if (receiptsResult.error) throw new ReceiptServiceError('FETCH_FAILED', receiptsResult.error.message, receiptsResult.error);
+      if (groupsResult.error) console.error('[ReceiptService] [listHistoryReceipts] groups', groupsResult.error);
+
+      const names = groupsResult.error ? new Map<string, string>() : groupNameMap(groupsResult.data);
+      const rows: HistoryReceiptRecord[] = [];
+      for (const row of receiptsResult.data ?? []) {
+        try {
+          const receipt = parseReceipt(row, 'FETCH_FAILED');
+          const groupId = receipt.group_id;
+          rows.push({
+            ...receipt,
+            group_name: groupId ? names.get(groupId) ?? null : null,
+          });
+        } catch (error) {
+          console.error('[ReceiptService] [listHistoryReceipts] row', error);
+        }
+      }
+      return rows;
+    } catch (caught) {
+      throw logged('listHistoryReceipts', 'FETCH_FAILED', 'Could not load receipt history.', caught);
+    }
+  }
 }
 
+export type HistoryReceiptRecord = Receipt & {
+  restaurant_name?: string | null;
+  /** Linked group name. Null for personal receipts and receipts whose group was deleted. */
+  group_name: string | null;
+};
+
 export const receiptService = new ReceiptService();
+
+function groupNameMap(rows: unknown) {
+  const names = new Map<string, string>();
+  if (!Array.isArray(rows)) return names;
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const record = row as { id?: unknown; name?: unknown };
+    if (typeof record.id !== 'string' || !record.id.trim()) continue;
+    if (typeof record.name !== 'string' || !record.name.trim()) continue;
+    names.set(record.id, record.name.trim());
+  }
+
+  return names;
+}
 
 function requireClient() {
   if (!supabase) {

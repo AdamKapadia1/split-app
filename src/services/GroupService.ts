@@ -25,6 +25,8 @@ export type GroupBalanceSummary = {
   id: string;
   memberPreviews: GroupMemberPreview[];
   memberCount: number;
+  /** Receipts linked to this group. Zero means no activity, which is not a settled balance. */
+  receiptCount: number;
   userNetBalanceMinor: number;
 };
 
@@ -494,6 +496,7 @@ function buildBalanceSummaries(
       id: groupId,
       memberPreviews: members.slice(0, 3).map((member) => ({ id: member.userId, display_name: member.displayName })),
       memberCount: members.length,
+      receiptCount: receiptsByGroup.get(groupId)?.length ?? 0,
       userNetBalanceMinor,
     };
   });

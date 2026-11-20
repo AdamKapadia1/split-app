@@ -58,7 +58,7 @@ export default function GroupsScreen() {
         const next = { ...current };
         for (const id of ids) {
           if (!next[id]) {
-            next[id] = { id, memberPreviews: [], memberCount: 0, userNetBalanceMinor: 0 };
+            next[id] = { id, memberPreviews: [], memberCount: 0, receiptCount: 0, userNetBalanceMinor: 0 };
           }
         }
         return next;
@@ -176,7 +176,12 @@ export default function GroupsScreen() {
     setNameFocused(false);
   };
 
-  const overallNetMinor = groups.reduce((sum, group) => sum + (summaries[group.id]?.userNetBalanceMinor ?? 0), 0);
+  const loadedSummaries = groups.flatMap((group) => {
+    const summary = summaries[group.id];
+    return summary ? [summary] : [];
+  });
+  const activeGroups = loadedSummaries.filter((summary) => summary.receiptCount > 0);
+  const overallNetMinor = loadedSummaries.reduce((sum, summary) => sum + summary.userNetBalanceMinor, 0);
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -204,7 +209,7 @@ export default function GroupsScreen() {
             loadingBalances ? (
               <Skeleton style={styles.bannerSkeleton} />
             ) : (
-              <NetBanner groupCount={groups.length} overallNetMinor={overallNetMinor} />
+              <NetBanner activeCount={activeGroups.length} overallNetMinor={overallNetMinor} />
             )
           ) : null}
           {groups.length > 0 ? <Text style={styles.sectionHeading}>Your groups</Text> : null}
@@ -271,7 +276,7 @@ export default function GroupsScreen() {
                         {isSyncing || loadingBalances || !summary ? (
                           <Skeleton style={styles.balanceSkeleton} />
                         ) : (
-                          <BalancePill amountMinor={summary.userNetBalanceMinor} />
+                          <BalancePill amountMinor={summary.userNetBalanceMinor} receiptCount={summary.receiptCount} />
                         )}
                         <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
                       </View>
@@ -346,14 +351,25 @@ export default function GroupsScreen() {
   );
 }
 
-function NetBanner({ groupCount, overallNetMinor }: { groupCount: number; overallNetMinor: number }) {
+function NetBanner({ activeCount, overallNetMinor }: { activeCount: number; overallNetMinor: number }) {
+  if (activeCount === 0) {
+    return (
+      <View style={styles.banner}>
+        <View style={styles.bannerLeft}>
+          <View style={styles.neutralDot} />
+          <Text style={styles.bannerCopy} numberOfLines={1}>No bills tracked yet</Text>
+        </View>
+      </View>
+    );
+  }
+
   if (overallNetMinor === 0) {
     return (
       <View style={styles.banner}>
         <View style={styles.bannerLeft}>
           <View style={styles.settledDot} />
           <Text style={styles.bannerCopy} numberOfLines={1}>
-            {`All settled across ${groupCount} ${groupCount === 1 ? 'group' : 'groups'}`}
+            {`All settled across ${activeCount} active ${activeCount === 1 ? 'group' : 'groups'}`}
           </Text>
         </View>
       </View>
@@ -373,7 +389,15 @@ function NetBanner({ groupCount, overallNetMinor }: { groupCount: number; overal
   );
 }
 
-function BalancePill({ amountMinor }: { amountMinor: number }) {
+function BalancePill({ amountMinor, receiptCount }: { amountMinor: number; receiptCount: number }) {
+  if (receiptCount === 0) {
+    return (
+      <View style={[styles.pill, styles.pillNeutral]}>
+        <Text style={[styles.pillText, styles.pillTextNeutral]} numberOfLines={1}>No bills yet</Text>
+      </View>
+    );
+  }
+
   const settled = amountMinor === 0;
   const owed = amountMinor > 0;
   const label = settled
@@ -420,6 +444,7 @@ const styles = StyleSheet.create({
   },
   bannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.positive },
+  neutralDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textMuted },
   bannerCopy: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500', color: theme.colors.textSecondary },
   sectionHeading: {
     ...theme.typography.sectionLabel,
@@ -458,11 +483,17 @@ const styles = StyleSheet.create({
   memberSkeleton: { width: 96, height: 14, borderRadius: 7, backgroundColor: theme.colors.surfaceElevated },
   syncing: { marginTop: 4, color: theme.colors.accent, fontSize: 12, fontWeight: '600' },
   trail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  balanceSkeleton: { width: 58, height: 22, borderRadius: theme.radius.full, backgroundColor: theme.colors.surfaceElevated },
+  balanceSkeleton: { width: 62, height: 22, borderRadius: theme.radius.full, backgroundColor: theme.colors.surfaceElevated },
   pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: theme.radius.full },
+  pillNeutral: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
   pillPositive: { backgroundColor: theme.colors.positiveSubtle },
   pillWarning: { backgroundColor: theme.colors.warningSubtle },
   pillText: { fontSize: 11, lineHeight: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  pillTextNeutral: { color: theme.colors.textMuted },
   pillTextPositive: { color: theme.colors.positive },
   pillTextWarning: { color: theme.colors.warning },
   emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
