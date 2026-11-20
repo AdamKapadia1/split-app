@@ -131,3 +131,58 @@ export interface Item {
   /** When true, this line is excluded from tax allocation. */
   is_tax_exempt: boolean;
 }
+
+/**
+ * How a settlement was recorded.
+ * Stored as text with a check constraint and mirrored here as a closed string union.
+ */
+export type SettlementPaymentMethod = 'manual' | 'payment_link' | 'open_banking';
+
+/**
+ * One recorded payment between two members of a group, stored in integer pence.
+ * Rows are append-only. A reversal sets `voided_at` and never deletes the ledger entry.
+ */
+export interface Settlement {
+  /** Immutable primary key assigned by Postgres. */
+  readonly id: string;
+  /** Group whose balances this payment changes. */
+  group_id: string;
+  /** Profile id of the person who paid. */
+  from_user_id: string;
+  /** Profile id of the person who received the payment. */
+  to_user_id: string;
+  /** Amount paid, in integer minor units (pence). Always greater than zero. */
+  amount_minor: number;
+  /** ISO 4217 currency code. Settlements are recorded in GBP. */
+  currency: string;
+  /** Client key that makes a repeated submit return the original row. */
+  idempotency_key: string;
+  /** How the payment was made. */
+  payment_method: SettlementPaymentMethod;
+  /** Optional note shown with the ledger entry. */
+  note: string | null;
+  /** When the payment was reversed. Null while it still counts toward balances. */
+  voided_at: string | null;
+  /** Profile id of the person who reversed the payment. */
+  voided_by: string | null;
+  /** Profile id of the signed-in member who recorded the payment. */
+  created_by: string;
+  /** Immutable timestamp recorded when the row was inserted. */
+  readonly created_at: string;
+}
+
+/** Arguments for the `record_settlement` RPC. Amounts are integer pence. */
+export interface RecordSettlementArgs {
+  p_group_id: string;
+  p_from_user_id: string;
+  p_to_user_id: string;
+  p_amount_minor: number;
+  p_idempotency_key: string;
+  p_payment_method?: SettlementPaymentMethod;
+  p_note?: string | null;
+}
+
+/** Arguments for the `void_settlement` RPC. */
+export interface VoidSettlementArgs {
+  p_settlement_id: string;
+}

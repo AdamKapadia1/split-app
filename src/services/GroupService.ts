@@ -10,6 +10,7 @@ export type GroupMemberProfile = {
   phone: string | null;
   fullName: string;
   avatarUrl: string | null;
+  paymentLink: string | null;
   role: 'owner' | 'member';
   joinedAt: string;
 };
@@ -24,6 +25,8 @@ type ProfileRow = {
   fullName?: string | null;
   avatar_url?: string | null;
   avatarUrl?: string | null;
+  payment_link?: string | null;
+  paymentLink?: string | null;
 };
 
 type MemberRow = ProfileRow & {
@@ -58,7 +61,7 @@ class GroupService {
       const client = requireClient();
       const { data, error } = await client
         .from('group_members')
-        .select('user_id, role, joined_at, profiles(id, email, phone, full_name, avatar_url)')
+        .select('user_id, role, joined_at, profiles(id, email, phone, full_name, avatar_url, payment_link)')
         .eq('group_id', groupId)
         .order('joined_at', { ascending: true });
 
@@ -191,6 +194,8 @@ function memberFromRpc(data: unknown, phone: string): GroupMemberProfile {
       fullName: profile.fullName,
       avatar_url: profile.avatar_url,
       avatarUrl: profile.avatarUrl,
+      payment_link: profile.payment_link,
+      paymentLink: profile.paymentLink,
     },
     userId,
     text(row.role) || null,
@@ -207,6 +212,7 @@ function toMember(
   const email = text(profile?.email);
   const fullName = text(profile?.full_name, profile?.fullName) || email.split('@')[0] || 'Member';
   const avatarUrl = text(profile?.avatar_url, profile?.avatarUrl) || null;
+  const paymentLink = text(profile?.payment_link, profile?.paymentLink) || null;
 
   return {
     userId,
@@ -214,6 +220,7 @@ function toMember(
     phone: text(profile?.phone) || null,
     fullName,
     avatarUrl,
+    paymentLink,
     role: role === 'owner' ? 'owner' : 'member',
     joinedAt: joinedAt || new Date().toISOString(),
   };
