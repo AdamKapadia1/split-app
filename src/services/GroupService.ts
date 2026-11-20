@@ -138,17 +138,28 @@ function requireClient() {
 function asGroupError(error: unknown): GroupServiceError {
   if (error instanceof GroupServiceError) return error;
 
+  console.error('[GroupService]', error);
+
   const code = postgresCode(error);
+  const message = postgresMessage(error);
   if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
   if (code === '22023') return new GroupServiceError('INVALID_PHONE', 'Enter a valid phone number.');
   if (code === '42501') return new GroupServiceError('PERMISSION_DENIED', 'You do not have permission to change this group.');
-  return new GroupServiceError('NETWORK_ERROR', 'Could not update group members.');
+
+  const detail = [message, code].filter((part) => part.length > 0).join(' ');
+  return new GroupServiceError('NETWORK_ERROR', detail || 'Could not update group members.');
 }
 
 function postgresCode(error: unknown) {
   if (!error || typeof error !== 'object' || !('code' in error)) return '';
   return String((error as PostgrestError).code ?? '');
+}
+
+function postgresMessage(error: unknown) {
+  if (!error || typeof error !== 'object' || !('message' in error)) return '';
+  const message = (error as PostgrestError).message;
+  return typeof message === 'string' ? message : '';
 }
 
 function firstProfile(value: unknown): ProfileRow | null {
