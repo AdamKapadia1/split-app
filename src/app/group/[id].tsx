@@ -15,6 +15,7 @@ import { compareGroupMembers, GroupServiceError, groupService, type GroupMemberP
 import { createIdempotencyKey, SettlementServiceError, settlementService } from '@/services/SettlementService';
 import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
+import { formatSmartDate } from '@/utils/formatSmartDate';
 import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
 import { calculateNetBalances, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type SimplifiedTransfer } from '@/utils/settlements';
@@ -521,19 +522,7 @@ export default function GroupLedgerScreen() {
 
   function settleUp() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (transfers.length > 0) {
-      scrollRef.current?.scrollTo({ y: Math.max(balancesOffset.current - 8, 0), animated: true });
-      return;
-    }
-    if (!historyExpanded) {
-      animateHistoryLayout();
-      setHistoryExpanded(true);
-    }
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        scrollRef.current?.scrollToEnd({ animated: true });
-      });
-    });
+    scrollRef.current?.scrollTo({ y: Math.max(balancesOffset.current - 8, 0), animated: true });
   }
 
   function toggleHistory() {
@@ -566,7 +555,9 @@ export default function GroupLedgerScreen() {
             <Text style={styles.monogramText}>{monogram(name)}</Text>
           </View>
           <View style={styles.receiptCopy}>
-            <Text style={styles.receiptName} numberOfLines={1}>{name}</Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.receiptName} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
+            </View>
             <Text style={styles.receiptMeta} numberOfLines={1}>
               {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
             </Text>
@@ -663,13 +654,26 @@ export default function GroupLedgerScreen() {
                 </>
               )}
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="Settle up" onPress={settleUp} style={styles.action}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={transfers.length === 0 ? 'All balances settled' : 'Settle up'}
+              accessibilityState={{ disabled: transfers.length === 0 }}
+              disabled={transfers.length === 0}
+              onPress={settleUp}
+              style={styles.action}
+            >
               {({ pressed }) => (
                 <>
-                  <View style={[styles.actionCircle, pressed && styles.actionCirclePressed]}>
-                    <Ionicons name="checkmark-circle-outline" size={20} color={theme.colors.textPrimary} />
+                  <View style={[styles.actionCircle, transfers.length === 0 && styles.actionCircleSettled, transfers.length > 0 && pressed && styles.actionCirclePressed]}>
+                    <Ionicons
+                      name={transfers.length === 0 ? 'checkmark' : 'checkmark-circle-outline'}
+                      size={20}
+                      color={transfers.length === 0 ? theme.colors.positive : theme.colors.accent}
+                    />
                   </View>
-                  <Text style={styles.actionLabel}>Settle Up</Text>
+                  <Text style={[styles.actionLabel, transfers.length === 0 ? styles.actionLabelSettled : styles.actionLabelActive]}>
+                    {transfers.length === 0 ? 'Settled' : 'Settle Up'}
+                  </Text>
                 </>
               )}
             </Pressable>
@@ -802,12 +806,20 @@ export default function GroupLedgerScreen() {
 
           <View style={styles.section}>
             <Text style={styles.sectionHeading}>Receipts</Text>
-            {activeReceipts.length === 0 ? (
-              <Text style={styles.emptyLine}>
-                {settledReceipts.length > 0
-                  ? 'Settled receipts are in Settlement History.'
-                  : 'Scan a receipt into this group and it will show up here.'}
-              </Text>
+            {activeReceipts.length === 0 && settledReceipts.length > 0 ? (
+              <View style={styles.allSettledCard}>
+                <View style={styles.allSettledBadge}>
+                  <Ionicons name="checkmark" size={16} color={theme.colors.positive} />
+                </View>
+                <View style={styles.allSettledCopy}>
+                  <Text style={styles.allSettledTitle}>All receipts settled</Text>
+                  <Text style={styles.allSettledSubtitle}>
+                    {`${settledReceipts.length} archived in Settlement History`}
+                  </Text>
+                </View>
+              </View>
+            ) : activeReceipts.length === 0 ? (
+              <Text style={styles.emptyLine}>Scan a receipt into this group and it will show up here.</Text>
             ) : (
               <View style={styles.card}>
                 {activeReceipts.map((item, index) => renderReceiptRow(item, index))}
@@ -892,6 +904,7 @@ export default function GroupLedgerScreen() {
                         <View style={styles.historyCard}>
                           {visibleSettledReceipts.map((item, index) => {
                             const name = receiptName(item);
+                            const settledWhen = formatSmartDate(item.created_at);
                             return (
                               <View key={item.id}>
                                 {index > 0 ? <View style={styles.settledDivider} /> : null}
@@ -908,14 +921,15 @@ export default function GroupLedgerScreen() {
                                     <Text style={styles.settledMonogramText}>{monogram(name)}</Text>
                                   </View>
                                   <View style={styles.settledCopy}>
-                                    <Text style={styles.settledName} numberOfLines={1}>{name}</Text>
-                                    <Text style={styles.settledDate}>{receiptWhen(item.settled_at ?? item.created_at)}</Text>
+                                    <View style={styles.nameRow}>
+                                      <Text style={styles.settledName} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
+                                    </View>
+                                    <Text style={styles.settledDate} numberOfLines={1} ellipsizeMode="tail">
+                                      {settledWhen ? `${settledWhen} · Settled` : 'Settled'}
+                                    </Text>
                                   </View>
                                   <View style={styles.settledTrailing}>
-                                    <View style={styles.settledPill}>
-                                      <Text style={styles.settledPillText}>Settled</Text>
-                                    </View>
-                                    <Text style={styles.settledAmount}>{formatPence(toMinorUnits(Number(item.total_amount || 0)))}</Text>
+                                    <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="sm" color={theme.colors.textSecondary} />
                                     <Ionicons name="chevron-forward" size={14} color={theme.colors.textMuted} />
                                   </View>
                                 </Pressable>
@@ -1077,10 +1091,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: theme.colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: theme.colors.border,
   },
+  actionCircleSettled: { opacity: 0.48 },
   actionCirclePressed: { backgroundColor: theme.colors.surfaceElevated },
   actionLabel: { marginTop: 6, fontSize: 12, lineHeight: 16, fontWeight: '500', color: theme.colors.textSecondary, textAlign: 'center' },
+  actionLabelActive: { color: theme.colors.textPrimary },
+  actionLabelSettled: { color: theme.colors.textMuted },
   memberCard: {
     marginHorizontal: 16,
     marginTop: 20,
@@ -1188,6 +1205,28 @@ const styles = StyleSheet.create({
   markPaidBusy: { opacity: 0.7 },
   markPaidText: { color: theme.colors.accent, fontSize: 12, lineHeight: 16, fontWeight: '600' },
   emptyLine: { ...theme.typography.caption, color: theme.colors.textMuted, paddingLeft: 4 },
+  allSettledCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  allSettledBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.positiveSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  allSettledCopy: { flex: 1, minWidth: 0 },
+  allSettledTitle: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: theme.colors.textPrimary },
+  allSettledSubtitle: { marginTop: 2, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
   receiptDivider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
   receiptRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 14 },
   receiptPressed: { backgroundColor: theme.colors.surfaceElevated },
@@ -1201,7 +1240,8 @@ const styles = StyleSheet.create({
   },
   monogramText: { color: theme.colors.accent, fontSize: 16, fontWeight: '700' },
   receiptCopy: { flex: 1, minWidth: 0, marginLeft: 6 },
-  receiptName: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  nameRow: { flexDirection: 'row' },
+  receiptName: { flex: 1, fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   receiptMeta: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 2 },
   historySection: { marginHorizontal: 16, marginTop: 24 },
   historyHeader: {
@@ -1290,22 +1330,9 @@ const styles = StyleSheet.create({
   },
   settledMonogramText: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '600' },
   settledCopy: { flex: 1, minWidth: 0, marginLeft: 10, marginRight: 8 },
-  settledName: { fontSize: 14, fontWeight: '500', color: theme.colors.textSecondary },
+  settledName: { flex: 1, fontSize: 14, fontWeight: '500', color: theme.colors.textSecondary },
   settledDate: { fontSize: 12, color: theme.colors.textMuted, marginTop: 2 },
-  settledTrailing: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  settledPill: {
-    backgroundColor: theme.colors.positiveSubtle,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: theme.radius.full,
-  },
-  settledPillText: { fontSize: 10, fontWeight: '600', color: theme.colors.positive },
-  settledAmount: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.textSecondary,
-    fontVariant: ['tabular-nums'],
-  },
+  settledTrailing: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   settledFooterDivider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border },
   settledFooter: { paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
   settledFooterAccent: { fontSize: 13, fontWeight: '600', color: theme.colors.accent },
@@ -1328,7 +1355,7 @@ const styles = StyleSheet.create({
   undoText: { color: theme.colors.danger, fontSize: 13, fontWeight: '600' },
   settingsOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    backgroundColor: theme.colors.scrim,
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
@@ -1347,7 +1374,7 @@ const styles = StyleSheet.create({
   settingsTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#FAFAFA',
+    color: theme.colors.textPrimary,
   },
   settingsClose: {
     width: 30,
@@ -1355,7 +1382,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#1C1C21',
+    backgroundColor: theme.colors.surfaceElevated,
   },
   settingsClosePressed: { backgroundColor: theme.colors.surfacePressed },
   settingsSection: {
@@ -1371,13 +1398,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: 'rgba(248, 113, 113, 0.12)',
+    backgroundColor: theme.colors.dangerSubtle,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(248, 113, 113, 0.35)',
+    borderColor: theme.colors.dangerMutedBorder,
   },
   dangerButtonPressed: { opacity: 0.75 },
   dangerText: {
-    color: '#F87171',
+    color: theme.colors.danger,
     fontSize: 15,
     fontWeight: '700',
   },

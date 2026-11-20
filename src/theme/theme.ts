@@ -19,7 +19,10 @@ export const theme = {
     warning: '#FB923C',
     warningSubtle: 'rgba(251, 146, 60, 0.12)',
     danger: '#F87171',
+    dangerSubtle: 'rgba(248, 113, 113, 0.12)',
     dangerBorder: 'rgba(248, 113, 113, 0.28)',
+    dangerMutedBorder: 'rgba(248, 113, 113, 0.30)',
+    dangerStrong: '#DC2626',
     scrim: 'rgba(0, 0, 0, 0.72)',
   },
   typography: {

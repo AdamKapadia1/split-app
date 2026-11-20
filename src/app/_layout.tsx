@@ -1,6 +1,7 @@
 import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { NightScreen } from '@/components/night-screen';
 import { Colors } from '@/constants/theme';
@@ -22,10 +23,12 @@ const AppTheme = {
 
 export default function RootLayout() {
   return (
-    <ThemeProvider value={AppTheme}>
-      <StatusBar style="light" />
-      <RootNavigator />
-    </ThemeProvider>
+    <GestureHandlerRootView style={styles.root}>
+      <ThemeProvider value={AppTheme}>
+        <StatusBar style="light" />
+        <RootNavigator />
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -67,6 +70,7 @@ function RootNavigator() {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: theme.colors.canvas },
   loading: {
     flex: 1,
     alignItems: 'center',

@@ -3,6 +3,7 @@ import type { CountryCode } from 'libphonenumber-js';
 
 import { supabase } from '@/lib/supabase';
 import { toE164 } from '@/utils/phone';
+import { calculateNetBalances, type SettlementRecordInput, type SettlementSplitInput } from '@/utils/settlements';
 
 export type GroupMemberProfile = {
   userId: string;
@@ -13,6 +14,26 @@ export type GroupMemberProfile = {
   paymentLink: string | null;
   role: 'owner' | 'member';
   joinedAt: string;
+};
+
+export type GroupMemberPreview = {
+  id: string;
+  display_name: string;
+};
+
+export type GroupBalanceSummary = {
+  id: string;
+  memberPreviews: GroupMemberPreview[];
+  memberCount: number;
+  userNetBalanceMinor: number;
+};
+
+export type AccountProfile = {
+  id: string;
+  displayName: string;
+  email: string | null;
+  phone: string | null;
+  paymentLink: string | null;
 };
 
 export type GroupServiceCode = 'INVALID_PHONE' | 'NOT_FOUND' | 'ALREADY_MEMBER' | 'PERMISSION_DENIED' | 'NETWORK_ERROR';
@@ -132,6 +153,92 @@ class GroupService {
       throw asGroupError(error);
     }
     notifyGroupList();
+  }
+
+  async getAccountProfile(userId: string): Promise<AccountProfile | null> {
+    try {
+      const client = requireClient();
+      const { data, error } = await client
+        .from('profiles')
+        .select('id, email, phone, full_name, payment_link')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+
+      const row = data as ProfileRow;
+      const email = text(row.email) || null;
+      const fullName = text(row.full_name, row.fullName) || (email ? email.split('@')[0] : '') || 'Account';
+      return {
+        id: userId,
+        displayName: fullName,
+        email,
+        phone: text(row.phone) || null,
+        paymentLink: text(row.payment_link, row.paymentLink) || null,
+      };
+    } catch (error) {
+      throw asGroupError(error);
+    }
+  }
+
+  async updatePaymentLink(userId: string, paymentLink: string | null): Promise<void> {
+    try {
+      const client = requireClient();
+      const next = paymentLink?.trim() ? paymentLink.trim() : null;
+      const { error } = await client.from('profiles').update({ payment_link: next }).eq('id', userId);
+      if (error) throw error;
+    } catch (error) {
+      throw asGroupError(error);
+    }
+  }
+
+  /**
+   * Loads member previews and the signed-in user's integer-pence net
+   * for every group in one parallel batch. Does not change settlement math.
+   */
+  async getGroupBalanceSummaries(groupIds: string[], userId: string): Promise<GroupBalanceSummary[]> {
+    const ids = [...new Set(groupIds.filter((id) => id.trim().length > 0 && !id.startsWith('temp-')))];
+    if (ids.length === 0 || !userId) return [];
+
+    try {
+      const client = requireClient();
+      const [membersResult, receiptsResult, settlementsResult, splitsResult] = await Promise.all([
+        client
+          .from('group_members')
+          .select('group_id, user_id, role, joined_at, profiles(id, email, full_name)')
+          .in('group_id', ids),
+        client.from('receipts').select('id, group_id, paid_by').in('group_id', ids),
+        client.from('settlements').select('group_id, from_user_id, to_user_id, amount_minor, voided_at').in('group_id', ids),
+        client
+          .from('receipt_splits')
+          .select('receipt_id, user_id, amount_minor, receipts!inner(group_id)')
+          .in('receipts.group_id', ids),
+      ]);
+
+      if (membersResult.error) throw membersResult.error;
+      if (receiptsResult.error) throw receiptsResult.error;
+      if (settlementsResult.error) throw settlementsResult.error;
+
+      const receipts = (receiptsResult.data ?? []) as unknown[];
+      let splitRows = splitsResult.error ? null : ((splitsResult.data ?? []) as unknown[]);
+      if (!splitRows) {
+        const receiptIds = receipts.flatMap((row) => {
+          const id = row && typeof row === 'object' ? text((row as { id?: unknown }).id) : '';
+          return id ? [id] : [];
+        });
+        if (receiptIds.length === 0) {
+          splitRows = [];
+        } else {
+          const fallback = await client.from('receipt_splits').select('receipt_id, user_id, amount_minor').in('receipt_id', receiptIds);
+          if (fallback.error) throw fallback.error;
+          splitRows = (fallback.data ?? []) as unknown[];
+        }
+      }
+
+      return buildBalanceSummaries(ids, userId, (membersResult.data ?? []) as unknown[], receipts, (settlementsResult.data ?? []) as unknown[], splitRows);
+    } catch (error) {
+      throw asGroupError(error);
+    }
   }
 
   async removeMember(groupId: string, userId: string): Promise<void> {
@@ -284,6 +391,126 @@ function toMember(
     role: role === 'owner' ? 'owner' : 'member',
     joinedAt: joinedAt || new Date().toISOString(),
   };
+}
+
+type RankedSummaryMember = {
+  userId: string;
+  displayName: string;
+  role: 'owner' | 'member';
+  joinedAt: string;
+};
+
+function buildBalanceSummaries(
+  groupIds: string[],
+  viewerId: string,
+  memberRows: unknown[],
+  receiptRows: unknown[],
+  settlementRows: unknown[],
+  splitRows: unknown[],
+): GroupBalanceSummary[] {
+  const membersByGroup = new Map<string, RankedSummaryMember[]>();
+  for (const raw of memberRows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as MemberRow & { group_id?: unknown };
+    const groupId = text(row.group_id);
+    const profile = firstProfile(row.profiles);
+    const userId = text(row.user_id, profile?.id);
+    if (!groupId || !userId) continue;
+    const email = text(profile?.email);
+    const bucket = membersByGroup.get(groupId) ?? [];
+    bucket.push({
+      userId,
+      displayName: text(profile?.full_name, profile?.fullName) || email.split('@')[0] || 'Member',
+      role: row.role === 'owner' ? 'owner' : 'member',
+      joinedAt: text(row.joined_at, row.joinedAt) || '',
+    });
+    membersByGroup.set(groupId, bucket);
+  }
+
+  const receiptGroup = new Map<string, string>();
+  const receiptsByGroup = new Map<string, { id: string; paid_by: string | null }[]>();
+  for (const raw of receiptRows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as { id?: unknown; group_id?: unknown; paid_by?: unknown };
+    const id = text(row.id);
+    const groupId = text(row.group_id);
+    if (!id || !groupId) continue;
+    receiptGroup.set(id, groupId);
+    const bucket = receiptsByGroup.get(groupId) ?? [];
+    bucket.push({ id, paid_by: text(row.paid_by) || null });
+    receiptsByGroup.set(groupId, bucket);
+  }
+
+  const settlementsByGroup = new Map<string, SettlementRecordInput[]>();
+  for (const raw of settlementRows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as { group_id?: unknown; from_user_id?: unknown; to_user_id?: unknown; amount_minor?: unknown; voided_at?: unknown };
+    const groupId = text(row.group_id);
+    const fromUserId = text(row.from_user_id);
+    const toUserId = text(row.to_user_id);
+    const amountMinor = integerMinor(row.amount_minor);
+    if (!groupId || !fromUserId || !toUserId || amountMinor === null) continue;
+    const bucket = settlementsByGroup.get(groupId) ?? [];
+    bucket.push({
+      from_user_id: fromUserId,
+      to_user_id: toUserId,
+      amount_minor: amountMinor,
+      voided_at: text(row.voided_at) || null,
+    });
+    settlementsByGroup.set(groupId, bucket);
+  }
+
+  const splitsByGroup = new Map<string, SettlementSplitInput[]>();
+  for (const raw of splitRows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as { receipt_id?: unknown; user_id?: unknown; amount_minor?: unknown };
+    const receiptId = text(row.receipt_id);
+    const splitUserId = text(row.user_id);
+    const amountMinor = integerMinor(row.amount_minor);
+    const groupId = receiptGroup.get(receiptId);
+    if (!receiptId || !splitUserId || amountMinor === null || !groupId) continue;
+    const bucket = splitsByGroup.get(groupId) ?? [];
+    bucket.push({ receipt_id: receiptId, user_id: splitUserId, amount_minor: amountMinor });
+    splitsByGroup.set(groupId, bucket);
+  }
+
+  return groupIds.map((groupId) => {
+    const members = (membersByGroup.get(groupId) ?? []).sort(compareSummaryMembers);
+    let userNetBalanceMinor = 0;
+    try {
+      const balances = calculateNetBalances(
+        receiptsByGroup.get(groupId) ?? [],
+        splitsByGroup.get(groupId) ?? [],
+        settlementsByGroup.get(groupId) ?? [],
+        members.map((member) => member.userId),
+      );
+      userNetBalanceMinor = balances[viewerId] ?? 0;
+    } catch (error) {
+      console.error('[GroupService] group balance', groupId, error);
+      userNetBalanceMinor = 0;
+    }
+
+    return {
+      id: groupId,
+      memberPreviews: members.slice(0, 3).map((member) => ({ id: member.userId, display_name: member.displayName })),
+      memberCount: members.length,
+      userNetBalanceMinor,
+    };
+  });
+}
+
+function compareSummaryMembers(a: RankedSummaryMember, b: RankedSummaryMember) {
+  if (a.role !== b.role) return a.role === 'owner' ? -1 : 1;
+  return a.joinedAt.localeCompare(b.joinedAt);
+}
+
+function integerMinor(value: unknown) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  return null;
 }
 
 function text(...values: unknown[]) {

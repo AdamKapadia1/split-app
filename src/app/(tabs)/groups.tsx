@@ -1,13 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AvatarBadge } from '@/components/AvatarBadge';
+import { MoneyText } from '@/components/MoneyText';
+import { Skeleton } from '@/components/skeleton';
 import { supabase } from '@/lib/supabase';
-import { subscribeGroupList } from '@/services/GroupService';
+import { useSupabaseSession } from '@/lib/use-session';
+import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
+import { formatPence } from '@/utils/money';
 
 type Group = {
   id: string;
@@ -18,43 +23,76 @@ type Group = {
 
 export default function GroupsScreen() {
   const router = useRouter();
+  const { session } = useSupabaseSession();
+  const userId = session?.user.id ?? null;
   const [groups, setGroups] = useState<Group[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [summaries, setSummaries] = useState<Record<string, GroupBalanceSummary>>({});
+  const [loadingGroups, setLoadingGroups] = useState(true);
+  const [loadingBalances, setLoadingBalances] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [nameFocused, setNameFocused] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const hydrateRequest = useRef(0);
   const nameReady = newGroupName.trim().length > 0;
+
+  const hydrateBalances = useCallback(async (list: Group[], viewerId: string) => {
+    const requestId = hydrateRequest.current + 1;
+    hydrateRequest.current = requestId;
+    const ids = list.map((group) => group.id).filter((id) => !id.startsWith('temp-'));
+    if (ids.length === 0) {
+      setLoadingBalances(false);
+      return;
+    }
+
+    setLoadingBalances(true);
+    try {
+      const rows = await groupService.getGroupBalanceSummaries(ids, viewerId);
+      if (hydrateRequest.current !== requestId) return;
+      setSummaries(Object.fromEntries(rows.map((row) => [row.id, row])));
+    } catch (error) {
+      console.error('Error loading group balances:', error);
+      if (hydrateRequest.current !== requestId) return;
+      setSummaries((current) => {
+        const next = { ...current };
+        for (const id of ids) {
+          if (!next[id]) {
+            next[id] = { id, memberPreviews: [], memberCount: 0, userNetBalanceMinor: 0 };
+          }
+        }
+        return next;
+      });
+    } finally {
+      if (hydrateRequest.current === requestId) setLoadingBalances(false);
+    }
+  }, []);
 
   const fetchGroups = useCallback(async (mode: 'load' | 'refresh' = 'load') => {
     try {
-      if (mode === 'refresh') {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
-      }
+      if (mode === 'refresh') setIsRefreshing(true);
       if (!supabase) return;
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-
-      if (!userId) return;
+      const { data: { session: active } } = await supabase.auth.getSession();
+      const viewerId = active?.user?.id ?? userId;
+      if (!viewerId) return;
 
       const { data, error } = await supabase
         .from('groups')
         .select('*, group_members!inner(user_id)')
-        .eq('group_members.user_id', userId)
+        .eq('group_members.user_id', viewerId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setGroups(data || []);
+      const next = (data || []) as Group[];
+      setGroups(next);
+      void hydrateBalances(next, viewerId);
     } catch (error) {
       console.error('Error fetching groups:', error);
     } finally {
-      setIsLoading(false);
+      setLoadingGroups(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [hydrateBalances, userId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -79,16 +117,15 @@ export default function GroupsScreen() {
 
     try {
       if (!supabase) throw new Error('Supabase is not configured.');
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-
-      if (!userId) throw new Error('Authentication required');
+      const { data: { session: active } } = await supabase.auth.getSession();
+      const viewerId = active?.user?.id;
+      if (!viewerId) throw new Error('Authentication required');
 
       const tempId = `temp-${Date.now()}`;
       const optimisticGroup: Group = {
         id: tempId,
         name: trimmedName,
-        created_by: userId,
+        created_by: viewerId,
         created_at: new Date().toISOString(),
       };
 
@@ -98,7 +135,7 @@ export default function GroupsScreen() {
 
       const { data: newGroup, error: groupError } = await supabase
         .from('groups')
-        .insert({ name: trimmedName, created_by: userId })
+        .insert({ name: trimmedName, created_by: viewerId })
         .select()
         .single();
 
@@ -106,11 +143,16 @@ export default function GroupsScreen() {
 
       const { error: memberError } = await supabase
         .from('group_members')
-        .insert({ group_id: newGroup.id, user_id: userId });
+        .insert({ group_id: newGroup.id, user_id: viewerId });
 
       if (memberError) throw memberError;
 
-      setGroups(prev => prev.map(g => g.id === tempId ? newGroup : g));
+      let nextGroups: Group[] = [];
+      setGroups(prev => {
+        nextGroups = prev.map(g => g.id === tempId ? newGroup : g);
+        return nextGroups;
+      });
+      void hydrateBalances(nextGroups, viewerId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error('Error creating group:', error);
@@ -134,13 +176,15 @@ export default function GroupsScreen() {
     setNameFocused(false);
   };
 
+  const overallNetMinor = groups.reduce((sum, group) => sum + (summaries[group.id]?.userNetBalanceMinor ?? 0), 0);
+
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
         <Text accessibilityRole="header" style={styles.title}>Groups</Text>
       </View>
 
-      {isLoading ? (
+      {loadingGroups && groups.length === 0 ? (
         <ActivityIndicator size="large" color={theme.colors.accent} style={styles.loader} />
       ) : (
         <ScrollView
@@ -156,6 +200,13 @@ export default function GroupsScreen() {
             />
           }
         >
+          {groups.length > 0 ? (
+            loadingBalances ? (
+              <Skeleton style={styles.bannerSkeleton} />
+            ) : (
+              <NetBanner groupCount={groups.length} overallNetMinor={overallNetMinor} />
+            )
+          ) : null}
           {groups.length > 0 ? <Text style={styles.sectionHeading}>Your groups</Text> : null}
           <View style={styles.card}>
             {groups.length === 0 ? (
@@ -168,7 +219,10 @@ export default function GroupsScreen() {
               </View>
             ) : (
               groups.map((item, index) => {
+                const summary = summaries[item.id];
                 const isSyncing = item.id.startsWith('temp-');
+                const memberCount = summary?.memberCount ?? 0;
+                const previews = summary?.memberPreviews ?? [];
                 return (
                   <View key={item.id}>
                     {index > 0 ? <View style={styles.divider} /> : null}
@@ -186,17 +240,41 @@ export default function GroupsScreen() {
                       style={({ pressed }) => [styles.row, pressed && styles.rowPressed, isSyncing && styles.rowSyncing]}
                     >
                       <View style={styles.iconBadge}>
-                        <Ionicons name="people-outline" size={18} color={theme.colors.accent} />
+                        <Ionicons name="people" size={18} color={theme.colors.accent} />
                       </View>
                       <View style={styles.copy}>
-                        <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
-                        <Text style={[styles.groupMeta, isSyncing && styles.syncing]}>
-                          {isSyncing
-                            ? 'Syncing...'
-                            : `Created ${new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`}
-                        </Text>
+                        <View style={styles.nameRow}>
+                          <Text style={styles.groupName} numberOfLines={1} ellipsizeMode="tail">{item.name}</Text>
+                        </View>
+                        {isSyncing ? (
+                          <Text style={styles.syncing}>Syncing...</Text>
+                        ) : !summary ? (
+                          <Skeleton style={styles.memberSkeleton} />
+                        ) : (
+                          <View style={styles.subtitleRow}>
+                            {previews.length > 0 ? (
+                              <View style={styles.avatarStack}>
+                                {previews.map((member, memberIndex) => (
+                                  <View key={member.id} style={[styles.avatarCutout, memberIndex > 0 && styles.avatarOverlap]}>
+                                    <AvatarBadge name={member.display_name} userId={member.id} size={18} />
+                                  </View>
+                                ))}
+                              </View>
+                            ) : null}
+                            <Text style={styles.memberCount} numberOfLines={1} ellipsizeMode="tail">
+                              {`${memberCount} ${memberCount === 1 ? 'member' : 'members'}`}
+                            </Text>
+                          </View>
+                        )}
                       </View>
-                      <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                      <View style={styles.trail}>
+                        {isSyncing || loadingBalances || !summary ? (
+                          <Skeleton style={styles.balanceSkeleton} />
+                        ) : (
+                          <BalancePill amountMinor={summary.userNetBalanceMinor} />
+                        )}
+                        <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                      </View>
                     </Pressable>
                   </View>
                 );
@@ -268,12 +346,81 @@ export default function GroupsScreen() {
   );
 }
 
+function NetBanner({ groupCount, overallNetMinor }: { groupCount: number; overallNetMinor: number }) {
+  if (overallNetMinor === 0) {
+    return (
+      <View style={styles.banner}>
+        <View style={styles.bannerLeft}>
+          <View style={styles.settledDot} />
+          <Text style={styles.bannerCopy} numberOfLines={1}>
+            {`All settled across ${groupCount} ${groupCount === 1 ? 'group' : 'groups'}`}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const owed = overallNetMinor > 0;
+  return (
+    <View style={styles.banner}>
+      <Text style={styles.bannerCopy} numberOfLines={1}>{owed ? 'Overall, you are owed' : 'Overall, you owe'}</Text>
+      <MoneyText
+        amountMinor={owed ? overallNetMinor : Math.abs(overallNetMinor)}
+        size="md"
+        color={owed ? theme.colors.positive : theme.colors.warning}
+      />
+    </View>
+  );
+}
+
+function BalancePill({ amountMinor }: { amountMinor: number }) {
+  const settled = amountMinor === 0;
+  const owed = amountMinor > 0;
+  const label = settled
+    ? 'Settled'
+    : owed
+      ? `Owed ${formatPence(amountMinor)}`
+      : `Owe ${formatPence(Math.abs(amountMinor))}`;
+
+  return (
+    <View style={[styles.pill, settled || owed ? styles.pillPositive : styles.pillWarning]}>
+      <Text style={[styles.pillText, settled || owed ? styles.pillTextPositive : styles.pillTextWarning]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.canvas },
-  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 },
+  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12 },
   title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
   loader: { marginTop: 48 },
   scrollContent: { paddingBottom: 120 },
+  banner: {
+    marginHorizontal: 16,
+    marginBottom: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  bannerSkeleton: {
+    marginHorizontal: 16,
+    marginBottom: 20,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  bannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
+  settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.positive },
+  bannerCopy: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500', color: theme.colors.textSecondary },
   sectionHeading: {
     ...theme.typography.sectionLabel,
     color: theme.colors.textMuted,
@@ -300,10 +447,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
-  groupName: { fontSize: 16, lineHeight: 21, fontWeight: '600', color: theme.colors.textPrimary },
-  groupMeta: { marginTop: 2, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
-  syncing: { color: theme.colors.accent, fontWeight: '600' },
+  copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 10 },
+  nameRow: { flexDirection: 'row' },
+  groupName: { flex: 1, fontSize: 16, lineHeight: 21, fontWeight: '600', color: theme.colors.textPrimary },
+  subtitleRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  avatarStack: { flexDirection: 'row', alignItems: 'center' },
+  avatarCutout: { borderWidth: 1.5, borderColor: theme.colors.surface, borderRadius: theme.radius.full },
+  avatarOverlap: { marginLeft: -5 },
+  memberCount: { flex: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
+  memberSkeleton: { width: 96, height: 14, borderRadius: 7, backgroundColor: theme.colors.surfaceElevated },
+  syncing: { marginTop: 4, color: theme.colors.accent, fontSize: 12, fontWeight: '600' },
+  trail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  balanceSkeleton: { width: 58, height: 22, borderRadius: theme.radius.full, backgroundColor: theme.colors.surfaceElevated },
+  pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: theme.radius.full },
+  pillPositive: { backgroundColor: theme.colors.positiveSubtle },
+  pillWarning: { backgroundColor: theme.colors.warningSubtle },
+  pillText: { fontSize: 11, lineHeight: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  pillTextPositive: { color: theme.colors.positive },
+  pillTextWarning: { color: theme.colors.warning },
   emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
   emptyBadge: {
     width: 44,
@@ -361,7 +522,7 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.canvas,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     paddingHorizontal: 14,
     fontSize: 16,
