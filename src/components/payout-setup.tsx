@@ -1,7 +1,6 @@
 import { BlurView } from 'expo-blur';
 import type { BlurViewProps } from 'expo-blur';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { SymbolView } from 'expo-symbols';
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -9,6 +8,7 @@ import Animated, { Easing, FadeIn, FadeOut, SlideInDown, SlideOutDown } from 're
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
+import { theme } from '@/theme/theme';
 import { successHaptic, tickHaptic } from '@/lib/haptics';
 import { useHoldScale } from '@/lib/use-snap-scale';
 
@@ -107,11 +107,7 @@ export function PayoutSetup({ visible, blurTarget, onClose, onConnected }: Payou
             entering={SlideInDown.duration(460).easing(Easing.out(Easing.cubic))}
             exiting={SlideOutDown.duration(320).easing(Easing.in(Easing.cubic))}
             style={styles.sheet}>
-            <LinearGradient
-              colors={['#0B132B', '#030712']}
-              start={{ x: 0.15, y: 0 }}
-              end={{ x: 0.85, y: 1 }}
-              style={[styles.sheetFill, { paddingBottom: Math.max(insets.bottom, Spacing.four) }]}>
+            <View style={[styles.sheetFill, { paddingBottom: Math.max(insets.bottom, Spacing.four) }]}>
               <View style={styles.handle} />
               <Text style={styles.title}>Where should the money go?</Text>
               <View style={styles.list}>
@@ -125,7 +121,7 @@ export function PayoutSetup({ visible, blurTarget, onClose, onConnected }: Payou
                   />
                 ))}
               </View>
-            </LinearGradient>
+            </View>
           </Animated.View>
         </>
       ) : null}
@@ -142,7 +138,7 @@ function BankLogo({ logo }: { logo: string | null }) {
         <SymbolView
           name={{ ios: 'building.columns.fill', android: 'account_balance', web: 'account_balance' }}
           size={20}
-          tintColor="#0B132B"
+          tintColor={theme.colors.accentText}
         />
       )}
     </View>
@@ -183,7 +179,7 @@ function BankCard({
             </View>
           </View>
           {linking ? (
-            <ActivityIndicator color="#F8FAFC" />
+            <ActivityIndicator color={theme.colors.textPrimary} />
           ) : (
             <SymbolView
               name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
@@ -221,10 +217,11 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     overflow: 'hidden',
-    borderTopWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
   },
   sheetFill: {
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
     gap: Spacing.four,
@@ -234,7 +231,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 999,
-    backgroundColor: 'rgba(148, 163, 184, 0.45)',
+    backgroundColor: theme.colors.borderStrong,
   },
   title: {
     color: Colors.text,
@@ -254,9 +251,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
-    backgroundColor: 'rgba(30, 41, 59, 0.4)',
-    borderWidth: 1,
-    borderColor: 'rgba(51, 65, 85, 0.5)',
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
   },
   cardBody: {
     flex: 1,
@@ -272,7 +269,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.textPrimary,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',

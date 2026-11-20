@@ -1,4 +1,3 @@
-import { LinearGradient } from 'expo-linear-gradient';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,9 +16,7 @@ import { NightScreen } from '@/components/night-screen';
 import { Colors, Spacing } from '@/constants/theme';
 import { mediumHaptic, tickHaptic } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
-
-const ICE = '#38BDF8';
-const NAVY = '#030712';
+import { theme } from '@/theme/theme';
 
 type Mode = 'sign-in' | 'create';
 
@@ -117,7 +114,8 @@ export function AuthScreen() {
             autoCorrect={false}
             keyboardType="email-address"
             placeholder="Email"
-            placeholderTextColor={Colors.textSecondary}
+            placeholderTextColor={theme.colors.textMuted}
+            selectionColor={theme.colors.accent}
             textContentType="emailAddress"
             value={email}
             onChangeText={setEmail}
@@ -129,7 +127,8 @@ export function AuthScreen() {
             autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
             autoCorrect={false}
             placeholder="Password"
-            placeholderTextColor={Colors.textSecondary}
+            placeholderTextColor={theme.colors.textMuted}
+            selectionColor={theme.colors.accent}
             secureTextEntry
             textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
             value={password}
@@ -150,9 +149,9 @@ export function AuthScreen() {
               void submit();
             }}
             style={[styles.buttonPress, busy && styles.buttonBusy]}>
-            <LinearGradient colors={['#7DD3FC', ICE]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.button}>
-              {busy ? <ActivityIndicator color={NAVY} /> : <Text style={styles.buttonLabel}>{action}</Text>}
-            </LinearGradient>
+            <View style={styles.button}>
+              {busy ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.buttonLabel}>{action}</Text>}
+            </View>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -186,7 +185,7 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   kicker: {
-    color: ICE,
+    color: theme.colors.accent,
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 2.4,
@@ -210,9 +209,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     padding: 4,
     borderRadius: 16,
-    backgroundColor: 'rgba(30, 41, 59, 0.4)',
-    borderWidth: 1,
-    borderColor: 'rgba(51, 65, 85, 0.5)',
+    backgroundColor: theme.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
   },
   toggleItem: {
     flex: 1,
@@ -222,9 +221,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toggleItemSelected: {
-    backgroundColor: 'rgba(56, 189, 248, 0.16)',
+    backgroundColor: theme.colors.accentSubtle,
     borderWidth: 1,
-    borderColor: ICE,
+    borderColor: theme.colors.accentBorder,
   },
   toggleLabel: {
     color: Colors.textSecondary,
@@ -233,21 +232,21 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
   },
   toggleLabelSelected: {
-    color: ICE,
+    color: theme.colors.accent,
   },
   input: {
     minHeight: 56,
     borderRadius: 16,
     paddingHorizontal: Spacing.three,
-    backgroundColor: 'rgba(30, 41, 59, 0.4)',
+    backgroundColor: theme.colors.canvas,
     borderWidth: 1,
-    borderColor: 'rgba(51, 65, 85, 0.5)',
+    borderColor: theme.colors.border,
     color: Colors.text,
     fontSize: 16,
     letterSpacing: -0.2,
   },
   error: {
-    color: '#FCA5A5',
+    color: theme.colors.danger,
     fontSize: 14,
     lineHeight: 20,
   },
@@ -259,7 +258,7 @@ const styles = StyleSheet.create({
   buttonPress: {
     marginTop: Spacing.two,
     borderRadius: 999,
-    shadowColor: ICE,
+    shadowColor: theme.colors.accent,
     shadowOpacity: 0.28,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
@@ -270,13 +269,14 @@ const styles = StyleSheet.create({
   },
   button: {
     minHeight: 56,
-    borderRadius: 999,
+    borderRadius: theme.radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
+    backgroundColor: theme.colors.accent,
   },
   buttonLabel: {
-    color: NAVY,
+    color: theme.colors.accentText,
     fontSize: 17,
     fontWeight: '700',
     letterSpacing: -0.2,

@@ -14,13 +14,20 @@ const VARIANTS: Record<StatusPillVariant, { backgroundColor: string; color: stri
 type StatusPillProps = {
   variant: StatusPillVariant;
   label: string;
+  bordered?: boolean;
 };
 
-export function StatusPill({ variant, label }: StatusPillProps) {
+export function StatusPill({ variant, label, bordered = false }: StatusPillProps) {
   const colors = VARIANTS[variant];
 
   return (
-    <View style={[styles.pill, { backgroundColor: colors.backgroundColor }]}>
+    <View
+      style={[
+        styles.pill,
+        { backgroundColor: colors.backgroundColor },
+        bordered && styles.bordered,
+      ]}
+    >
       <View style={[styles.dot, { backgroundColor: colors.color }]} />
       <Text style={[styles.label, { color: colors.color }]}>{label}</Text>
     </View>
@@ -38,5 +45,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
+  bordered: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
   label: { fontSize: 12, lineHeight: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });

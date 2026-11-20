@@ -1,19 +1,20 @@
-import { supabase } from '@/lib/supabase';
-import type { Receipt } from '@/types/database.types';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { MoneyText } from '@/components/MoneyText';
+import { StatusPill } from '@/components/StatusPill';
+import { supabase } from '@/lib/supabase';
+import { theme } from '@/theme/theme';
+import type { Receipt } from '@/types/database.types';
+import { toMinorUnits } from '@/utils/money';
 
 type HistoryReceipt = Receipt & {
   restaurant_name?: string | null;
 };
-
-function money(value: number) {
-  return `£${value.toFixed(2)}`;
-}
 
 function receiptTitle(item: HistoryReceipt) {
   const merchant = item.merchant_name?.trim();
@@ -29,6 +30,11 @@ function receiptTitle(item: HistoryReceipt) {
 
 function receiptDate(createdAt: string) {
   return new Date(createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function monogram(name: string) {
+  const letter = name.trim().charAt(0).toUpperCase();
+  return letter || '?';
 }
 
 export default function HomeScreen() {
@@ -71,6 +77,7 @@ export default function HomeScreen() {
 
   async function handleLogout() {
     if (!supabase) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await supabase.auth.signOut();
   }
 
@@ -84,7 +91,7 @@ export default function HomeScreen() {
   }
 
   function deleteReceipt(id: string, name: string) {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert('Delete Receipt', `Are you sure you want to delete "${name}"? This cannot be undone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -133,141 +140,163 @@ export default function HomeScreen() {
   const countLabel = `${receipts.length} ${receipts.length === 1 ? 'receipt' : 'receipts'}`;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>History</Text>
-        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Log Out" onPress={() => void handleLogout()} style={styles.logoutPill} activeOpacity={0.75}>
-          <Ionicons name="log-out-outline" size={16} color="#F87171" />
+        <Text accessibilityRole="header" style={styles.title}>History</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log Out"
+          hitSlop={8}
+          onPress={() => {
+            void handleLogout();
+          }}
+          style={({ pressed }) => [styles.logoutPill, pressed && styles.logoutPressed]}
+        >
+          <Ionicons name="log-out-outline" size={14} color={theme.colors.danger} />
           <Text style={styles.logoutText}>Log Out</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       {isLoading ? (
-        <ActivityIndicator size="large" color="#38BDF8" style={styles.loader} />
+        <ActivityIndicator size="large" color={theme.colors.accent} style={styles.loader} />
       ) : (
-        <FlatList
-          data={receipts}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => {
-            const title = receiptTitle(item);
-            return (
-              <View style={styles.card}>
-                <TouchableOpacity style={styles.cardMain} activeOpacity={0.75} onPress={() => openReceipt(item.id)}>
-                  <View style={styles.badge}>
-                    <Ionicons name="receipt-outline" size={20} color="#38BDF8" />
-                  </View>
-                  <View style={styles.cardCopy}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>
-                      {title}
-                    </Text>
-                    <Text style={styles.cardSubtitle}>{receiptDate(item.created_at)}</Text>
-                  </View>
-                </TouchableOpacity>
-                <View style={styles.cardTrail}>
-                  <Text style={styles.cardAmount}>{money(Number(item.total_amount || 0))}</Text>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    accessibilityLabel={`Delete ${title}`}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    onPress={() => deleteReceipt(item.id, title)}
-                    activeOpacity={0.6}
-                  >
-                    <Ionicons name="trash-outline" size={18} color="#64748B" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          }}
-          contentContainerStyle={styles.listContent}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#38BDF8" />}
-          ListHeaderComponent={
-            <LinearGradient colors={['#1E293B', '#0F172A']} style={styles.hero}>
-              <View style={styles.heroTop}>
-                <Text style={styles.heroLabel}>TOTAL TRACKED</Text>
-                <View style={styles.countPill}>
-                  <Text style={styles.countText}>{countLabel}</Text>
-                </View>
-              </View>
-              <Text style={styles.heroAmount}>{money(tracked)}</Text>
-            </LinearGradient>
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="receipt-outline" size={64} color="#334155" />
-              <Text style={styles.emptyTitle}>No receipts yet</Text>
-              <Text style={styles.emptySubtitle}>Tap the camera button below to scan your first bill.</Text>
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />}
+        >
+          <View style={styles.hero}>
+            <Text style={styles.heroLabel}>Total tracked</Text>
+            <MoneyText amountMinor={toMinorUnits(tracked)} size="hero" splitDecimals />
+            <View style={styles.countWrap}>
+              <StatusPill variant="neutral" bordered label={countLabel} />
             </View>
-          }
-        />
+          </View>
+
+          <Text style={styles.sectionHeading}>Recent receipts</Text>
+          <View style={styles.card}>
+            {receipts.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyBadge}>
+                  <Ionicons name="receipt-outline" size={22} color={theme.colors.accent} />
+                </View>
+                <Text style={styles.emptyTitle}>No receipts yet</Text>
+                <Text style={styles.emptySubtitle}>Scan your first bill to start splitting.</Text>
+              </View>
+            ) : (
+              receipts.map((item, index) => {
+                const title = receiptTitle(item);
+                return (
+                  <View key={item.id}>
+                    {index > 0 ? <View style={styles.divider} /> : null}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={title}
+                      onPress={() => openReceipt(item.id)}
+                      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                    >
+                      <View style={styles.monogram}>
+                        <Text style={styles.monogramText}>{monogram(title)}</Text>
+                      </View>
+                      <View style={styles.copy}>
+                        <Text style={styles.merchant} numberOfLines={1}>{title}</Text>
+                        <Text style={styles.date}>{receiptDate(item.created_at)}</Text>
+                      </View>
+                      <View style={styles.trail}>
+                        <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete ${title}`}
+                          hitSlop={10}
+                          onPress={() => deleteReceipt(item.id, title)}
+                          style={styles.deleteButton}
+                        >
+                          {({ pressed }) => (
+                            <Ionicons name="trash-outline" size={17} color={pressed ? theme.colors.danger : theme.colors.textMuted} />
+                          )}
+                        </Pressable>
+                      </View>
+                    </Pressable>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B1120' },
+  container: { flex: 1, backgroundColor: theme.colors.canvas },
   header: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 18,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 64,
-    paddingBottom: 20,
+    justifyContent: 'space-between',
   },
-  title: { fontSize: 32, fontWeight: '800', color: '#F8FAFC', letterSpacing: -0.8 },
+  title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
   logoutPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(239, 68, 68, 0.12)',
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-    borderWidth: 1,
-    borderRadius: 999,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.dangerBorder,
   },
-  logoutText: { color: '#F87171', fontSize: 14, fontWeight: '700' },
-  loader: { marginTop: 60 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 40, flexGrow: 1 },
-  hero: {
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.2)',
+  logoutPressed: { backgroundColor: theme.colors.surfacePressed },
+  logoutText: { color: theme.colors.danger, fontSize: 13, fontWeight: '600' },
+  loader: { marginTop: 48 },
+  scrollContent: { paddingBottom: 32 },
+  hero: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 24 },
+  heroLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 4 },
+  countWrap: { marginTop: 10, alignSelf: 'flex-start' },
+  sectionHeading: {
+    ...theme.typography.sectionLabel,
+    color: theme.colors.textMuted,
+    marginBottom: 8,
+    marginLeft: 20,
   },
-  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  heroLabel: { color: '#94A3B8', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 },
-  countPill: { backgroundColor: 'rgba(56, 189, 248, 0.12)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
-  countText: { color: '#38BDF8', fontSize: 12, fontWeight: '700' },
-  heroAmount: { marginTop: 14, color: '#FFFFFF', fontSize: 36, fontWeight: '800', letterSpacing: -1, fontVariant: ['tabular-nums'] },
   card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#151F32',
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.12)',
+    marginHorizontal: 16,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
   },
-  cardMain: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  badge: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border, marginLeft: 66 },
+  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14 },
+  rowPressed: { backgroundColor: theme.colors.surfaceElevated },
+  monogram: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardCopy: { flex: 1, marginHorizontal: 12 },
-  cardTitle: { color: '#F8FAFC', fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
-  cardSubtitle: { marginTop: 3, color: '#94A3B8', fontSize: 13 },
-  cardTrail: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  cardAmount: { color: '#38BDF8', fontSize: 17, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
-  emptyTitle: { fontSize: 22, fontWeight: '800', color: '#F8FAFC', marginTop: 20, marginBottom: 8, letterSpacing: -0.5 },
-  emptySubtitle: { fontSize: 16, color: '#94A3B8', textAlign: 'center', lineHeight: 24 },
+  monogramText: { color: theme.colors.accent, fontSize: 16, fontWeight: '700' },
+  copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
+  merchant: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  date: { marginTop: 2, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  trail: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  deleteButton: { padding: 4 },
+  emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
+  emptyBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: { marginTop: 12, fontSize: 16, fontWeight: '600', color: theme.colors.textPrimary },
+  emptySubtitle: { marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary, textAlign: 'center' },
 });

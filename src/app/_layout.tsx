@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { NightScreen } from '@/components/night-screen';
 import { Colors } from '@/constants/theme';
+import { theme } from '@/theme/theme';
 import { useSupabaseSession } from '@/lib/use-session';
 
 const AppTheme = {
@@ -35,7 +36,7 @@ function RootNavigator() {
     return (
       <NightScreen>
         <View style={styles.loading}>
-          <ActivityIndicator color="#38BDF8" />
+          <ActivityIndicator color={theme.colors.accent} />
         </View>
       </NightScreen>
     );

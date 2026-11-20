@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
 import { supabase } from '@/lib/supabase';
+import { theme } from '@/theme/theme';
 
 type Group = { id: string; name: string; };
 
@@ -16,6 +17,7 @@ export function GroupSelectorSheet({ visible, onSelect, onCancel }: { visible: b
     async function fetchGroups() {
       try {
         setIsLoading(true);
+        if (!supabase) return;
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.user?.id) return;
         const { data, error } = await supabase
@@ -30,58 +32,95 @@ export function GroupSelectorSheet({ visible, onSelect, onCancel }: { visible: b
   }, [visible]);
 
   const handleSelect = (groupId: string | null) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onSelect(groupId);
   };
+
+  const options = [{ id: null, name: 'Personal Expense', icon: 'person-outline' as const }, ...groups.map((group) => ({ id: group.id, name: group.name, icon: 'people-outline' as const }))];
 
   return (
     <Modal visible={visible} animationType="slide" transparent statusBarTranslucent>
       <View style={styles.overlay}>
-        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onCancel} activeOpacity={1} />
-        <BlurView intensity={60} tint="dark" style={styles.sheet}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" style={StyleSheet.absoluteFill} onPress={onCancel} />
+        <View style={styles.sheet}>
           <View style={styles.dragIndicator} />
           <Text style={styles.sheetTitle}>Assign Receipt</Text>
           {isLoading ? (
-            <ActivityIndicator size="large" color="#38BDF8" style={styles.loader} />
+            <ActivityIndicator size="large" color={theme.colors.accent} style={styles.loader} />
           ) : (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-              <TouchableOpacity style={[styles.optionCard, styles.personalOption]} onPress={() => handleSelect(null)} activeOpacity={0.7}>
-                <View style={[styles.iconWrap, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]}>
-                  <Ionicons name="person" size={20} color="#fff" />
-                </View>
-                <Text style={styles.optionText}>Personal Expense</Text>
-                <Ionicons name="chevron-forward" size={20} color="#64748b" />
-              </TouchableOpacity>
-              <Text style={styles.sectionHeader}>YOUR GROUPS</Text>
-              {groups.map(group => (
-                <TouchableOpacity key={group.id} style={styles.optionCard} onPress={() => handleSelect(group.id)} activeOpacity={0.7}>
-                  <View style={[styles.iconWrap, { backgroundColor: 'rgba(56, 189, 248, 0.15)' }]}>
-                    <Ionicons name="people" size={20} color="#38BDF8" />
+              <Text style={styles.sectionHeader}>Choose a ledger</Text>
+              <View style={styles.card}>
+                {options.map((option, index) => (
+                  <View key={option.id ?? 'personal'}>
+                    {index > 0 ? <View style={styles.divider} /> : null}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={option.name}
+                      onPress={() => handleSelect(option.id)}
+                      style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                    >
+                      <View style={styles.iconWrap}>
+                        <Ionicons name={option.icon} size={18} color={theme.colors.accent} />
+                      </View>
+                      <Text style={styles.optionText} numberOfLines={1}>{option.name}</Text>
+                      <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                    </Pressable>
                   </View>
-                  <Text style={styles.optionText}>{group.name}</Text>
-                  <Ionicons name="chevron-forward" size={20} color="#64748b" />
-                </TouchableOpacity>
-              ))}
-              {groups.length === 0 && <Text style={styles.emptyText}>{"You haven't created any groups yet."}</Text>}
+                ))}
+              </View>
+              {groups.length === 0 ? <Text style={styles.emptyText}>You haven&apos;t created any groups yet.</Text> : null}
             </ScrollView>
           )}
-        </BlurView>
+        </View>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.4)' },
-  sheet: { backgroundColor: 'rgba(15, 23, 42, 0.85)', borderTopLeftRadius: 32, borderTopRightRadius: 32, maxHeight: '80%', paddingHorizontal: 24, paddingBottom: 40 },
-  dragIndicator: { width: 40, height: 5, backgroundColor: '#334155', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
-  sheetTitle: { fontSize: 24, fontWeight: '800', color: 'white', letterSpacing: -0.5, marginBottom: 24 },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: theme.colors.scrim },
+  sheet: {
+    backgroundColor: theme.colors.canvas,
+    borderTopLeftRadius: theme.radius.xl,
+    borderTopRightRadius: theme.radius.xl,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    maxHeight: '80%',
+    paddingHorizontal: 20,
+    paddingBottom: 32,
+  },
+  dragIndicator: {
+    width: 36,
+    height: 4,
+    backgroundColor: theme.colors.borderStrong,
+    borderRadius: theme.radius.full,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 18,
+  },
+  sheetTitle: { fontSize: 20, fontWeight: '700', letterSpacing: -0.4, color: theme.colors.textPrimary, marginBottom: 16 },
   loader: { marginVertical: 40 },
-  scrollContent: { paddingBottom: 24 },
-  sectionHeader: { color: '#64748b', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginTop: 24, marginBottom: 12, marginLeft: 4 },
-  optionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e293b', padding: 16, borderRadius: 20, marginBottom: 12, borderWidth: 1, borderColor: '#334155' },
-  personalOption: { borderColor: 'rgba(255, 255, 255, 0.1)' },
-  iconWrap: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  optionText: { flex: 1, fontSize: 17, fontWeight: '600', color: 'white' },
-  emptyText: { color: '#94a3b8', fontSize: 15, textAlign: 'center', marginTop: 24, fontStyle: 'italic' },
+  scrollContent: { paddingBottom: 12 },
+  sectionHeader: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 8, marginLeft: 4 },
+  card: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
+  optionRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14 },
+  optionPressed: { backgroundColor: theme.colors.surfaceElevated },
+  iconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionText: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8, fontSize: 16, fontWeight: '600', color: theme.colors.textPrimary },
+  emptyText: { color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18, textAlign: 'center', marginTop: 16 },
 });

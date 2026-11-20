@@ -1,14 +1,16 @@
+import { theme } from '@/theme/theme';
+
 export const Colors = {
-  text: '#FAFAFA',
-  background: '#000000',
-  backgroundElement: '#0A0A0A',
-  backgroundSelected: '#171717',
-  textSecondary: '#94A3B8',
-  accent: '#D6FF4A',
-  border: '#262626',
-  cardStart: '#161616',
-  cardEnd: '#070707',
-  skeleton: '#262626',
+  text: theme.colors.textPrimary,
+  background: theme.colors.canvas,
+  backgroundElement: theme.colors.surface,
+  backgroundSelected: theme.colors.surfaceElevated,
+  textSecondary: theme.colors.textSecondary,
+  accent: theme.colors.accent,
+  border: theme.colors.border,
+  cardStart: theme.colors.surface,
+  cardEnd: theme.colors.canvas,
+  skeleton: theme.colors.surfaceElevated,
 } as const;
 
 export const Spacing = {

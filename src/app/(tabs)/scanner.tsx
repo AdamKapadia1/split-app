@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } fr
 import { GroupSelectorSheet } from '@/components/GroupSelectorSheet';
 import { supabase } from '@/lib/supabase';
 
+import { theme } from '@/theme/theme';
 import { receiptService } from '../../services/ReceiptService';
 import { VisionService } from '../../services/VisionService';
 
@@ -128,7 +129,7 @@ export default function ScannerScreen() {
           }}
           style={styles.shutterOuter}>
           {isCapturing ? (
-            <ActivityIndicator color="#38BDF8" size="large" />
+            <ActivityIndicator color={theme.colors.accent} size="large" />
           ) : (
             <View style={styles.shutterInner} />
           )}
@@ -149,25 +150,23 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#0B0F19',
+    backgroundColor: theme.colors.canvas,
   },
   denied: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
-    backgroundColor: '#0B0F19',
+    backgroundColor: theme.colors.canvas,
   },
   title: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '700',
+    ...theme.typography.screenTitle,
+    color: theme.colors.textPrimary,
     textAlign: 'center',
-    letterSpacing: -0.6,
   },
   subtitle: {
     marginTop: 12,
-    color: '#94A3B8',
+    color: theme.colors.textSecondary,
     fontSize: 16,
     lineHeight: 24,
     textAlign: 'center',
@@ -176,13 +175,13 @@ const styles = StyleSheet.create({
     marginTop: 28,
     minHeight: 52,
     paddingHorizontal: 24,
-    borderRadius: 16,
+    borderRadius: theme.radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#38BDF8',
+    backgroundColor: theme.colors.accent,
   },
   permissionLabel: {
-    color: '#FFFFFF',
+    color: theme.colors.accentText,
     fontSize: 16,
     fontWeight: '700',
   },
@@ -195,9 +194,9 @@ const styles = StyleSheet.create({
   guide: {
     width: '78%',
     height: '62%',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.5)',
-    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.textPrimary,
+    borderRadius: theme.radius.lg,
   },
   footer: {
     position: 'absolute',
@@ -205,7 +204,7 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(11, 15, 25, 0.8)',
+    backgroundColor: theme.colors.canvas,
     paddingTop: 20,
     paddingBottom: 20,
   },
@@ -214,7 +213,7 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 4,
-    borderColor: '#FFFFFF',
+    borderColor: theme.colors.textPrimary,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
@@ -223,6 +222,6 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.textPrimary,
   },
 });

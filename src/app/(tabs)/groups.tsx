@@ -1,11 +1,12 @@
-import { supabase } from '@/lib/supabase';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { supabase } from '@/lib/supabase';
+import { theme } from '@/theme/theme';
 
 type Group = {
   id: string;
@@ -21,9 +22,10 @@ export default function GroupsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [nameFocused, setNameFocused] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const nameReady = newGroupName.trim().length > 0;
 
-  // 1. Relational Database Fetching
   const fetchGroups = useCallback(async (mode: 'load' | 'refresh' = 'load') => {
     try {
       if (mode === 'refresh') {
@@ -31,12 +33,12 @@ export default function GroupsScreen() {
       } else {
         setIsLoading(true);
       }
+      if (!supabase) return;
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
       if (!userId) return;
 
-      // Advanced query: Fetch all groups where this user exists in the group_members mapping table
       const { data, error } = await supabase
         .from('groups')
         .select('*, group_members!inner(user_id)')
@@ -59,7 +61,6 @@ export default function GroupsScreen() {
     }, [fetchGroups])
   );
 
-  // 2. Seamless Creation Pipeline
   const handleCreateGroup = async () => {
     const trimmedName = newGroupName.trim();
     if (!trimmedName) {
@@ -68,16 +69,16 @@ export default function GroupsScreen() {
       return;
     }
 
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setIsCreating(true);
 
     try {
+      if (!supabase) throw new Error('Supabase is not configured.');
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
       if (!userId) throw new Error('Authentication required');
 
-      // Optimistic UI Update: Create a temporary group object and inject it instantly
       const tempId = `temp-${Date.now()}`;
       const optimisticGroup: Group = {
         id: tempId,
@@ -85,12 +86,11 @@ export default function GroupsScreen() {
         created_by: userId,
         created_at: new Date().toISOString(),
       };
-      
+
       setGroups(prev => [optimisticGroup, ...prev]);
       setModalVisible(false);
       setNewGroupName('');
 
-      // Background Execution: Create Group
       const { data: newGroup, error: groupError } = await supabase
         .from('groups')
         .insert({ name: trimmedName, created_by: userId })
@@ -99,20 +99,17 @@ export default function GroupsScreen() {
 
       if (groupError) throw groupError;
 
-      // Background Execution: Map Creator to Group
       const { error: memberError } = await supabase
         .from('group_members')
         .insert({ group_id: newGroup.id, user_id: userId });
 
       if (memberError) throw memberError;
 
-      // Silently swap the temporary ID for the real database UUID
       setGroups(prev => prev.map(g => g.id === tempId ? newGroup : g));
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error('Error creating group:', error);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Transaction Failed', 'Could not create the group securely.');
       void fetchGroups();
     } finally {
@@ -121,70 +118,28 @@ export default function GroupsScreen() {
   };
 
   const openModal = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setModalVisible(true);
   };
 
   const closeModal = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setModalVisible(false);
     setNewGroupName('');
-  };
-
-  const renderGroup = ({ item }: { item: Group }) => {
-    const isSyncing = item.id.startsWith('temp-');
-
-    return (
-      <TouchableOpacity
-        style={[styles.groupCard, isSyncing && styles.groupCardSyncing]}
-        activeOpacity={0.8}
-        onPress={() => {
-          if (isSyncing) {
-            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            return;
-          }
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push({ pathname: '/group/[id]', params: { id: item.id } });
-        }}
-      >
-        <View style={styles.groupIconWrap}>
-          <Ionicons name="people" size={24} color="#38BDF8" />
-        </View>
-        <View style={styles.groupInfo}>
-          <Text style={styles.groupName}>{item.name}</Text>
-          {isSyncing ? (
-            <Text style={styles.syncingText}>Syncing...</Text>
-          ) : (
-            <Text style={styles.dateText}>
-              Created {new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-            </Text>
-          )}
-        </View>
-        <Ionicons name="chevron-forward" size={20} color="#64748b" />
-      </TouchableOpacity>
-    );
+    setNameFocused(false);
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Groups</Text>
+        <Text accessibilityRole="header" style={styles.title}>Groups</Text>
       </View>
 
       {isLoading ? (
-        <ActivityIndicator size="large" color="#38BDF8" style={{ marginTop: 60 }} />
-      ) : groups.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="people-circle-outline" size={80} color="#334155" />
-          <Text style={styles.emptyTitle}>No Groups Yet</Text>
-          <Text style={styles.emptySubtitle}>Create a group to track shared expenses for trips, housemates, or events.</Text>
-        </View>
+        <ActivityIndicator size="large" color={theme.colors.accent} style={styles.loader} />
       ) : (
-        <FlatList
-          data={groups}
-          keyExtractor={(item) => item.id}
-          renderItem={renderGroup}
-          contentContainerStyle={styles.listContent}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
@@ -192,102 +147,236 @@ export default function GroupsScreen() {
               onRefresh={() => {
                 void fetchGroups('refresh');
               }}
-              tintColor="#38BDF8"
+              tintColor={theme.colors.accent}
             />
           }
-        />
+        >
+          {groups.length > 0 ? <Text style={styles.sectionHeading}>Your groups</Text> : null}
+          <View style={styles.card}>
+            {groups.length === 0 ? (
+              <View style={styles.emptyState}>
+                <View style={styles.emptyBadge}>
+                  <Ionicons name="people-outline" size={22} color={theme.colors.accent} />
+                </View>
+                <Text style={styles.emptyTitle}>No groups yet</Text>
+                <Text style={styles.emptySubtitle}>Tap + to create a group for dinners or trips.</Text>
+              </View>
+            ) : (
+              groups.map((item, index) => {
+                const isSyncing = item.id.startsWith('temp-');
+                return (
+                  <View key={item.id}>
+                    {index > 0 ? <View style={styles.divider} /> : null}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={item.name}
+                      onPress={() => {
+                        if (isSyncing) {
+                          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          return;
+                        }
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        router.push({ pathname: '/group/[id]', params: { id: item.id } });
+                      }}
+                      style={({ pressed }) => [styles.row, pressed && styles.rowPressed, isSyncing && styles.rowSyncing]}
+                    >
+                      <View style={styles.iconBadge}>
+                        <Ionicons name="people-outline" size={18} color={theme.colors.accent} />
+                      </View>
+                      <View style={styles.copy}>
+                        <Text style={styles.groupName} numberOfLines={1}>{item.name}</Text>
+                        <Text style={[styles.groupMeta, isSyncing && styles.syncing]}>
+                          {isSyncing
+                            ? 'Syncing...'
+                            : `Created ${new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+                    </Pressable>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
       )}
 
-      {/* Floating Action Button */}
-      <TouchableOpacity 
-        style={styles.fab}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Create group"
         onPress={openModal}
-        activeOpacity={0.9}
+        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
       >
-        <LinearGradient
-          colors={['#7DD3FC', '#38BDF8']}
-          style={styles.fabGradient}
-        >
-          <Ionicons name="add" size={36} color="#030712" />
-        </LinearGradient>
-      </TouchableOpacity>
+        <Ionicons name="add" size={24} color={theme.colors.accentText} />
+      </Pressable>
 
-      {/* Premium Creation Modal */}
-      <Modal visible={isModalVisible} animationType="fade" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
-          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-          
-          <View style={styles.modalContent}>
+      <Modal visible={isModalVisible} animationType="fade" transparent onRequestClose={closeModal}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New Group</Text>
-              <TouchableOpacity onPress={closeModal} hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}>
-                <Ionicons name="close-circle" size={28} color="#64748b" />
-              </TouchableOpacity>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={10}
+                onPress={closeModal}
+                style={({ pressed }) => [styles.closeButton, pressed && styles.closePressed]}
+              >
+                <Ionicons name="close" size={15} color={theme.colors.textSecondary} />
+              </Pressable>
             </View>
-            
+            <Text style={styles.modalSubtitle}>Name the group for this dinner, trip, or house.</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, nameFocused && styles.inputFocused]}
               placeholder="e.g., Manchester Trip"
-              placeholderTextColor="#64748b"
+              placeholderTextColor={theme.colors.textMuted}
               value={newGroupName}
               onChangeText={setNewGroupName}
+              onFocus={() => setNameFocused(true)}
+              onBlur={() => setNameFocused(false)}
               autoFocus
-              selectionColor="#38BDF8"
+              selectionColor={theme.colors.accent}
             />
-
-            <TouchableOpacity 
-              style={styles.createButtonContainer} 
-              onPress={handleCreateGroup}
-              disabled={isCreating}
-              activeOpacity={0.9}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Create Group"
+              disabled={!nameReady || isCreating}
+              onPress={() => {
+                void handleCreateGroup();
+              }}
+              style={({ pressed }) => [
+                styles.createButton,
+                !nameReady && !isCreating && styles.createButtonDisabled,
+                nameReady && !isCreating && pressed && styles.createButtonPressed,
+              ]}
             >
-              <LinearGradient
-                colors={['#7DD3FC', '#38BDF8']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.createButtonGradient}
-              >
-                {isCreating ? (
-                  <ActivityIndicator color="#030712" />
-                ) : (
-                  <Text style={styles.createButtonText}>Create Group</Text>
-                )}
-              </LinearGradient>
-            </TouchableOpacity>
+              {isCreating ? (
+                <ActivityIndicator color={theme.colors.accentText} />
+              ) : (
+                <Text style={[styles.createButtonText, !nameReady && styles.createButtonTextDisabled]}>Create Group</Text>
+              )}
+            </Pressable>
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a' },
-  header: { paddingHorizontal: 24, paddingTop: 64, paddingBottom: 24 },
-  title: { fontSize: 32, fontWeight: '800', color: 'white', letterSpacing: -0.5 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 120 },
-  groupCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1e293b', padding: 20, borderRadius: 24, marginBottom: 12, borderWidth: 1, borderColor: '#334155' },
-  groupCardSyncing: { opacity: 0.6 },
-  syncingText: { fontSize: 13, color: '#38BDF8', fontWeight: '600' },
-  groupIconWrap: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(56, 189, 248, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  groupInfo: { flex: 1 },
-  groupName: { fontSize: 18, fontWeight: '700', color: 'white', marginBottom: 4, letterSpacing: -0.3 },
-  dateText: { fontSize: 14, color: '#94a3b8', fontWeight: '500' },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, marginTop: -60 },
-  emptyTitle: { fontSize: 24, fontWeight: '800', color: 'white', marginTop: 24, marginBottom: 12, letterSpacing: -0.5 },
-  emptySubtitle: { fontSize: 16, color: '#94a3b8', textAlign: 'center', lineHeight: 24 },
-  
-  // Floating Action Button
-  fab: { position: 'absolute', bottom: 32, right: 24, width: 72, height: 72, borderRadius: 36, shadowColor: '#38BDF8', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 10 },
-  fabGradient: { flex: 1, borderRadius: 36, justifyContent: 'center', alignItems: 'center' },
-  
-  // Premium Modal Styles
-  modalContainer: { flex: 1, justifyContent: 'center', padding: 16 },
-  modalContent: { backgroundColor: '#1e293b', padding: 24, borderRadius: 32, borderWidth: 1, borderColor: '#334155', shadowColor: '#000', shadowOffset: { width: 0, height: 24 }, shadowOpacity: 0.6, shadowRadius: 32, elevation: 24 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  modalTitle: { fontSize: 24, fontWeight: '800', color: 'white', letterSpacing: -0.5 },
-  input: { backgroundColor: '#0f172a', padding: 20, borderRadius: 20, color: 'white', fontSize: 18, borderWidth: 1, borderColor: '#334155', marginBottom: 28, fontWeight: '600' },
-  createButtonContainer: { borderRadius: 999, shadowColor: '#38BDF8', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8 },
-  createButtonGradient: { minHeight: 60, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
-  createButtonText: { color: '#030712', fontSize: 18, fontWeight: '800', letterSpacing: -0.2 },
+  container: { flex: 1, backgroundColor: theme.colors.canvas },
+  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 },
+  title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
+  loader: { marginTop: 48 },
+  scrollContent: { paddingBottom: 120 },
+  sectionHeading: {
+    ...theme.typography.sectionLabel,
+    color: theme.colors.textMuted,
+    marginBottom: 8,
+    marginLeft: 20,
+  },
+  card: {
+    marginHorizontal: 16,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+  },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
+  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14 },
+  rowPressed: { backgroundColor: theme.colors.surfaceElevated },
+  rowSyncing: { opacity: 0.6 },
+  iconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
+  groupName: { fontSize: 16, lineHeight: 21, fontWeight: '600', color: theme.colors.textPrimary },
+  groupMeta: { marginTop: 2, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  syncing: { color: theme.colors.accent, fontWeight: '600' },
+  emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
+  emptyBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.colors.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: { marginTop: 12, fontSize: 16, fontWeight: '600', color: theme.colors.textPrimary },
+  emptySubtitle: { marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary, textAlign: 'center' },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: theme.colors.accent,
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  fabPressed: { backgroundColor: theme.colors.accentPressed },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: theme.colors.scrim,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    padding: 20,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  modalTitle: { fontSize: 20, fontWeight: '700', letterSpacing: -0.4, color: theme.colors.textPrimary },
+  closeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  closePressed: { backgroundColor: theme.colors.surfacePressed },
+  modalSubtitle: { fontSize: 14, lineHeight: 20, color: theme.colors.textSecondary, marginBottom: 20 },
+  input: {
+    height: 52,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.canvas,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    color: theme.colors.textPrimary,
+  },
+  inputFocused: { borderColor: theme.colors.accentBorder },
+  createButton: {
+    height: 52,
+    borderRadius: theme.radius.md,
+    marginTop: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+  },
+  createButtonPressed: { backgroundColor: theme.colors.accentPressed },
+  createButtonDisabled: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  createButtonText: { fontSize: 16, fontWeight: '700', color: theme.colors.accentText },
+  createButtonTextDisabled: { fontWeight: '600', color: theme.colors.textMuted },
 });

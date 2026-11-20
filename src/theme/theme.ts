@@ -19,6 +19,8 @@ export const theme = {
     warning: '#FB923C',
     warningSubtle: 'rgba(251, 146, 60, 0.12)',
     danger: '#F87171',
+    dangerBorder: 'rgba(248, 113, 113, 0.28)',
+    scrim: 'rgba(0, 0, 0, 0.72)',
   },
   typography: {
     hero: { fontSize: 44, lineHeight: 50, fontWeight: '700' as const, letterSpacing: -1.6 },

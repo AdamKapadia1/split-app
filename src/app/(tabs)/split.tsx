@@ -1,6 +1,5 @@
 import { BlurTargetView } from 'expo-blur';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { ActivityIndicator, Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -11,6 +10,7 @@ import { Frost } from '@/components/frost';
 import { NightScreen } from '@/components/night-screen';
 import { PayoutSetup, type PayoutBank } from '@/components/payout-setup';
 import { Colors, Spacing } from '@/constants/theme';
+import { theme } from '@/theme/theme';
 import { mediumHaptic, successHaptic, tickHaptic } from '@/lib/haptics';
 import { SnapPressable, useSnapScale } from '@/lib/use-snap-scale';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
@@ -19,15 +19,12 @@ import type { Item, Receipt, Split } from '@/types/database.types';
 import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
 
 const PEOPLE = [
-  { id: '11111111-1111-4111-a111-111111111111', name: 'Me', initial: 'M', color: '#38BDF8' },
+  { id: '11111111-1111-4111-a111-111111111111', name: 'Me', initial: 'M', color: theme.colors.accent },
   { id: '22222222-2222-4222-a222-222222222222', name: 'Sarah', initial: 'S', color: '#C084FC' },
   { id: '33333333-3333-4333-a333-333333333333', name: 'Mike', initial: 'Mi', color: '#22D3EE' },
 ] as const;
 
-const ICE = '#38BDF8';
-const NAVY = '#030712';
-
-const MEMBER_COLORS = ['#38BDF8', '#C084FC', '#22D3EE', '#4ADE80', '#F472B6', '#FBBF24', '#FB7185', '#A78BFA'];
+const MEMBER_COLORS = [theme.colors.accent, '#C084FC', '#22D3EE', theme.colors.positive, '#F472B6', theme.colors.warning, '#FB7185', '#A78BFA'];
 
 type SplitPerson = {
   id: string;
@@ -338,7 +335,7 @@ export default function SplitScreen() {
     return (
       <NightScreen>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#4ade80" />
+          <ActivityIndicator size="large" color={theme.colors.accent} />
         </View>
       </NightScreen>
     );
@@ -348,7 +345,7 @@ export default function SplitScreen() {
     return (
       <NightScreen>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <Text style={{ color: 'white', textAlign: 'center', fontSize: 18 }}>
+          <Text style={{ color: theme.colors.textPrimary, textAlign: 'center', fontSize: 18 }}>
             No receipt selected. Please start a scan or select a receipt from the home screen.
           </Text>
         </View>
@@ -459,14 +456,7 @@ export default function SplitScreen() {
               }}
               style={styles.compactShareButton}
             >
-              <LinearGradient
-                colors={['#7DD3FC', '#38BDF8']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.compactGradientWrap}
-              >
-                <Text style={styles.compactShareText}>Share</Text>
-              </LinearGradient>
+              <Text style={styles.compactShareText}>Share</Text>
             </TouchableOpacity>
           </View>
           {isGroup ? (
@@ -483,7 +473,7 @@ export default function SplitScreen() {
                 }}
                 style={[styles.saveButton, (saving || !paidById || members.length === 0) && styles.saveButtonDisabled]}
               >
-                {saving ? <ActivityIndicator color={NAVY} /> : <Text style={styles.saveButtonText}>{saved ? 'Saved' : 'Save Split'}</Text>}
+                {saving ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.saveButtonText}>{saved ? 'Saved' : 'Save Split'}</Text>}
               </TouchableOpacity>
             </View>
           ) : null}
@@ -521,7 +511,7 @@ function PersonPill({ person, selected, totalLabel, onPress }: { person: SplitPe
       <Frost
         style={[
           styles.pill,
-          selected && { borderColor: ICE, shadowColor: ICE, shadowOpacity: 0.45, shadowRadius: 12, shadowOffset: { width: 0, height: 0 } },
+          selected && { borderColor: theme.colors.accent, backgroundColor: theme.colors.accentSubtle },
         ]}>
         <View style={[styles.pillMark, { backgroundColor: `${person.color}33`, borderColor: person.color }]}>
           <Text style={[styles.pillInitial, { color: person.color }]} numberOfLines={1}>{person.initial}</Text>
@@ -595,27 +585,27 @@ const styles = StyleSheet.create({
   pillCopy: { flex: 1, minWidth: 0, justifyContent: 'center' },
   pillName: { color: Colors.text, fontSize: 15, lineHeight: 18, fontWeight: '700', letterSpacing: -0.3 },
   pillTotal: { marginTop: 2, color: Colors.textSecondary, fontSize: 13, lineHeight: 16, fontWeight: '600', letterSpacing: -0.1, fontVariant: ['tabular-nums'] },
-  pillTotalSelected: { color: ICE },
+  pillTotalSelected: { color: theme.colors.accent },
   assignHint: { color: Colors.textSecondary, fontSize: 13, letterSpacing: -0.1, paddingHorizontal: Spacing.four },
   paidByBlock: { gap: Spacing.two },
   paidByRow: { paddingHorizontal: Spacing.four, gap: Spacing.two },
-  paidByPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(148, 163, 184, 0.35)', backgroundColor: 'rgba(15, 23, 42, 0.65)' },
-  paidByPillSelected: { borderColor: ICE, backgroundColor: 'rgba(56, 189, 248, 0.16)' },
+  paidByPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: theme.radius.full, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+  paidByPillSelected: { borderWidth: 1, borderColor: theme.colors.accentBorder, backgroundColor: theme.colors.accentSubtle },
   paidByText: { color: Colors.text, fontSize: 14, fontWeight: '600' },
-  paidByTextSelected: { color: ICE },
-  equalButton: { alignSelf: 'flex-start', marginLeft: Spacing.four, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(148, 163, 184, 0.35)' },
-  equalButtonText: { color: Colors.text, fontSize: 13, fontWeight: '700' },
+  paidByTextSelected: { color: theme.colors.accent },
+  equalButton: { alignSelf: 'flex-start', marginLeft: Spacing.four, paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.radius.full, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceElevated },
+  equalButtonText: { color: theme.colors.accent, fontSize: 13, fontWeight: '700' },
   saveBlock: { marginTop: Spacing.three, gap: Spacing.two },
-  saveButton: { backgroundColor: ICE, borderRadius: 999, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
+  saveButton: { backgroundColor: theme.colors.accent, borderRadius: theme.radius.md, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   saveButtonDisabled: { opacity: 0.55 },
-  saveButtonText: { color: NAVY, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
-  saveError: { color: '#FCA5A5', fontSize: 13, fontWeight: '600', paddingHorizontal: Spacing.four },
+  saveButtonText: { color: theme.colors.accentText, fontSize: 16, fontWeight: '700' },
+  saveError: { color: theme.colors.danger, fontSize: 13, fontWeight: '600', paddingHorizontal: Spacing.four },
   includedText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  unassignedText: { color: '#FBBF24', fontSize: 13, fontWeight: '700' },
+  unassignedText: { color: theme.colors.warning, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
   content: { paddingTop: Spacing.two },
   thumbnail: { width: '100%', height: 168, marginBottom: Spacing.three },
   listContainer: { paddingBottom: 24 },
-  line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.three, paddingHorizontal: Spacing.four, paddingVertical: Spacing.three, borderBottomWidth: 1, borderBottomColor: 'rgba(30, 41, 59, 0.4)' },
+  line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.three, paddingHorizontal: Spacing.four, paddingVertical: Spacing.three, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border },
   lineCopy: { flex: 1, gap: Spacing.two },
   lineName: { color: Colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   lineQty: { color: Colors.textSecondary, fontWeight: '600' },
@@ -626,15 +616,14 @@ const styles = StyleSheet.create({
   
   // NEW COMPACT FOOTER STYLES
   compactFooterWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: Spacing.four },
-  compactFooter: { borderRadius: 24, padding: Spacing.three, paddingHorizontal: Spacing.four, borderWidth: 1, borderColor: 'rgba(56, 189, 248, 0.2)', backgroundColor: 'rgba(3, 7, 18, 0.85)' },
+  compactFooter: { borderRadius: theme.radius.xl, padding: Spacing.three, paddingHorizontal: Spacing.four, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
   compactRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   compactSummaryColumn: { flex: 1 },
   compactSummaryLabel: { color: Colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
   compactSummaryValue: { color: Colors.text, fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  compactShareColumn: { flex: 1, paddingLeft: 12, borderLeftWidth: 1, borderLeftColor: 'rgba(30, 41, 59, 0.8)' },
-  compactShareLabel: { color: ICE, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
-  compactShareValue: { color: ICE, fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  compactShareButton: { marginLeft: 16 },
-  compactGradientWrap: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999 },
-  compactShareText: { color: NAVY, fontSize: 14, fontWeight: '800', letterSpacing: -0.2 },
+  compactShareColumn: { flex: 1, paddingLeft: 12, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border },
+  compactShareLabel: { color: theme.colors.accent, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  compactShareValue: { color: theme.colors.accent, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  compactShareButton: { marginLeft: 16, paddingHorizontal: 20, paddingVertical: 12, borderRadius: theme.radius.full, backgroundColor: theme.colors.accent },
+  compactShareText: { color: theme.colors.accentText, fontSize: 14, fontWeight: '700' },
 });

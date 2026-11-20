@@ -24,7 +24,7 @@ export function Surface({ children, style }: SurfaceProps) {
 const styles = StyleSheet.create({
   surface: {
     borderRadius: Radius.card,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.border,
     overflow: 'hidden',
   },

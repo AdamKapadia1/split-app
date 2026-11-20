@@ -12,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { pulseHaptic } from '@/lib/haptics';
+import { theme } from '@/theme/theme';
 
 export function ScanLaser() {
   const span = useSharedValue(0);
@@ -43,7 +44,7 @@ export function ScanLaser() {
       }}>
       <Animated.View style={[styles.beam, beamStyle]}>
         <LinearGradient
-          colors={['rgba(56,189,248,0)', 'rgba(56,189,248,0.45)', 'rgba(56,189,248,0)']}
+          colors={['transparent', theme.colors.accent, 'transparent']}
           locations={[0, 0.5, 1]}
           style={styles.glow}
         />
@@ -82,8 +83,8 @@ const styles = StyleSheet.create({
     right: 12,
     height: 2,
     borderRadius: 2,
-    backgroundColor: '#E0F2FE',
-    shadowColor: '#38BDF8',
+    backgroundColor: theme.colors.textPrimary,
+    shadowColor: theme.colors.accent,
     shadowOpacity: 1,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 0 },
