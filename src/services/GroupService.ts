@@ -3,7 +3,13 @@ import type { CountryCode } from 'libphonenumber-js';
 
 import { supabase } from '@/lib/supabase';
 import { toE164 } from '@/utils/phone';
-import { calculateNetBalances, type SettlementRecordInput, type SettlementSplitInput } from '@/utils/settlements';
+import {
+  deriveGroupLedgerStatus,
+  type GroupLedgerReceiptInput,
+  type GroupLedgerStatus,
+  type SettlementSplitInput,
+  type WatermarkSettlementInput,
+} from '@/utils/settlements';
 
 export type GroupMemberProfile = {
   userId: string;
@@ -25,9 +31,11 @@ export type GroupBalanceSummary = {
   id: string;
   memberPreviews: GroupMemberPreview[];
   memberCount: number;
-  /** Receipts linked to this group. Zero means no activity, which is not a settled balance. */
+  /** Receipts linked to this group. Mirrors `status.receiptCount`. */
   receiptCount: number;
   userNetBalanceMinor: number;
+  /** Sole settled/empty/open classification for this group. */
+  status: GroupLedgerStatus;
 };
 
 export type AccountProfile = {
@@ -209,8 +217,8 @@ class GroupService {
           .from('group_members')
           .select('group_id, user_id, role, joined_at, profiles(id, email, full_name)')
           .in('group_id', ids),
-        client.from('receipts').select('id, group_id, paid_by').in('group_id', ids),
-        client.from('settlements').select('group_id, from_user_id, to_user_id, amount_minor, voided_at').in('group_id', ids),
+        client.from('receipts').select('id, group_id, paid_by, created_at, settled_at').in('group_id', ids),
+        client.from('settlements').select('group_id, from_user_id, to_user_id, amount_minor, voided_at, created_at').in('group_id', ids),
         client
           .from('receipt_splits')
           .select('receipt_id, user_id, amount_minor, receipts!inner(group_id)')
@@ -430,23 +438,28 @@ function buildBalanceSummaries(
   }
 
   const receiptGroup = new Map<string, string>();
-  const receiptsByGroup = new Map<string, { id: string; paid_by: string | null }[]>();
+  const receiptsByGroup = new Map<string, GroupLedgerReceiptInput[]>();
   for (const raw of receiptRows) {
     if (!raw || typeof raw !== 'object') continue;
-    const row = raw as { id?: unknown; group_id?: unknown; paid_by?: unknown };
+    const row = raw as { id?: unknown; group_id?: unknown; paid_by?: unknown; created_at?: unknown; settled_at?: unknown };
     const id = text(row.id);
     const groupId = text(row.group_id);
     if (!id || !groupId) continue;
     receiptGroup.set(id, groupId);
     const bucket = receiptsByGroup.get(groupId) ?? [];
-    bucket.push({ id, paid_by: text(row.paid_by) || null });
+    bucket.push({
+      id,
+      paid_by: text(row.paid_by) || null,
+      created_at: text(row.created_at),
+      settled_at: text(row.settled_at) || null,
+    });
     receiptsByGroup.set(groupId, bucket);
   }
 
-  const settlementsByGroup = new Map<string, SettlementRecordInput[]>();
+  const settlementsByGroup = new Map<string, WatermarkSettlementInput[]>();
   for (const raw of settlementRows) {
     if (!raw || typeof raw !== 'object') continue;
-    const row = raw as { group_id?: unknown; from_user_id?: unknown; to_user_id?: unknown; amount_minor?: unknown; voided_at?: unknown };
+    const row = raw as { group_id?: unknown; from_user_id?: unknown; to_user_id?: unknown; amount_minor?: unknown; voided_at?: unknown; created_at?: unknown };
     const groupId = text(row.group_id);
     const fromUserId = text(row.from_user_id);
     const toUserId = text(row.to_user_id);
@@ -458,6 +471,7 @@ function buildBalanceSummaries(
       to_user_id: toUserId,
       amount_minor: amountMinor,
       voided_at: text(row.voided_at) || null,
+      created_at: text(row.created_at),
     });
     settlementsByGroup.set(groupId, bucket);
   }
@@ -478,28 +492,56 @@ function buildBalanceSummaries(
 
   return groupIds.map((groupId) => {
     const members = (membersByGroup.get(groupId) ?? []).sort(compareSummaryMembers);
-    let userNetBalanceMinor = 0;
-    try {
-      const balances = calculateNetBalances(
-        receiptsByGroup.get(groupId) ?? [],
-        splitsByGroup.get(groupId) ?? [],
-        settlementsByGroup.get(groupId) ?? [],
-        members.map((member) => member.userId),
-      );
-      userNetBalanceMinor = balances[viewerId] ?? 0;
-    } catch (error) {
-      console.error('[GroupService] group balance', groupId, error);
-      userNetBalanceMinor = 0;
-    }
+    const groupReceipts = receiptsByGroup.get(groupId) ?? [];
+    const status = ledgerStatusForGroup(
+      groupId,
+      groupReceipts,
+      splitsByGroup.get(groupId) ?? [],
+      settlementsByGroup.get(groupId) ?? [],
+      members.map((member) => member.userId),
+      viewerId,
+    );
 
     return {
       id: groupId,
       memberPreviews: members.slice(0, 3).map((member) => ({ id: member.userId, display_name: member.displayName })),
       memberCount: members.length,
-      receiptCount: receiptsByGroup.get(groupId)?.length ?? 0,
-      userNetBalanceMinor,
+      receiptCount: status.receiptCount,
+      userNetBalanceMinor: status.userNetBalanceMinor,
+      status,
     };
   });
+}
+
+function ledgerStatusForGroup(
+  groupId: string,
+  receipts: GroupLedgerReceiptInput[],
+  splits: SettlementSplitInput[],
+  settlements: WatermarkSettlementInput[],
+  memberIds: string[],
+  viewerId: string,
+): GroupLedgerStatus {
+  try {
+    return deriveGroupLedgerStatus({
+      receipts,
+      splits,
+      settlements,
+      memberIds,
+      currentUserId: viewerId,
+    });
+  } catch (error) {
+    console.error('[GroupService] group balance', groupId, error);
+    const receiptCount = receipts.length;
+    return {
+      kind: receiptCount === 0 ? 'empty' : 'needs_split',
+      receiptCount,
+      activeReceiptCount: receiptCount,
+      settledReceiptCount: 0,
+      unsplitActiveCount: receiptCount,
+      transferCount: 0,
+      userNetBalanceMinor: 0,
+    };
+  }
 }
 
 function compareSummaryMembers(a: RankedSummaryMember, b: RankedSummaryMember) {

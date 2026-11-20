@@ -13,6 +13,7 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
 import { formatPence } from '@/utils/money';
+import type { GroupLedgerStatus } from '@/utils/settlements';
 
 type Group = {
   id: string;
@@ -58,7 +59,7 @@ export default function GroupsScreen() {
         const next = { ...current };
         for (const id of ids) {
           if (!next[id]) {
-            next[id] = { id, memberPreviews: [], memberCount: 0, receiptCount: 0, userNetBalanceMinor: 0 };
+            next[id] = { id, memberPreviews: [], memberCount: 0, receiptCount: 0, userNetBalanceMinor: 0, status: EMPTY_GROUP_STATUS };
           }
         }
         return next;
@@ -180,8 +181,10 @@ export default function GroupsScreen() {
     const summary = summaries[group.id];
     return summary ? [summary] : [];
   });
-  const activeGroups = loadedSummaries.filter((summary) => summary.receiptCount > 0);
-  const overallNetMinor = loadedSummaries.reduce((sum, summary) => sum + summary.userNetBalanceMinor, 0);
+  const activeGroups = loadedSummaries.filter((summary) => summary.status.kind !== 'empty');
+  const overallNetMinor = loadedSummaries.reduce((sum, summary) => sum + summary.status.userNetBalanceMinor, 0);
+  const totalUnsplit = loadedSummaries.reduce((sum, summary) => sum + summary.status.unsplitActiveCount, 0);
+  const hasAnyOpenBalances = loadedSummaries.some((summary) => summary.status.kind === 'balances_owed');
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -209,7 +212,12 @@ export default function GroupsScreen() {
             loadingBalances ? (
               <Skeleton style={styles.bannerSkeleton} />
             ) : (
-              <NetBanner activeCount={activeGroups.length} overallNetMinor={overallNetMinor} />
+              <NetBanner
+                activeCount={activeGroups.length}
+                overallNetMinor={overallNetMinor}
+                totalUnsplit={totalUnsplit}
+                hasAnyOpenBalances={hasAnyOpenBalances}
+              />
             )
           ) : null}
           {groups.length > 0 ? <Text style={styles.sectionHeading}>Your groups</Text> : null}
@@ -276,7 +284,7 @@ export default function GroupsScreen() {
                         {isSyncing || loadingBalances || !summary ? (
                           <Skeleton style={styles.balanceSkeleton} />
                         ) : (
-                          <BalancePill amountMinor={summary.userNetBalanceMinor} receiptCount={summary.receiptCount} />
+                          <BalancePill status={summary.status} />
                         )}
                         <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
                       </View>
@@ -351,7 +359,27 @@ export default function GroupsScreen() {
   );
 }
 
-function NetBanner({ activeCount, overallNetMinor }: { activeCount: number; overallNetMinor: number }) {
+const EMPTY_GROUP_STATUS: GroupLedgerStatus = {
+  kind: 'empty',
+  receiptCount: 0,
+  activeReceiptCount: 0,
+  settledReceiptCount: 0,
+  unsplitActiveCount: 0,
+  transferCount: 0,
+  userNetBalanceMinor: 0,
+};
+
+function NetBanner({
+  activeCount,
+  overallNetMinor,
+  totalUnsplit,
+  hasAnyOpenBalances,
+}: {
+  activeCount: number;
+  overallNetMinor: number;
+  totalUnsplit: number;
+  hasAnyOpenBalances: boolean;
+}) {
   if (activeCount === 0) {
     return (
       <View style={styles.banner}>
@@ -363,56 +391,107 @@ function NetBanner({ activeCount, overallNetMinor }: { activeCount: number; over
     );
   }
 
-  if (overallNetMinor === 0) {
+  if (overallNetMinor > 0) {
+    return (
+      <View style={styles.banner}>
+        <Text style={styles.bannerCopy} numberOfLines={1}>Overall, you are owed</Text>
+        <MoneyText amountMinor={overallNetMinor} size="md" color={theme.colors.positive} />
+      </View>
+    );
+  }
+
+  if (overallNetMinor < 0) {
+    return (
+      <View style={styles.banner}>
+        <Text style={styles.bannerCopy} numberOfLines={1}>Overall, you owe</Text>
+        <MoneyText amountMinor={Math.abs(overallNetMinor)} size="md" color={theme.colors.warning} />
+      </View>
+    );
+  }
+
+  if (totalUnsplit > 0) {
     return (
       <View style={styles.banner}>
         <View style={styles.bannerLeft}>
-          <View style={styles.settledDot} />
+          <View style={styles.warningDot} />
           <Text style={styles.bannerCopy} numberOfLines={1}>
-            {`All settled across ${activeCount} active ${activeCount === 1 ? 'group' : 'groups'}`}
+            {`${totalUnsplit} ${totalUnsplit === 1 ? 'bill' : 'bills'} waiting to be split`}
           </Text>
         </View>
       </View>
     );
   }
 
-  const owed = overallNetMinor > 0;
-  return (
-    <View style={styles.banner}>
-      <Text style={styles.bannerCopy} numberOfLines={1}>{owed ? 'Overall, you are owed' : 'Overall, you owe'}</Text>
-      <MoneyText
-        amountMinor={owed ? overallNetMinor : Math.abs(overallNetMinor)}
-        size="md"
-        color={owed ? theme.colors.positive : theme.colors.warning}
-      />
-    </View>
-  );
-}
-
-function BalancePill({ amountMinor, receiptCount }: { amountMinor: number; receiptCount: number }) {
-  if (receiptCount === 0) {
+  if (hasAnyOpenBalances) {
     return (
-      <View style={[styles.pill, styles.pillNeutral]}>
-        <Text style={[styles.pillText, styles.pillTextNeutral]} numberOfLines={1}>No bills yet</Text>
+      <View style={styles.banner}>
+        <View style={styles.bannerLeft}>
+          <View style={styles.clearDot} />
+          <Text style={styles.bannerCopy} numberOfLines={1}>Your balances are clear</Text>
+        </View>
       </View>
     );
   }
 
-  const settled = amountMinor === 0;
-  const owed = amountMinor > 0;
-  const label = settled
-    ? 'Settled'
-    : owed
-      ? `Owed ${formatPence(amountMinor)}`
-      : `Owe ${formatPence(Math.abs(amountMinor))}`;
-
   return (
-    <View style={[styles.pill, settled || owed ? styles.pillPositive : styles.pillWarning]}>
-      <Text style={[styles.pillText, settled || owed ? styles.pillTextPositive : styles.pillTextWarning]} numberOfLines={1}>
-        {label}
-      </Text>
+    <View style={styles.banner}>
+      <View style={styles.bannerLeft}>
+        <View style={styles.settledDot} />
+        <Text style={styles.bannerCopy} numberOfLines={1}>
+          {`All settled across ${activeCount} active ${activeCount === 1 ? 'group' : 'groups'}`}
+        </Text>
+      </View>
     </View>
   );
+}
+
+function BalancePill({ status }: { status: GroupLedgerStatus }) {
+  switch (status.kind) {
+    case 'empty':
+      return (
+        <View style={[styles.pill, styles.pillNeutral]}>
+          <Text style={[styles.pillText, styles.pillTextNeutral]} numberOfLines={1}>No bills yet</Text>
+        </View>
+      );
+    case 'needs_split':
+      return (
+        <View style={[styles.pill, styles.pillWarning]}>
+          <Text style={[styles.pillText, styles.pillTextWarning]} numberOfLines={1}>
+            {`${status.unsplitActiveCount} to split`}
+          </Text>
+        </View>
+      );
+    case 'balances_owed':
+      if (status.userNetBalanceMinor > 0) {
+        return (
+          <View style={[styles.pill, styles.pillPositive]}>
+            <Text style={[styles.pillText, styles.pillTextPositive]} numberOfLines={1}>
+              {`Owed ${formatPence(status.userNetBalanceMinor)}`}
+            </Text>
+          </View>
+        );
+      }
+      if (status.userNetBalanceMinor < 0) {
+        return (
+          <View style={[styles.pill, styles.pillWarning]}>
+            <Text style={[styles.pillText, styles.pillTextWarning]} numberOfLines={1}>
+              {`Owe ${formatPence(Math.abs(status.userNetBalanceMinor))}`}
+            </Text>
+          </View>
+        );
+      }
+      return (
+        <View style={[styles.pill, styles.pillNeutral]}>
+          <Text style={[styles.pillText, styles.pillTextClear]} numberOfLines={1}>Balances open</Text>
+        </View>
+      );
+    case 'settled':
+      return (
+        <View style={[styles.pill, styles.pillPositive]}>
+          <Text style={[styles.pillText, styles.pillTextPositive]} numberOfLines={1}>Settled</Text>
+        </View>
+      );
+  }
 }
 
 const styles = StyleSheet.create({
@@ -444,6 +523,8 @@ const styles = StyleSheet.create({
   },
   bannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.positive },
+  warningDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.warning },
+  clearDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textSecondary },
   neutralDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textMuted },
   bannerCopy: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500', color: theme.colors.textSecondary },
   sectionHeading: {
@@ -494,6 +575,7 @@ const styles = StyleSheet.create({
   pillWarning: { backgroundColor: theme.colors.warningSubtle },
   pillText: { fontSize: 11, lineHeight: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
   pillTextNeutral: { color: theme.colors.textMuted },
+  pillTextClear: { color: theme.colors.textSecondary },
   pillTextPositive: { color: theme.colors.positive },
   pillTextWarning: { color: theme.colors.warning },
   emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },

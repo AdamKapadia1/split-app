@@ -18,7 +18,7 @@ import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatSmartDate } from '@/utils/formatSmartDate';
 import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
-import { calculateNetBalances, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type SimplifiedTransfer } from '@/utils/settlements';
+import { calculateNetBalances, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type GroupLedgerStatus, type SimplifiedTransfer } from '@/utils/settlements';
 
 type GroupReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -259,6 +259,44 @@ export default function GroupLedgerScreen() {
     }
   }, [receipts, splits, settlements, memberIds]);
   const transfers = useMemo(() => simplifyDebts(balances), [balances]);
+  const groupStatus = useMemo(() => {
+    try {
+      return deriveGroupLedgerStatus({
+        receipts: receipts.map((receipt) => ({
+          id: receipt.id,
+          created_at: receipt.created_at,
+          paid_by: receipt.paid_by ?? null,
+          settled_at: receipt.settled_at,
+        })),
+        splits: splits.map((split) => ({
+          receipt_id: split.receipt_id,
+          user_id: split.user_id,
+          amount_minor: split.amount_minor,
+        })),
+        settlements: settlements.map((settlement) => ({
+          from_user_id: settlement.from_user_id,
+          to_user_id: settlement.to_user_id,
+          amount_minor: settlement.amount_minor,
+          voided_at: settlement.voided_at,
+          created_at: settlement.created_at,
+        })),
+        memberIds,
+        currentUserId: viewerId,
+      });
+    } catch (error) {
+      console.error('Failed to derive group ledger status:', error);
+      const receiptCount = receipts.length;
+      return {
+        kind: receiptCount === 0 ? 'empty' : 'needs_split',
+        receiptCount,
+        activeReceiptCount: receiptCount,
+        settledReceiptCount: 0,
+        unsplitActiveCount: receiptCount,
+        transferCount: 0,
+        userNetBalanceMinor: 0,
+      } satisfies GroupLedgerStatus;
+    }
+  }, [memberIds, receipts, settlements, splits, viewerId]);
   const totalHistoryCount = useMemo(
     () => settlements.length + settledReceipts.length,
     [settledReceipts.length, settlements.length],
@@ -283,7 +321,6 @@ export default function GroupLedgerScreen() {
     () => Math.max(0, sortedSettledReceipts.length - SETTLED_RECEIPTS_PREVIEW_LIMIT),
     [sortedSettledReceipts],
   );
-  const viewerBalance = viewerId ? (balances[viewerId] ?? 0) : 0;
   const viewerIsOwner = members.some((member) => member.userId === viewerId && member.role === 'owner') || (viewerId !== null && viewerId === createdBy);
   const isCreator = viewerId !== null && (createdBy ? viewerId === createdBy : members.some((member) => member.userId === viewerId && member.role === 'owner'));
   const isMember = viewerId !== null && members.some((member) => member.userId === viewerId);
@@ -433,7 +470,7 @@ export default function GroupLedgerScreen() {
 
   function confirmDeleteGroup() {
     if (!groupId || groupAction) return;
-    const message = transfers.length > 0
+    const message = groupStatus.kind === 'balances_owed'
       ? 'This group still has unsettled balances. Deleting it will permanently remove its ledger and settlement history.'
       : `This will permanently delete ${groupName} and its settlement history. This cannot be undone.`;
     Alert.alert('Delete group', message, [
@@ -450,7 +487,7 @@ export default function GroupLedgerScreen() {
 
   function confirmLeaveGroup() {
     if (!groupId || groupAction) return;
-    const message = transfers.length > 0
+    const message = groupStatus.kind === 'balances_owed'
       ? 'This group still has unsettled balances. Leaving removes you from the group and its ledger.'
       : `Leave ${groupName}? You will lose access to this group. This cannot be undone.`;
     Alert.alert('Leave group', message, [
@@ -569,14 +606,8 @@ export default function GroupLedgerScreen() {
     );
   }
 
-  const hasReceipts = receipts.length > 0;
-  const balancesSettled = hasReceipts && transfers.length === 0;
-  const canSettle = hasReceipts && transfers.length > 0;
-  const positionLabel = viewerBalance > 0
-    ? `You are owed ${formatPence(viewerBalance)}`
-    : viewerBalance < 0
-      ? `You owe ${formatPence(Math.abs(viewerBalance))}`
-      : 'All settled up';
+  const settleOpen = groupStatus.kind === 'balances_owed';
+  const settleDone = groupStatus.kind === 'settled';
 
   return (
     <View style={styles.container}>
@@ -632,13 +663,7 @@ export default function GroupLedgerScreen() {
             <Text style={styles.heroLabel}>Total group spend</Text>
             <MoneyText amountMinor={totalSpendMinor} size="hero" splitDecimals />
             <View style={styles.heroPill}>
-              {!hasReceipts ? (
-                <StatusPill variant="neutral" label="No bills yet" />
-              ) : transfers.length === 0 ? (
-                <StatusPill variant="positive" label="All settled up" />
-              ) : (
-                <StatusPill variant={viewerBalance < 0 ? 'warning' : 'positive'} label={positionLabel} />
-              )}
+              <GroupHeroPill status={groupStatus} />
             </View>
           </View>
 
@@ -665,9 +690,9 @@ export default function GroupLedgerScreen() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={canSettle ? 'Settle up' : balancesSettled ? 'All balances settled' : 'Settle up'}
-              accessibilityState={{ disabled: !canSettle }}
-              disabled={!canSettle}
+              accessibilityLabel={settleOpen ? 'Settle up' : settleDone ? 'All balances settled' : 'Settle up'}
+              accessibilityState={{ disabled: !settleOpen }}
+              disabled={!settleOpen}
               onPress={settleUp}
               style={styles.action}
             >
@@ -675,18 +700,18 @@ export default function GroupLedgerScreen() {
                 <>
                   <View style={[
                     styles.actionCircle,
-                    !hasReceipts && styles.actionCircleEmpty,
-                    balancesSettled && styles.actionCircleSettled,
-                    canSettle && pressed && styles.actionCirclePressed,
+                    !settleOpen && !settleDone && styles.actionCircleEmpty,
+                    settleDone && styles.actionCircleSettled,
+                    settleOpen && pressed && styles.actionCirclePressed,
                   ]}>
                     <Ionicons
-                      name={balancesSettled ? 'checkmark' : 'checkmark-circle-outline'}
+                      name={settleDone ? 'checkmark' : 'checkmark-circle-outline'}
                       size={20}
-                      color={!hasReceipts ? theme.colors.textMuted : balancesSettled ? theme.colors.positive : theme.colors.accent}
+                      color={settleDone ? theme.colors.positive : settleOpen ? theme.colors.accent : theme.colors.textMuted}
                     />
                   </View>
-                  <Text style={[styles.actionLabel, canSettle ? styles.actionLabelActive : styles.actionLabelSettled]}>
-                    {balancesSettled ? 'Settled' : 'Settle Up'}
+                  <Text style={[styles.actionLabel, settleOpen ? styles.actionLabelActive : styles.actionLabelSettled]}>
+                    {settleDone ? 'Settled' : 'Settle Up'}
                   </Text>
                 </>
               )}
@@ -1055,6 +1080,35 @@ export default function GroupLedgerScreen() {
       </Modal>
     </View>
   );
+}
+
+function GroupHeroPill({ status }: { status: GroupLedgerStatus }) {
+  switch (status.kind) {
+    case 'empty':
+      return <StatusPill variant="neutral" label="No bills yet" />;
+    case 'needs_split':
+      return (
+        <StatusPill
+          variant="warning"
+          label={`${status.unsplitActiveCount} ${status.unsplitActiveCount === 1 ? 'bill' : 'bills'} to split`}
+        />
+      );
+    case 'settled':
+      return <StatusPill variant="positive" label="All settled up" />;
+    case 'balances_owed':
+      if (status.userNetBalanceMinor > 0) {
+        return <StatusPill variant="positive" label={`You are owed ${formatPence(status.userNetBalanceMinor)}`} />;
+      }
+      if (status.userNetBalanceMinor < 0) {
+        return <StatusPill variant="warning" label={`You owe ${formatPence(Math.abs(status.userNetBalanceMinor))}`} />;
+      }
+      return (
+        <StatusPill
+          variant="warning"
+          label={`${status.transferCount} ${status.transferCount === 1 ? 'balance' : 'balances'} open`}
+        />
+      );
+  }
 }
 
 const styles = StyleSheet.create({

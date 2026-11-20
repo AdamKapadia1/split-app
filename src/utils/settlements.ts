@@ -55,10 +55,10 @@ export type SimplifiedTransfer = {
 };
 
 export function calculateNetBalances(
-  receipts: SettlementReceiptInput[],
-  splits: SettlementSplitInput[],
-  settlements: SettlementRecordInput[],
-  memberIds: string[],
+  receipts: readonly SettlementReceiptInput[],
+  splits: readonly SettlementSplitInput[],
+  settlements: readonly SettlementRecordInput[],
+  memberIds: readonly string[],
 ): Record<string, number> {
   const balances: Record<string, number> = {};
   for (const userId of memberIds) balances[userId] = 0;
@@ -91,6 +91,77 @@ export function calculateNetBalances(
   }
 
   return balances;
+}
+
+export type GroupLedgerStatusKind = 'empty' | 'balances_owed' | 'needs_split' | 'settled';
+
+export interface GroupLedgerStatus {
+  kind: GroupLedgerStatusKind;
+  receiptCount: number;
+  activeReceiptCount: number;
+  settledReceiptCount: number;
+  unsplitActiveCount: number;
+  transferCount: number;
+  userNetBalanceMinor: number;
+}
+
+export type GroupLedgerReceiptInput = {
+  id: string;
+  created_at: string;
+  paid_by: string | null;
+  settled_at?: string | null;
+};
+
+/**
+ * The only place a group is allowed to become "settled".
+ * Empty groups and unsplit bills never take that path.
+ * Balance math stays in `calculateNetBalances` and `simplifyDebts`.
+ */
+export function deriveGroupLedgerStatus({
+  receipts,
+  splits,
+  settlements,
+  memberIds,
+  currentUserId,
+}: {
+  receipts: readonly GroupLedgerReceiptInput[];
+  splits: readonly SettlementSplitInput[];
+  settlements: readonly WatermarkSettlementInput[];
+  memberIds: readonly string[];
+  currentUserId: string | null | undefined;
+}): GroupLedgerStatus {
+  const splitReceiptIds = new Set<string>();
+  for (const split of splits) {
+    if (split.amount_minor > 0) splitReceiptIds.add(split.receipt_id);
+  }
+
+  const lastSettledAt = latestZeroBalanceAt(receipts, splits, settlements);
+  const { activeReceipts, settledReceipts } = partitionGroupReceipts(receipts, splitReceiptIds, lastSettledAt);
+  const unsplitActiveCount = activeReceipts.filter((receipt) => !splitReceiptIds.has(receipt.id)).length;
+  const netBalances = calculateNetBalances(receipts, splits, settlements, memberIds);
+  const simplifiedTransfers = simplifyDebts(netBalances);
+  const userNetBalanceMinor = currentUserId ? (netBalances[currentUserId] ?? 0) : 0;
+
+  let kind: GroupLedgerStatusKind;
+  if (receipts.length === 0) {
+    kind = 'empty';
+  } else if (simplifiedTransfers.length > 0 || Object.values(netBalances).some((balance) => balance !== 0)) {
+    kind = 'balances_owed';
+  } else if (unsplitActiveCount > 0) {
+    kind = 'needs_split';
+  } else {
+    kind = 'settled';
+  }
+
+  return {
+    kind,
+    receiptCount: receipts.length,
+    activeReceiptCount: activeReceipts.length,
+    settledReceiptCount: settledReceipts.length,
+    unsplitActiveCount,
+    transferCount: simplifiedTransfers.length,
+    userNetBalanceMinor,
+  };
 }
 
 export function simplifyDebts(netBalances: Record<string, number>): SimplifiedTransfer[] {

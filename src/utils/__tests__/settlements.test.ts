@@ -1,16 +1,27 @@
 import {
   calculateNetBalances,
+  deriveGroupLedgerStatus,
   latestZeroBalanceAt,
   partitionGroupReceipts,
   simplifyDebts,
+  type GroupLedgerReceiptInput,
   type SettlementRecordInput,
   type SettlementSplitInput,
+  type WatermarkSettlementInput,
 } from '../settlements';
 
 const tests: { name: string; run: () => void }[] = [];
+let currentSuite = '';
+
+function describe(name: string, register: () => void) {
+  const previous = currentSuite;
+  currentSuite = name;
+  register();
+  currentSuite = previous;
+}
 
 function it(name: string, run: () => void) {
-  tests.push({ name, run });
+  tests.push({ name: currentSuite ? `${currentSuite}: ${name}` : name, run });
 }
 
 function assertEqual(actual: unknown, expected: unknown) {
@@ -217,6 +228,141 @@ it('sets the automatic watermark on the latest payment that returns the group to
     [{ ...settlement('alex', 'sam', 1000), voided_at: '2026-11-05T00:00:00.000Z', created_at: '2026-11-02T10:00:00.000Z' }],
   );
   assertEqual(voided, null);
+});
+
+describe('deriveGroupLedgerStatus', () => {
+  const people = ['alex', 'sam'];
+
+  function bill(id: string, createdAt: string, settledAt: string | null = null): GroupLedgerReceiptInput {
+    return { id, paid_by: 'sam', created_at: createdAt, settled_at: settledAt };
+  }
+
+  function share(receiptId: string, amountMinor: number): SettlementSplitInput {
+    return { receipt_id: receiptId, user_id: 'alex', amount_minor: amountMinor };
+  }
+
+  function payment(amountMinor: number, createdAt: string, voidedAt: string | null = null): WatermarkSettlementInput {
+    return {
+      from_user_id: 'alex',
+      to_user_id: 'sam',
+      amount_minor: amountMinor,
+      voided_at: voidedAt,
+      created_at: createdAt,
+    };
+  }
+
+  it('treats a brand-new group as empty', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'empty');
+    assertEqual(status.unsplitActiveCount, 0);
+    assertEqual(status.receiptCount, 0);
+    assertEqual(status.userNetBalanceMinor, 0);
+  });
+
+  it('keeps a newly scanned unsplit receipt out of settled', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [bill('mollie', '2026-11-20T19:00:00.000Z')],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'needs_split');
+    assertEqual(status.unsplitActiveCount, 1);
+    assertEqual(status.userNetBalanceMinor, 0);
+    assertEqual(status.transferCount, 0);
+  });
+
+  it('still needs a split when another receipt was archived by hand', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [
+        bill('open', '2026-11-20T19:00:00.000Z'),
+        bill('archived', '2026-11-18T19:00:00.000Z', '2026-11-19T09:00:00.000Z'),
+      ],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'needs_split');
+    assertEqual(status.unsplitActiveCount, 1);
+    assertEqual(status.activeReceiptCount, 1);
+    assertEqual(status.settledReceiptCount, 1);
+  });
+
+  it('settles a group whose only receipt was marked settled', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [bill('archived', '2026-11-18T19:00:00.000Z', '2026-11-19T09:00:00.000Z')],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'sam',
+    });
+
+    assertEqual(status.kind, 'settled');
+    assertEqual(status.unsplitActiveCount, 0);
+    assertEqual(status.settledReceiptCount, 1);
+    assertEqual(status.userNetBalanceMinor, 0);
+  });
+
+  it('lets an open debt outrank an unsplit receipt', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [
+        bill('split', '2026-11-01T10:00:00.000Z'),
+        bill('open', '2026-11-03T10:00:00.000Z'),
+      ],
+      splits: [share('split', 3806)],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'balances_owed');
+    assertEqual(status.unsplitActiveCount, 1);
+    assertEqual(status.transferCount, 1);
+    assertEqual(status.userNetBalanceMinor, -3806);
+  });
+
+  it('settles only after every split is paid off and no unsplit receipt remains', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [bill('split', '2026-11-01T10:00:00.000Z')],
+      splits: [share('split', 3806)],
+      settlements: [payment(3806, '2026-11-02T10:00:00.000Z')],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'settled');
+    assertEqual(status.unsplitActiveCount, 0);
+    assertEqual(status.transferCount, 0);
+    assertEqual(status.userNetBalanceMinor, 0);
+    assertEqual(status.activeReceiptCount, 0);
+    assertEqual(status.settledReceiptCount, 1);
+  });
+
+  it('reopens balances when a clearing settlement is voided', () => {
+    const status = deriveGroupLedgerStatus({
+      receipts: [bill('split', '2026-11-01T10:00:00.000Z')],
+      splits: [share('split', 3806)],
+      settlements: [payment(3806, '2026-11-02T10:00:00.000Z', '2026-11-05T10:00:00.000Z')],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+
+    assertEqual(status.kind, 'balances_owed');
+    assertEqual(status.unsplitActiveCount, 0);
+    assertEqual(status.userNetBalanceMinor, -3806);
+    assertEqual(status.transferCount, 1);
+  });
 });
 
 function settlement(fromUserId: string, toUserId: string, amountMinor: number): SettlementRecordInput {
