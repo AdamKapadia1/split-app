@@ -1,21 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { PayoutSetup } from '@/components/payout-setup';
-import { groupService } from '@/services/GroupService';
+import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
+import { maskAccountNumber } from '@/utils/paymentLinks';
 
 type AccountSettingsSheetProps = {
   visible: boolean;
   userId: string | null;
   displayName: string;
   subtitle: string;
-  paymentLink: string | null;
   onClose: () => void;
-  onPaymentLinkChange: (paymentLink: string | null) => void;
   onLogout: () => void;
 };
 
@@ -24,52 +23,42 @@ export function AccountSettingsSheet({
   userId,
   displayName,
   subtitle,
-  paymentLink,
   onClose,
-  onPaymentLinkChange,
   onLogout,
 }: AccountSettingsSheetProps) {
-  const [editingLink, setEditingLink] = useState(false);
   const [payoutOpen, setPayoutOpen] = useState(false);
-  const [draft, setDraft] = useState(paymentLink ?? '');
-  const [saving, setSaving] = useState(false);
-  const [openKey, setOpenKey] = useState<string | null>(null);
-  const nextKey = visible ? paymentLink ?? '' : null;
-  if (openKey !== nextKey) {
-    setOpenKey(nextKey);
-    setEditingLink(false);
-    setDraft(paymentLink ?? '');
-    setSaving(false);
+  const [payout, setPayout] = useState<PayoutMethod | null>(null);
+  const [payoutLoading, setPayoutLoading] = useState(false);
+  const watchKey = visible && userId ? userId : null;
+  const [seenKey, setSeenKey] = useState<string | null>(null);
+  if (seenKey !== watchKey) {
+    setSeenKey(watchKey);
+    setPayoutLoading(watchKey !== null);
+    if (!watchKey) setPayout(null);
   }
 
+  useEffect(() => {
+    if (!watchKey) return;
+    let cancelled = false;
+    void payoutService.getMyPayoutMethod()
+      .then((method) => {
+        if (!cancelled) setPayout(method);
+      })
+      .catch(() => {
+        if (!cancelled) setPayout(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPayoutLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [watchKey]);
+
   function close() {
-    if (saving) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setPayoutOpen(false);
     onClose();
-  }
-
-  function openEditor() {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setDraft(paymentLink ?? '');
-    setEditingLink(true);
-  }
-
-  async function saveLink() {
-    if (!userId || saving) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSaving(true);
-    try {
-      const next = draft.trim() || null;
-      await groupService.updatePaymentLink(userId, next);
-      onPaymentLinkChange(next);
-      setEditingLink(false);
-    } catch (error) {
-      console.error('Error saving payout link:', error);
-      Alert.alert('Could not save', 'Your payout link was not updated.');
-    } finally {
-      setSaving(false);
-    }
   }
 
   function confirmLogout() {
@@ -80,7 +69,7 @@ export function AccountSettingsSheet({
     ]);
   }
 
-  const linkLabel = paymentLink?.trim() ? paymentLink.trim() : 'Not set';
+  const payoutLabel = payoutStatus(payout);
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent onRequestClose={close}>
@@ -88,7 +77,6 @@ export function AccountSettingsSheet({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Dismiss account settings"
-          disabled={saving}
           onPress={close}
           style={StyleSheet.absoluteFill}
         />
@@ -102,7 +90,6 @@ export function AccountSettingsSheet({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Close account settings"
-              disabled={saving}
               hitSlop={10}
               onPress={close}
               style={({ pressed }) => [styles.close, pressed && styles.closePressed]}
@@ -111,84 +98,36 @@ export function AccountSettingsSheet({
             </Pressable>
           </View>
 
-          {editingLink ? (
-            <View style={styles.editor}>
-              <Text style={styles.editorLabel}>Payout link</Text>
-              <TextInput
-                accessibilityLabel="Payout link"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                placeholder="https://monzo.me/yourname"
-                placeholderTextColor={theme.colors.textMuted}
-                selectionColor={theme.colors.accent}
-                value={draft}
-                onChangeText={setDraft}
-                style={styles.input}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Save payout link"
-                disabled={saving || !userId}
-                onPress={() => {
-                  void saveLink();
-                }}
-                style={({ pressed }) => [styles.saveButton, pressed && !saving && styles.savePressed]}
-              >
-                {saving ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.saveText}>Save link</Text>}
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Cancel payout link edit"
-                disabled={saving}
-                onPress={() => {
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setEditingLink(false);
-                }}
-                style={styles.cancelButton}
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={styles.list}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Payout link"
-                onPress={openEditor}
-                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              >
-                <Text style={styles.rowLabel}>Payout Link</Text>
-                <View style={styles.rowTrail}>
-                  <Text style={styles.rowValue} numberOfLines={1} ellipsizeMode="tail">{linkLabel}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-                </View>
-              </Pressable>
-              <View style={styles.divider} />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Payout details"
-                onPress={() => {
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setPayoutOpen(true);
-                }}
-                style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              >
+          <View style={styles.list}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Payout details, ${payoutLoading ? 'loading' : payoutLabel}`}
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setPayoutOpen(true);
+              }}
+              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            >
+              <View style={styles.rowCopy}>
                 <Text style={styles.rowLabel}>Payout details</Text>
-                <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-              </Pressable>
-              <View style={styles.divider} />
-              <View style={styles.row}>
-                <Text style={styles.rowLabel}>Currency</Text>
-                <Text style={styles.currencyValue}>GBP (£)</Text>
+                {payoutLoading ? (
+                  <ActivityIndicator accessibilityLabel="Loading payout details" color={theme.colors.textMuted} size="small" style={styles.rowSpinner} />
+                ) : (
+                  <Text style={styles.rowStatus} numberOfLines={1}>{payoutLabel}</Text>
+                )}
               </View>
+              <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+            </Pressable>
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Currency</Text>
+              <Text style={styles.currencyValue}>GBP (£)</Text>
             </View>
-          )}
+          </View>
 
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Log Out"
-            disabled={saving}
             onPress={confirmLogout}
             style={({ pressed }) => [styles.logout, pressed && styles.logoutPressed]}
           >
@@ -197,9 +136,24 @@ export function AccountSettingsSheet({
           </Pressable>
         </View>
       </KeyboardAvoidingView>
-      <PayoutSetup visible={payoutOpen} userId={userId} onClose={() => setPayoutOpen(false)} />
+      <PayoutSetup
+        visible={payoutOpen}
+        userId={userId}
+        onClose={() => setPayoutOpen(false)}
+        onSaved={(method) => setPayout(method)}
+      />
     </Modal>
   );
+}
+
+function payoutStatus(method: PayoutMethod | null) {
+  if (method?.preferredMethod === 'monzo' && method.monzoHandle) return `Monzo · @${method.monzoHandle}`;
+  if (method?.preferredMethod === 'revolut' && method.revolutHandle) return `Revolut · @${method.revolutHandle}`;
+  if (method?.preferredMethod === 'paypal' && method.paypalHandle) return `PayPal · @${method.paypalHandle}`;
+  if (method?.preferredMethod === 'bank' && method.bankAccountNumber && /^[0-9]{8}$/.test(method.bankAccountNumber)) {
+    return `UK Bank · ${maskAccountNumber(method.bankAccountNumber)}`;
+  }
+  return 'Not set up yet';
 }
 
 const styles = StyleSheet.create({
@@ -246,7 +200,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   rowPressed: { backgroundColor: theme.colors.surfacePressed },
+  rowCopy: { flex: 1, minWidth: 0, gap: 2 },
   rowLabel: { fontSize: 15, lineHeight: 20, color: theme.colors.textPrimary },
+  rowStatus: { fontSize: 13, lineHeight: 18, color: theme.colors.textMuted },
+  rowSpinner: { alignSelf: 'flex-start', marginTop: 4 },
   rowTrail: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, minWidth: 0 },
   rowValue: { flexShrink: 1, fontSize: 14, lineHeight: 18, color: theme.colors.textMuted },
   currencyValue: { fontSize: 14, lineHeight: 18, color: theme.colors.textMuted },

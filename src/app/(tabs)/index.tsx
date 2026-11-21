@@ -649,19 +649,7 @@ export default function HomeScreen() {
         userId={userId}
         displayName={displayName}
         subtitle={subtitle}
-        paymentLink={profile?.paymentLink ?? null}
         onClose={() => setAccountOpen(false)}
-        onPaymentLinkChange={(paymentLink) => {
-          setProfile((current) => current
-            ? { ...current, paymentLink }
-            : {
-                id: userId ?? '',
-                displayName,
-                email: session?.user.email ?? null,
-                phone: session?.user.phone ?? null,
-                paymentLink,
-              });
-        }}
         onLogout={() => {
           void handleLogout();
         }}

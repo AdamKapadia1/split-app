@@ -87,6 +87,57 @@ export function getProviderLimitWarning(provider: PaymentLinkProvider, amountPen
   return null;
 }
 
+const PASTE_LIMIT = 256;
+
+/**
+ * Reads a pasted Monzo, Revolut, or PayPal profile link.
+ * Only the first path segment is kept, and it must pass the handle rules.
+ */
+export function parsePastedPaymentLink(raw: string): { provider: PaymentLinkProvider; handle: string } | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > PASTE_LIMIT || trimmed.includes('..')) return null;
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:') return null;
+  if (parsed.pathname.includes('..')) return null;
+
+  const hostname = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+  if (!ALLOWED_PAYMENT_HOSTS.has(hostname)) return null;
+
+  const provider = hostname.slice(0, -'.me'.length);
+  if (provider !== 'monzo' && provider !== 'revolut' && provider !== 'paypal') return null;
+
+  const segment = parsed.pathname.split('/').filter((part) => part.length > 0)[0] ?? '';
+  const handle = sanitizePaymentHandle(provider, segment);
+  if (!handle) return null;
+  return { provider, handle };
+}
+
+/**
+ * Profile URL with no amount. The handle is sanitized again, then the host is checked.
+ */
+export function buildProfilePreviewUrl(provider: PaymentLinkProvider, rawHandle: string): string {
+  const handle = sanitizePaymentHandle(provider, rawHandle);
+  if (!handle) {
+    throw new Error('Payment handle is not valid.');
+  }
+
+  const url = `https://${provider}.me/${handle}`;
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || !ALLOWED_PAYMENT_HOSTS.has(parsed.hostname)) {
+    throw new Error('Payment URL is not allowed.');
+  }
+  return url;
+}
+
 /**
  * Builds an https payment URL from integer pence.
  * The handle is sanitized again, and the finished URL must stay on an allow-listed host.

@@ -1,10 +1,12 @@
 import {
   buildPaymentUrl,
+  buildProfilePreviewUrl,
   formatSortCode,
   getProviderLimitWarning,
   maskAccountNumber,
   normalizeAccountNumber,
   normalizeSortCode,
+  parsePastedPaymentLink,
   sanitizePaymentHandle,
   sanitizeReference,
 } from '../paymentLinks';
@@ -99,6 +101,27 @@ it('sanitizes a Faster Payments reference and caps it at 35 characters', () => {
   assertEqual(sanitizeReference('House?bill#1&tax=2'), 'House bill 1 tax 2');
   assertEqual(sanitizeReference('a'.repeat(40)).length, 35);
   assertEqual(sanitizeReference('a'.repeat(40)), 'a'.repeat(35));
+});
+
+it('reads a pasted provider link and rejects anything off the allow list', () => {
+  assertEqual(parsePastedPaymentLink('https://monzo.me/john.doe'), { provider: 'monzo', handle: 'john.doe' });
+  assertEqual(parsePastedPaymentLink('revolut.me/@jane_1'), { provider: 'revolut', handle: 'jane_1' });
+  assertEqual(parsePastedPaymentLink('https://paypal.me/alex99/10GBP'), { provider: 'paypal', handle: 'alex99' });
+  assertEqual(parsePastedPaymentLink('https://www.monzo.me/john.doe'), { provider: 'monzo', handle: 'john.doe' });
+  assertEqual(parsePastedPaymentLink('https://evil-monzo.me/john'), null);
+  assertEqual(parsePastedPaymentLink('javascript:alert(1)'), null);
+  assertEqual(parsePastedPaymentLink('https://paypal.me/bad-name'), null);
+  assertEqual(parsePastedPaymentLink('https://monzo.me/john/../../evil'), null);
+  assertEqual(parsePastedPaymentLink(''), null);
+  assertEqual(parsePastedPaymentLink(`https://monzo.me/${'a'.repeat(250)}`), null);
+});
+
+it('builds a profile preview URL and rejects an invalid handle', () => {
+  assertEqual(buildProfilePreviewUrl('monzo', 'john.doe'), 'https://monzo.me/john.doe');
+  assertEqual(buildProfilePreviewUrl('revolut', '@jane_1'), 'https://revolut.me/jane_1');
+  assertEqual(buildProfilePreviewUrl('paypal', 'alex99'), 'https://paypal.me/alex99');
+  assertThrows(() => buildProfilePreviewUrl('paypal', 'bad-name'), 'paypal punctuation');
+  assertThrows(() => buildProfilePreviewUrl('monzo', 'john/../../evil'), 'path injection');
 });
 
 it('normalizes and masks UK bank details', () => {
