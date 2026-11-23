@@ -1,5 +1,5 @@
 import { redactSensitive, shouldEmitLog } from '../logger';
-import { mapErrorToUserMessage } from '../errorMapper';
+import { mapErrorToUserMessage, readSafeErrorCode } from '../errorMapper';
 
 const tests: { name: string; run: () => void }[] = [];
 
@@ -100,6 +100,21 @@ it('maps timeouts, auth, and network failures', () => {
   assertEqual(mapErrorToUserMessage(new Error('Request timeout of 10000ms exceeded')), 'The request timed out. Check your connection and try again.');
   assertEqual(mapErrorToUserMessage({ code: '28000', message: 'Not authenticated' }), 'Please sign in again.');
   assertEqual(mapErrorToUserMessage(new TypeError('Failed to fetch')), 'Network problem. Check your connection and try again.');
+});
+
+it('logs a permission failure by stage code without the database text', () => {
+  const wrapped = {
+    code: 'INSERT_FAILED',
+    message: 'You do not have permission to do that.',
+    originalError: {
+      code: '42501',
+      message: 'new row violates row-level security policy for table "receipts"',
+    },
+  };
+  assertEqual(readSafeErrorCode(wrapped, 'PARSE_FAILED'), '42501');
+  assertEqual(readSafeErrorCode({ code: 'UPSTREAM_ERROR', message: 'ada@example.com' }, 'PARSE_FAILED'), 'UPSTREAM_ERROR');
+  assertEqual(readSafeErrorCode(new Error('relation "public.receipts" does not exist'), 'PARSE_FAILED'), 'PARSE_FAILED');
+  assertTrue(!readSafeErrorCode(wrapped).includes('receipts'), 'relation leaked into the code');
 });
 
 it('keeps authored copy and hides raw postgres text', () => {

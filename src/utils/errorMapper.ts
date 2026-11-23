@@ -10,6 +10,21 @@ type ErrorRecord = {
   originalError?: unknown;
 };
 
+const SAFE_CODE = /^(?:42501|23505|23514|22P02|28000|42883|PGRST\d{3}|[A-Z][A-Z0-9_]{1,39})$/;
+
+/**
+ * A short machine code safe to log. Prefers the database SQLSTATE carried on
+ * `originalError` over a service wrapper code. Never returns the error text.
+ */
+export function readSafeErrorCode(error: unknown, fallback = 'REQUEST_FAILED'): string {
+  const nested = codeOf(isRecord(error) ? error.originalError : undefined);
+  if (nested === '42501' || nested === '28000' || nested === 'PGRST301') return nested;
+  const direct = codeOf(error);
+  if (isSafeCode(direct)) return direct;
+  if (isSafeCode(nested)) return nested;
+  return fallback;
+}
+
 export function mapErrorToUserMessage(error: unknown, fallback = FALLBACK): string {
   const code = readCode(error);
   const message = readMessage(error);
@@ -70,6 +85,10 @@ function isAuth(code: string, message: string, error: unknown) {
 function isNetwork(message: string, error: unknown) {
   if (error instanceof TypeError && /fetch|network/i.test(error.message)) return true;
   return /network request failed|failed to fetch|network error|internet connection/i.test(message);
+}
+
+function isSafeCode(code: string) {
+  return SAFE_CODE.test(code);
 }
 
 function isSafeMessage(message: string) {

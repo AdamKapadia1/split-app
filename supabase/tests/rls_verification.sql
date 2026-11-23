@@ -99,6 +99,19 @@ BEGIN
     RAISE EXCEPTION 'authenticated cannot execute delete_my_account()';
   END IF;
 
+  IF EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN ('receipts', 'items', 'receipt_splits')
+      AND (
+        'anon' = ANY (roles)
+        OR 'public' = ANY (roles)
+      )
+  ) THEN
+    RAISE EXCEPTION 'anon or public still has a receipt policy';
+  END IF;
+
   RAISE NOTICE 'rls verification passed for % public tables', v_tables;
 END $$;
 

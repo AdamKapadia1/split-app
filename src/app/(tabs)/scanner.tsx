@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 
 import { uploadReceiptImage } from '@/services/ReceiptImageService';
 import { theme } from '@/theme/theme';
-import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { mapErrorToUserMessage, readSafeErrorCode } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { receiptService } from '../../services/ReceiptService';
 import { ReceiptScanError, VisionService } from '../../services/VisionService';
@@ -55,6 +55,7 @@ export default function ScannerScreen() {
     const photo = pendingPhoto;
 
     setIsCapturing(true);
+    let stage: 'save_receipt' | 'parse' | 'save_items' | 'save_totals' | 'upload_image' = 'save_receipt';
     try {
       if (!(await ensureAiScanConsent())) {
         setPendingPhoto(null);
@@ -64,10 +65,13 @@ export default function ScannerScreen() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user?.id) throw new Error('Not logged in');
 
+      stage = 'save_receipt';
       const newReceipt = await receiptService.createEmptyReceipt(session.user.id, groupId);
+      stage = 'parse';
       const aiData = await VisionService.analyzeReceipt(photo.base64);
 
       if (aiData.items.length > 0) {
+        stage = 'save_items';
         await receiptService.addScannedItems(
           newReceipt.id,
           aiData.items.map((item: { name: string; price: number }) => ({
@@ -80,6 +84,7 @@ export default function ScannerScreen() {
         );
       }
 
+      stage = 'save_totals';
       await receiptService.updateReceiptTotals(newReceipt.id, {
         merchant_name: aiData.merchant_name,
         subtotal: aiData.subtotal,
@@ -88,17 +93,21 @@ export default function ScannerScreen() {
         status: 'open',
       });
 
+      stage = 'upload_image';
       try {
         const imagePath = await uploadReceiptImage(session.user.id, newReceipt.id, photo.uri);
         await receiptService.setReceiptImagePath(newReceipt.id, imagePath);
-      } catch {
-        logger.warn('scanner image', { code: 'IMAGE_UPLOAD_FAILED' });
+      } catch (error) {
+        logger.warn('scanner', { stage: 'upload_image', code: readSafeErrorCode(error, 'IMAGE_UPLOAD_FAILED') });
       }
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.push(`/receipt/${newReceipt.id}`);
     } catch (error) {
-      logger.error('scanner parse', { code: error instanceof ReceiptScanError ? error.code : 'PARSE_FAILED' });
+      logger.error('scanner', {
+        stage,
+        code: error instanceof ReceiptScanError ? error.code : readSafeErrorCode(error, 'PARSE_FAILED'),
+      });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Failed to parse receipt', mapErrorToUserMessage(error, 'Could not read the line items. Please try again.'));
     } finally {
