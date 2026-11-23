@@ -4,7 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
@@ -108,6 +108,7 @@ export default function ReceiptLedgerScreen() {
   const [viewerLoading, setViewerLoading] = useState(false);
   const viewerGeneration = useRef(0);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     return () => {
@@ -667,64 +668,76 @@ export default function ReceiptLedgerScreen() {
         onRequestClose={closeViewer}
       >
         <View style={styles.viewer}>
-          <SafeAreaView edges={['top', 'bottom']} style={styles.viewerSafe}>
-            <View style={styles.viewerBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss receipt photo"
+            style={StyleSheet.absoluteFill}
+            onPress={closeViewer}
+          />
+          {viewerLoading ? (
+            <View pointerEvents="none" style={styles.viewerCenter}>
+              <ActivityIndicator accessibilityLabel="Loading receipt photo" color={theme.colors.textPrimary} size="large" />
+            </View>
+          ) : null}
+          {viewerError ? (
+            <View pointerEvents="box-none" style={styles.viewerCenter}>
+              <Text style={styles.viewerError}>{viewerError}</Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Close receipt photo"
-                hitSlop={12}
-                onPress={closeViewer}
-                style={({ pressed }) => [styles.viewerClose, pressed && styles.viewerClosePressed]}
+                accessibilityLabel="Retry receipt photo"
+                onPress={() => {
+                  const imagePath = receipt.image_path;
+                  if (!imagePath) return;
+                  void openOriginal(imagePath);
+                }}
+                style={({ pressed }) => [styles.viewerRetry, pressed && styles.originalButtonPressed]}
               >
-                <Ionicons name="close" size={18} color={theme.colors.textPrimary} />
+                <Text style={styles.viewerRetryText}>Retry</Text>
               </Pressable>
             </View>
-            {viewerLoading ? (
-              <View style={styles.viewerCenter}>
-                <ActivityIndicator accessibilityLabel="Loading receipt photo" color={theme.colors.textPrimary} size="large" />
-              </View>
-            ) : null}
-            {viewerError ? (
-              <View style={styles.viewerCenter}>
-                <Text style={styles.viewerError}>{viewerError}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Retry receipt photo"
-                  onPress={() => {
-                    const imagePath = receipt.image_path;
-                    if (!imagePath) return;
-                    void openOriginal(imagePath);
-                  }}
-                  style={({ pressed }) => [styles.viewerRetry, pressed && styles.originalButtonPressed]}
-                >
-                  <Text style={styles.viewerRetryText}>Retry</Text>
-                </Pressable>
-              </View>
-            ) : null}
-            {signedUrl ? (
-              <ScrollView
-                style={styles.viewerScroll}
-                contentContainerStyle={styles.viewerScrollContent}
-                maximumZoomScale={4}
-                minimumZoomScale={1}
-                centerContent
-                bouncesZoom
-                showsHorizontalScrollIndicator={false}
-                showsVerticalScrollIndicator={false}
+          ) : null}
+          {signedUrl ? (
+            <ScrollView
+              pointerEvents="box-none"
+              style={styles.viewerScroll}
+              contentContainerStyle={styles.viewerScrollContent}
+              maximumZoomScale={4}
+              minimumZoomScale={1}
+              centerContent
+              bouncesZoom
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+            >
+              <View
+                onStartShouldSetResponder={() => true}
+                style={styles.viewerImageFrame}
               >
                 <Image
                   accessibilityLabel="Original receipt"
                   source={{ uri: signedUrl }}
-                  style={{ width: windowWidth, height: Math.max(windowHeight - 140, 240) }}
+                  style={{ width: windowWidth, height: Math.max(windowHeight - insets.top - insets.bottom - 120, 240) }}
                   contentFit="contain"
                   onError={() => {
                     setSignedUrl(null);
                     setViewerError(mapErrorToUserMessage(new Error('This receipt photo link expired. Try again.'), 'Could not open the receipt photo.'));
                   }}
                 />
-              </ScrollView>
-            ) : null}
-          </SafeAreaView>
+              </View>
+            </ScrollView>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close receipt photo"
+            hitSlop={12}
+            onPress={closeViewer}
+            style={({ pressed }) => [
+              styles.viewerClose,
+              { top: Math.max(insets.top, 16) + 8 },
+              pressed && styles.viewerClosePressed,
+            ]}
+          >
+            <Ionicons name="close" size={22} color={theme.colors.textPrimary} />
+          </Pressable>
         </View>
       </Modal>
     </View>
@@ -843,12 +856,13 @@ const styles = StyleSheet.create({
   originalButtonPressed: { backgroundColor: theme.colors.surfacePressed },
   originalButtonText: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   viewer: { flex: 1, backgroundColor: '#000000' },
-  viewerSafe: { flex: 1 },
-  viewerBar: { height: 52, paddingHorizontal: 16, alignItems: 'flex-end', justifyContent: 'center' },
   viewerClose: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    position: 'absolute',
+    right: 16,
+    zIndex: 50,
+    minWidth: 44,
+    minHeight: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.surfaceElevated,
@@ -869,6 +883,7 @@ const styles = StyleSheet.create({
   viewerRetryText: { color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' },
   viewerScroll: { flex: 1 },
   viewerScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  viewerImageFrame: { alignItems: 'center', justifyContent: 'center' },
   bookLink: { alignSelf: 'flex-start', marginLeft: 16, marginBottom: 16, paddingVertical: 4 },
   bookLinkText: { color: theme.colors.accent, fontSize: 13, fontWeight: '600' },
   block: { marginBottom: 18 },
