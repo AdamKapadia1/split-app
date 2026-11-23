@@ -141,11 +141,10 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.screen}>
-      <CameraView ref={cameraRef} facing="back" style={StyleSheet.absoluteFill}>
-        <View pointerEvents="none" style={styles.guideFrame}>
-          <View style={styles.guide} />
-        </View>
-      </CameraView>
+      <CameraView ref={cameraRef} facing="back" style={StyleSheet.absoluteFill} />
+      <View pointerEvents="none" style={styles.guideFrame}>
+        <View style={styles.guide} />
+      </View>
 
       <View style={styles.footer}>
         <TouchableOpacity
@@ -216,7 +215,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   guideFrame: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     alignItems: 'center',
     justifyContent: 'center',
     paddingBottom: 120,

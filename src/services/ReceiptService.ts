@@ -23,7 +23,7 @@ const MONEY_LIMIT = 99_999_999.99;
 
 type ReceiptServiceCode = 'INSERT_FAILED' | 'UPDATE_FAILED' | 'FETCH_FAILED' | 'CLAIM_FAILED' | 'SAVE_FAILED' | 'SETTLE_FAILED' | 'VALIDATION_ERROR' | 'NOT_CONFIGURED';
 
-const RECEIPT_COLUMNS = '*, settled_at, settled_by';
+const RECEIPT_COLUMNS = 'id, host_id, paid_by, group_id, merchant_name, restaurant_name, website, currency_code, subtotal, tax_amount, service_charge, tip_amount, total_amount, image_url, image_path, status, settled_at, settled_by, created_at';
 
 type ReceiptTotalsUpdate = Partial<
   Pick<Receipt, 'subtotal' | 'tax_amount' | 'service_charge' | 'total_amount' | 'status' | 'merchant_name'> & {
