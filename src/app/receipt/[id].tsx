@@ -1,13 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { memo, useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
+import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
@@ -100,6 +102,18 @@ export default function ReceiptLedgerScreen() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [togglingSettled, setTogglingSettled] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const viewerGeneration = useRef(0);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  useEffect(() => {
+    return () => {
+      viewerGeneration.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     if (!receiptId) return;
@@ -236,6 +250,34 @@ export default function ReceiptLedgerScreen() {
       setSaving(false);
     }
   }, [claims, members, paidById, receiptData, saving]);
+
+  const closeViewer = useCallback(() => {
+    viewerGeneration.current += 1;
+    setViewerOpen(false);
+    setSignedUrl(null);
+    setViewerError(null);
+    setViewerLoading(false);
+  }, []);
+
+  const openOriginal = useCallback(async (imagePath: string) => {
+    const generation = viewerGeneration.current + 1;
+    viewerGeneration.current = generation;
+    setViewerOpen(true);
+    setSignedUrl(null);
+    setViewerError(null);
+    setViewerLoading(true);
+    try {
+      const url = await getSignedReceiptImageUrl(imagePath);
+      if (viewerGeneration.current !== generation) return;
+      setSignedUrl(url);
+    } catch (error) {
+      if (viewerGeneration.current !== generation) return;
+      logger.error('receipt', { code: 'IMAGE_SIGN_FAILED' });
+      setViewerError(mapErrorToUserMessage(error, 'Could not open the receipt photo.'));
+    } finally {
+      if (viewerGeneration.current === generation) setViewerLoading(false);
+    }
+  }, []);
 
   const goBack = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -410,6 +452,23 @@ export default function ReceiptLedgerScreen() {
       )}
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {receipt.image_path ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="View original receipt"
+            onPress={() => {
+              const imagePath = receipt.image_path;
+              if (!imagePath) return;
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              void openOriginal(imagePath);
+            }}
+            style={({ pressed }) => [styles.originalButton, pressed && styles.originalButtonPressed]}
+          >
+            <Ionicons name="receipt-outline" size={18} color={theme.colors.textPrimary} />
+            <Text style={styles.originalButtonText}>View Original Receipt</Text>
+          </Pressable>
+        ) : null}
+
         {receipt.website ? (
           <Pressable
             accessibilityRole="link"
@@ -600,6 +659,74 @@ export default function ReceiptLedgerScreen() {
           </Pressable>
         ) : null}
       </SafeAreaView>
+      <Modal
+        visible={viewerOpen}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={closeViewer}
+      >
+        <View style={styles.viewer}>
+          <SafeAreaView edges={['top', 'bottom']} style={styles.viewerSafe}>
+            <View style={styles.viewerBar}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close receipt photo"
+                hitSlop={12}
+                onPress={closeViewer}
+                style={({ pressed }) => [styles.viewerClose, pressed && styles.viewerClosePressed]}
+              >
+                <Ionicons name="close" size={18} color={theme.colors.textPrimary} />
+              </Pressable>
+            </View>
+            {viewerLoading ? (
+              <View style={styles.viewerCenter}>
+                <ActivityIndicator accessibilityLabel="Loading receipt photo" color={theme.colors.textPrimary} size="large" />
+              </View>
+            ) : null}
+            {viewerError ? (
+              <View style={styles.viewerCenter}>
+                <Text style={styles.viewerError}>{viewerError}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry receipt photo"
+                  onPress={() => {
+                    const imagePath = receipt.image_path;
+                    if (!imagePath) return;
+                    void openOriginal(imagePath);
+                  }}
+                  style={({ pressed }) => [styles.viewerRetry, pressed && styles.originalButtonPressed]}
+                >
+                  <Text style={styles.viewerRetryText}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {signedUrl ? (
+              <ScrollView
+                style={styles.viewerScroll}
+                contentContainerStyle={styles.viewerScrollContent}
+                maximumZoomScale={4}
+                minimumZoomScale={1}
+                centerContent
+                bouncesZoom
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <Image
+                  accessibilityLabel="Original receipt"
+                  source={{ uri: signedUrl }}
+                  style={{ width: windowWidth, height: Math.max(windowHeight - 140, 240) }}
+                  contentFit="contain"
+                  onError={() => {
+                    setSignedUrl(null);
+                    setViewerError(mapErrorToUserMessage(new Error('This receipt photo link expired. Try again.'), 'Could not open the receipt photo.'));
+                  }}
+                />
+              </ScrollView>
+            ) : null}
+          </SafeAreaView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -700,6 +827,48 @@ const styles = StyleSheet.create({
   missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
   missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },
   scrollContent: { paddingTop: 16, paddingBottom: 120 },
+  originalButton: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  originalButtonPressed: { backgroundColor: theme.colors.surfacePressed },
+  originalButtonText: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  viewer: { flex: 1, backgroundColor: '#000000' },
+  viewerSafe: { flex: 1 },
+  viewerBar: { height: 52, paddingHorizontal: 16, alignItems: 'flex-end', justifyContent: 'center' },
+  viewerClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  viewerClosePressed: { backgroundColor: theme.colors.surfacePressed },
+  viewerCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 16 },
+  viewerError: { color: theme.colors.textSecondary, fontSize: 15, lineHeight: 22, textAlign: 'center' },
+  viewerRetry: {
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: theme.radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+  },
+  viewerRetryText: { color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' },
+  viewerScroll: { flex: 1 },
+  viewerScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
   bookLink: { alignSelf: 'flex-start', marginLeft: 16, marginBottom: 16, paddingVertical: 4 },
   bookLinkText: { color: theme.colors.accent, fontSize: 13, fontWeight: '600' },
   block: { marginBottom: 18 },

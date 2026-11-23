@@ -12,11 +12,16 @@ const SENSITIVE_KEYS = new Set([
   'access_token',
   'refresh_token',
   'authorization',
+  'signed_url',
+  'signedurl',
+  'signed_token',
 ]);
 
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
+const SIGNED_STORAGE_URL = /https?:\/\/\S*\/object\/sign\/\S*/gi;
+const TOKEN_PARAM = /([?&#]token=)[^\s&#]+/gi;
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -30,7 +35,12 @@ export function shouldEmitLog(level: LogLevel) {
 }
 
 export function redactString(value: string) {
-  return value.replace(EMAIL, REDACTED).replace(JWT, REDACTED).replace(BEARER, REDACTED);
+  return value
+    .replace(SIGNED_STORAGE_URL, REDACTED)
+    .replace(TOKEN_PARAM, `$1${REDACTED}`)
+    .replace(EMAIL, REDACTED)
+    .replace(JWT, REDACTED)
+    .replace(BEARER, REDACTED);
 }
 
 export function redactSensitive(value: unknown, depth = 0): unknown {

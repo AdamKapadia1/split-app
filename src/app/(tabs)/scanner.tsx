@@ -8,17 +8,23 @@ import { GroupSelectorSheet } from '@/components/GroupSelectorSheet';
 import { ensureAiScanConsent } from '@/lib/aiConsent';
 import { supabase } from '@/lib/supabase';
 
+import { uploadReceiptImage } from '@/services/ReceiptImageService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { receiptService } from '../../services/ReceiptService';
 import { ReceiptScanError, VisionService } from '../../services/VisionService';
 
+type CapturedReceipt = {
+  uri: string;
+  base64: string;
+};
+
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [isCapturing, setIsCapturing] = useState(false);
-  const [pendingPhotoBase64, setPendingPhotoBase64] = useState<string | null>(null);
+  const [pendingPhoto, setPendingPhoto] = useState<CapturedReceipt | null>(null);
   const [isGroupSheetVisible, setGroupSheetVisible] = useState(false);
 
   const takePicture = async () => {
@@ -28,11 +34,11 @@ export default function ScannerScreen() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
-      if (!photo?.base64) {
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5, exif: false });
+      if (!photo?.uri || !photo.base64) {
         throw new Error('The camera did not return image data.');
       }
-      setPendingPhotoBase64(photo.base64);
+      setPendingPhoto({ uri: photo.uri, base64: photo.base64 });
       setGroupSheetVisible(true);
     } catch (error) {
       logger.error('scanner capture', { code: 'CAPTURE_FAILED' });
@@ -45,12 +51,13 @@ export default function ScannerScreen() {
 
   const processReceiptWithGroup = async (groupId: string | null) => {
     setGroupSheetVisible(false);
-    if (!pendingPhotoBase64) return;
+    if (!pendingPhoto) return;
+    const photo = pendingPhoto;
 
     setIsCapturing(true);
     try {
       if (!(await ensureAiScanConsent())) {
-        setPendingPhotoBase64(null);
+        setPendingPhoto(null);
         return;
       }
       if (!supabase) throw new Error('Not logged in');
@@ -58,7 +65,7 @@ export default function ScannerScreen() {
       if (!session?.user?.id) throw new Error('Not logged in');
 
       const newReceipt = await receiptService.createEmptyReceipt(session.user.id, groupId);
-      const aiData = await VisionService.analyzeReceipt(pendingPhotoBase64);
+      const aiData = await VisionService.analyzeReceipt(photo.base64);
 
       if (aiData.items.length > 0) {
         await receiptService.addScannedItems(
@@ -81,6 +88,13 @@ export default function ScannerScreen() {
         status: 'open',
       });
 
+      try {
+        const imagePath = await uploadReceiptImage(session.user.id, newReceipt.id, photo.uri);
+        await receiptService.setReceiptImagePath(newReceipt.id, imagePath);
+      } catch {
+        logger.warn('scanner image', { code: 'IMAGE_UPLOAD_FAILED' });
+      }
+
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.push(`/receipt/${newReceipt.id}`);
     } catch (error) {
@@ -88,7 +102,7 @@ export default function ScannerScreen() {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Failed to parse receipt', mapErrorToUserMessage(error, 'Could not read the line items. Please try again.'));
     } finally {
-      setPendingPhotoBase64(null);
+      setPendingPhoto(null);
       setIsCapturing(false);
     }
   };
@@ -147,7 +161,7 @@ export default function ScannerScreen() {
         onSelect={processReceiptWithGroup}
         onCancel={() => {
           setGroupSheetVisible(false);
-          setPendingPhotoBase64(null);
+          setPendingPhoto(null);
         }}
       />
     </View>

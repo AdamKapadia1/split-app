@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressa
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { PayoutSetup } from '@/components/payout-setup';
 import { purgeLocalAppData, supabase } from '@/lib/supabase';
+import { purgeAllUserReceiptImages } from '@/services/ReceiptImageService';
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
@@ -17,7 +18,7 @@ type InfoTopic = 'payments' | 'privacy';
 
 const PAYMENTS_COPY = 'Midnight never holds your money and never starts a transfer. When you pay someone, the payment happens in your own banking app, directly between the two of you.';
 
-const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. You can erase your login, profile, and saved payout details at any time. UK GDPR gives you that right to erasure.';
+const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. Receipt photos stay in private storage and are removed when you delete your account. You can erase your login, profile, payout details, and receipt photos at any time. UK GDPR gives you that right to erasure.';
 
 type AccountSettingsSheetProps = {
   visible: boolean;
@@ -89,7 +90,7 @@ export function AccountSettingsSheet({
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(
       'Delete account?',
-      'This permanently erases your login, profile, and saved payout details. Receipts you share stay available to the other people on them, without your bank details.',
+      'This permanently erases your login, profile, saved payout details, and receipt photos you captured. Receipts you share stay available to the other people on them, without your bank details or photos.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Continue', style: 'destructive', onPress: confirmDeleteFinal },
@@ -109,6 +110,13 @@ export function AccountSettingsSheet({
     setIsDeleting(true);
     try {
       if (!supabase) throw new Error('Supabase is not configured.');
+      if (userId) {
+        try {
+          await purgeAllUserReceiptImages(userId);
+        } catch {
+          logger.warn('delete account', { code: 'IMAGE_PURGE_FAILED' });
+        }
+      }
       const { error } = await supabase.rpc('delete_my_account');
       if (error) throw error;
       await purgeLocalAppData();

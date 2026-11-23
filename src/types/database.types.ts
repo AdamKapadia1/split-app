@@ -97,8 +97,13 @@ export interface Receipt {
    * Exact 2-decimal amount mapped to Postgres `numeric(10,2)`.
    */
   total_amount: number;
-  /** Storage path or public URL of the captured receipt image. */
+  /** Legacy capture reference. New photos use `image_path` in private storage. */
   image_url: string | null;
+  /**
+   * Private storage object key, `<user uuid>/<receipt uuid>.jpg`.
+   * Null when the photo could not be uploaded. Never a signed URL.
+   */
+  image_path?: string | null;
   /** Where this receipt is in the scanning-to-settlement lifecycle. */
   status: ReceiptStatus;
   /**

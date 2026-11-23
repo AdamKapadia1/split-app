@@ -5,6 +5,7 @@ import { logger } from '@/utils/logger';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs, Split } from '@/types/database.types';
 import { toMinorUnits } from '@/utils/money';
+import { assertReceiptImagePath } from '@/utils/receiptImage';
 import {
   buildReceiptHistoryKeysetFilter,
   escapeIlikePattern,
@@ -97,6 +98,18 @@ export class ReceiptService {
       return parseItems(data, 'INSERT_FAILED');
     } catch (caught) {
       throw logged('addScannedItems', 'INSERT_FAILED', 'Could not save the scanned items.', caught);
+    }
+  }
+
+  async setReceiptImagePath(receiptId: string, imagePath: string): Promise<void> {
+    try {
+      const id = requireId(receiptId, 'receiptId');
+      const path = assertReceiptImagePath(imagePath);
+      const client = requireClient();
+      const { error } = await client.from('receipts').update({ image_path: path }).eq('id', id);
+      if (error) throw new ReceiptServiceError('UPDATE_FAILED', error.message, error);
+    } catch (caught) {
+      throw logged('setReceiptImagePath', 'UPDATE_FAILED', 'Could not save the receipt photo.', caught);
     }
   }
 
@@ -509,6 +522,7 @@ function parseReceipt(value: unknown, code: ReceiptServiceCode): StoredReceipt {
     tip_amount: readStoredMoney(row, 'tip_amount', code),
     total_amount: readStoredMoney(row, 'total_amount', code),
     image_url: readNullableString(row, 'image_url', code),
+    image_path: readNullableString(row, 'image_path', code),
     status: readStatus(row, code),
     settled_at: readNullableString(row, 'settled_at', code),
     settled_by: readNullableString(row, 'settled_by', code),
