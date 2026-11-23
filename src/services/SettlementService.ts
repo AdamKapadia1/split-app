@@ -1,6 +1,5 @@
-import type { PostgrestError } from '@supabase/supabase-js';
-
 import { supabase } from '@/lib/supabase';
+import { logger } from '@/utils/logger';
 import type {
   Receipt,
   ReceiptSplit,
@@ -180,17 +179,8 @@ function requireClient() {
 function asSettlementError(error: unknown, code: SettlementServiceCode, fallback: string): SettlementServiceError {
   if (error instanceof SettlementServiceError) return error;
 
-  const message = postgresMessage(error);
-  if (/Not authenticated|Forbidden|Settlement not found|Amount must be positive|different users|idempotency key/i.test(message)) {
-    return new SettlementServiceError(code, message);
-  }
-
+  logger.error('SettlementService', { code });
   return new SettlementServiceError(code, fallback);
-}
-
-function postgresMessage(error: unknown) {
-  if (!error || typeof error !== 'object' || !('message' in error)) return '';
-  return String((error as PostgrestError).message ?? '');
 }
 
 function firstRpcRow(data: unknown): unknown {

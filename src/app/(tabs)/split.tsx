@@ -16,6 +16,8 @@ import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { receiptService } from '@/services/ReceiptService';
 import type { Item, Receipt, Split } from '@/types/database.types';
 import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { logger } from '@/utils/logger';
 
 const PEOPLE = [
   { id: '11111111-1111-4111-a111-111111111111', name: 'Me', initial: 'M', color: theme.colors.accent },
@@ -201,7 +203,7 @@ export default function SplitScreen() {
             setGroupError(null);
             if (preferred) setSelectedId(preferred);
           } catch (groupLoadError) {
-            console.error('Failed to load group split:', groupLoadError);
+            logger.error('split', { code: 'GROUP_FAILED' });
             setMembers([]);
             setClaims({});
             setPaidById(null);
@@ -224,7 +226,7 @@ export default function SplitScreen() {
           setClaims(initialClaims);
         }
       } catch (error) {
-        console.error("Failed to load split ledger:", error);
+        logger.error('split', { code: 'LEDGER_FAILED' });
       } finally {
         setIsLoading(false);
       }
@@ -294,8 +296,8 @@ export default function SplitScreen() {
       setSaved(true);
       successHaptic();
     } catch (error) {
-      console.error('Failed to save split:', error);
-      setSaveError(error instanceof Error ? error.message : 'Could not save this split.');
+      logger.error('split', { code: 'SAVE_FAILED' });
+      setSaveError(mapErrorToUserMessage(error, 'Could not save this split.'));
     } finally {
       setSaving(false);
     }
@@ -322,7 +324,7 @@ export default function SplitScreen() {
       // Assuming selected.id is the user's UUID in a real auth setup.
       await receiptService.toggleItemClaim(itemId, selected.id, receiptId);
     } catch (error) {
-      console.error("Failed to persist split:", error);
+      logger.error('split', { code: 'CLAIM_FAILED' });
       // If persistence fails, you could revert the optimistic state here
     }
   }

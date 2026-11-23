@@ -6,6 +6,7 @@ import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, T
 
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
+import { logger } from '@/utils/logger';
 import { formatPence } from '@/utils/money';
 import {
   buildPaymentUrl,
@@ -112,7 +113,7 @@ export function PaymentSheetModal({
         setCopiedField((current) => (current === field ? null : current));
       }, 1200);
     } catch {
-      console.error('[PaymentSheet] copy failed');
+      logger.error('PaymentSheet', { code: 'COPY_FAILED' });
     }
   }
 

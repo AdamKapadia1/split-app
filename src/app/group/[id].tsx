@@ -17,6 +17,8 @@ import { createIdempotencyKey, SettlementServiceError, settlementService, type G
 import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatSmartDate } from '@/utils/formatSmartDate';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { logger } from '@/utils/logger';
 import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
 import { calculateNetBalances, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type GroupLedgerStatus, type SimplifiedTransfer } from '@/utils/settlements';
@@ -183,7 +185,7 @@ export default function GroupLedgerScreen() {
         supabase.from('groups').select('name, created_by').eq('id', groupId).maybeSingle(),
         settlementService.getGroupLedgerData(groupId),
         groupService.getGroupMembers(groupId).catch((error: unknown) => {
-          console.error('Failed to load group members:', error);
+          logger.error('group', { code: 'MEMBERS_FAILED' });
           return [] as GroupMemberProfile[];
         }),
       ]);
@@ -206,7 +208,7 @@ export default function GroupLedgerScreen() {
       setSettlements(ledger.settlements);
       setMembers(memberList);
     } catch (error) {
-      console.error('Failed to load group ledger:', error);
+      logger.error('group', { code: 'LEDGER_FAILED' });
       setMissing(true);
     } finally {
       setIsLoading(false);
@@ -274,7 +276,7 @@ export default function GroupLedgerScreen() {
         memberIds,
       );
     } catch (error) {
-      console.error('Failed to calculate balances:', error);
+      logger.error('group', { code: 'BALANCE_FAILED' });
       return Object.fromEntries(memberIds.map((id) => [id, 0]));
     }
   }, [receipts, splits, settlements, memberIds]);
@@ -304,7 +306,7 @@ export default function GroupLedgerScreen() {
         currentUserId: viewerId,
       });
     } catch (error) {
-      console.error('Failed to derive group ledger status:', error);
+      logger.error('group', { code: 'STATUS_FAILED' });
       const receiptCount = receipts.length;
       return {
         kind: receiptCount === 0 ? 'empty' : 'needs_split',
@@ -403,7 +405,7 @@ export default function GroupLedgerScreen() {
       await loadLedger('refresh');
       return 'paid';
     } catch (error) {
-      console.error('Failed to record settlement:', error instanceof SettlementServiceError ? error.code : 'SAVE_FAILED');
+      logger.error('group', { code: error instanceof SettlementServiceError ? error.code : 'SAVE_FAILED' });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       throw error;
     } finally {
@@ -437,10 +439,9 @@ export default function GroupLedgerScreen() {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await loadLedger('refresh');
     } catch (error) {
-      console.error('Failed to void settlement:', error);
+      logger.error('group', { code: error instanceof SettlementServiceError ? error.code : 'VOID_FAILED' });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message = error instanceof SettlementServiceError ? error.message : 'Try again in a moment.';
-      Alert.alert('Could not void settlement', message);
+      Alert.alert('Could not void settlement', mapErrorToUserMessage(error, 'Try again in a moment.'));
     } finally {
       setVoidingId(null);
     }
@@ -455,7 +456,7 @@ export default function GroupLedgerScreen() {
       await groupService.removeMember(groupId, member.userId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      console.error('Failed to remove member:', error);
+      logger.error('group', { code: 'REMOVE_FAILED' });
       setMembers(previous);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Could not remove member', 'This member is still in the group.');
@@ -524,10 +525,9 @@ export default function GroupLedgerScreen() {
       await groupService.deleteGroup(groupId);
       await finishGroupAction();
     } catch (error) {
-      console.error('Failed to delete group:', error);
+      logger.error('group', { code: error instanceof GroupServiceError ? error.code : 'DELETE_FAILED' });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message = error instanceof GroupServiceError ? error.message : 'Try again in a moment.';
-      Alert.alert('Could not delete group', message);
+      Alert.alert('Could not delete group', mapErrorToUserMessage(error, 'Try again in a moment.'));
       setGroupAction(null);
     }
   }
@@ -539,10 +539,9 @@ export default function GroupLedgerScreen() {
       await groupService.leaveGroup(groupId);
       await finishGroupAction();
     } catch (error) {
-      console.error('Failed to leave group:', error);
+      logger.error('group', { code: error instanceof GroupServiceError ? error.code : 'LEAVE_FAILED' });
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message = error instanceof GroupServiceError ? error.message : 'Try again in a moment.';
-      Alert.alert('Could not leave group', message);
+      Alert.alert('Could not leave group', mapErrorToUserMessage(error, 'Try again in a moment.'));
       setGroupAction(null);
     }
   }

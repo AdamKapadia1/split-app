@@ -8,10 +8,41 @@
     "scheme": "splitapp",
     "userInterfaceStyle": "dark",
     "ios": {
+      "bundleIdentifier": "com.adamkapadia.splitapp",
       "icon": "./assets/expo.icon",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "LSApplicationQueriesSchemes": [
           "sms"
+        ],
+        "NSCameraUsageDescription": "Midnight uses the camera to photograph receipts so you can split a bill with your group.",
+        "NSPhotoLibraryUsageDescription": "Midnight uses your photo library so you can choose a receipt photo to split with your group.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        }
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": ["C617.1"]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+            "NSPrivacyAccessedAPITypeReasons": ["35F9.1"]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryDiskSpace",
+            "NSPrivacyAccessedAPITypeReasons": ["E174.1"]
+          }
         ]
       }
     },
@@ -33,7 +64,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Midnight to scan your receipts.",
+          "cameraPermission": "Midnight uses the camera to photograph receipts so you can split a bill with your group.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }

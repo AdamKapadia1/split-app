@@ -1,13 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { PayoutSetup } from '@/components/payout-setup';
+import { purgeLocalAppData, supabase } from '@/lib/supabase';
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { logger } from '@/utils/logger';
 import { maskAccountNumber } from '@/utils/paymentLinks';
+
+type InfoTopic = 'payments' | 'privacy';
+
+const PAYMENTS_COPY = 'Midnight never holds your money and never starts a transfer. When you pay someone, the payment happens in your own banking app, directly between the two of you.';
+
+const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. You can erase your login, profile, and saved payout details at any time. UK GDPR gives you that right to erasure.';
 
 type AccountSettingsSheetProps = {
   visible: boolean;
@@ -29,6 +39,8 @@ export function AccountSettingsSheet({
   const [payoutOpen, setPayoutOpen] = useState(false);
   const [payout, setPayout] = useState<PayoutMethod | null>(null);
   const [payoutLoading, setPayoutLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [info, setInfo] = useState<InfoTopic | null>(null);
   const watchKey = visible && userId ? userId : null;
   const [seenKey, setSeenKey] = useState<string | null>(null);
   if (seenKey !== watchKey) {
@@ -56,17 +68,60 @@ export function AccountSettingsSheet({
   }, [watchKey]);
 
   function close() {
+    if (isDeleting) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setPayoutOpen(false);
+    setInfo(null);
     onClose();
   }
 
   function confirmLogout() {
+    if (isDeleting) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert('Log out?', "You'll need to sign back in to view your groups and receipts.", [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log Out', style: 'destructive', onPress: onLogout },
     ]);
+  }
+
+  function confirmDelete() {
+    if (isDeleting) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert(
+      'Delete account?',
+      'This permanently erases your login, profile, and saved payout details. Receipts you share stay available to the other people on them, without your bank details.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue', style: 'destructive', onPress: confirmDeleteFinal },
+      ],
+    );
+  }
+
+  function confirmDeleteFinal() {
+    Alert.alert('Permanently delete account?', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Permanently Delete', style: 'destructive', onPress: () => { void runDelete(); } },
+    ]);
+  }
+
+  async function runDelete() {
+    if (isDeleting) return;
+    setIsDeleting(true);
+    try {
+      if (!supabase) throw new Error('Supabase is not configured.');
+      const { error } = await supabase.rpc('delete_my_account');
+      if (error) throw error;
+      await purgeLocalAppData();
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      setPayoutOpen(false);
+      setInfo(null);
+      onClose();
+      router.replace('/sign-in');
+    } catch (error) {
+      logger.error('delete account', { code: 'DELETE_FAILED' });
+      Alert.alert('Could not delete account', mapErrorToUserMessage(error));
+      setIsDeleting(false);
+    }
   }
 
   const payoutLabel = payoutStatus(payout);
@@ -99,6 +154,17 @@ export function AccountSettingsSheet({
           </View>
 
           <View style={styles.list}>
+            {info ? (
+              <View style={styles.info}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => setInfo(null)} style={({ pressed }) => [styles.infoBack, pressed && styles.rowPressed]}>
+                  <Ionicons name="chevron-back" size={16} color={theme.colors.textSecondary} />
+                  <Text style={styles.infoBackText}>Back</Text>
+                </Pressable>
+                <Text style={styles.infoTitle}>{info === 'payments' ? 'How payments work' : 'Privacy & data'}</Text>
+                <Text style={styles.infoBody}>{info === 'payments' ? PAYMENTS_COPY : PRIVACY_COPY}</Text>
+              </View>
+            ) : (
+              <>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Payout details, ${payoutLoading ? 'loading' : payoutLabel}`}
@@ -123,17 +189,66 @@ export function AccountSettingsSheet({
               <Text style={styles.rowLabel}>Currency</Text>
               <Text style={styles.currencyValue}>GBP (£)</Text>
             </View>
+            <View style={styles.divider} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="How payments work"
+              disabled={isDeleting}
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setInfo('payments');
+              }}
+              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            >
+              <Text style={styles.rowLabel}>How payments work</Text>
+              <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+            </Pressable>
+            <View style={styles.divider} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Privacy and data"
+              disabled={isDeleting}
+              onPress={() => {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setInfo('privacy');
+              }}
+              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            >
+              <Text style={styles.rowLabel}>Privacy & data</Text>
+              <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+            </Pressable>
+              </>
+            )}
           </View>
 
+          {info ? null : (
+            <>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Log Out"
+            disabled={isDeleting}
             onPress={confirmLogout}
-            style={({ pressed }) => [styles.logout, pressed && styles.logoutPressed]}
+            style={({ pressed }) => [styles.logout, (pressed || isDeleting) && styles.logoutPressed]}
           >
             <Ionicons name="log-out-outline" size={16} color={theme.colors.danger} />
             <Text style={styles.logoutText}>Log Out</Text>
           </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Delete Account"
+            accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
+            disabled={isDeleting}
+            onPress={confirmDelete}
+            style={({ pressed }) => [styles.deleteAccount, pressed && styles.logoutPressed]}
+          >
+            {isDeleting ? (
+              <ActivityIndicator color={theme.colors.danger} size="small" />
+            ) : (
+              <Text style={styles.deleteAccountText}>Delete Account</Text>
+            )}
+          </Pressable>
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
       <PayoutSetup
@@ -245,4 +360,16 @@ const styles = StyleSheet.create({
   },
   logoutPressed: { opacity: 0.75 },
   logoutText: { fontSize: 15, fontWeight: '600', color: theme.colors.danger },
+  deleteAccount: {
+    marginTop: 8,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteAccountText: { fontSize: 15, fontWeight: '600', color: theme.colors.danger },
+  info: { paddingHorizontal: 14, paddingVertical: 14, gap: 8 },
+  infoBack: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start' },
+  infoBackText: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: theme.colors.textSecondary },
+  infoTitle: { marginTop: 6, fontSize: 17, lineHeight: 22, fontWeight: '700', color: theme.colors.textPrimary },
+  infoBody: { fontSize: 14, lineHeight: 20, color: theme.colors.textSecondary },
 });

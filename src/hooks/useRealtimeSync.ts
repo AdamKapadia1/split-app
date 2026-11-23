@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
+import { logger } from '@/utils/logger';
 
 export type SyncStatus = 'disconnected' | 'connecting' | 'live' | 'error';
 
@@ -13,12 +14,6 @@ type ChangeEvent = 'INSERT' | 'UPDATE' | 'DELETE';
 type WatchedTable = 'receipts' | 'items' | 'splits';
 
 const CHANGE_EVENTS: readonly ChangeEvent[] = ['INSERT', 'UPDATE', 'DELETE'];
-
-const TABLE_LABEL: Record<WatchedTable, string> = {
-  receipts: 'RECEIPT',
-  items: 'ITEM',
-  splits: 'SPLIT',
-};
 
 /**
  * Subscribes to receipt, item, and split changes for one receipt.
@@ -38,7 +33,7 @@ export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) 
 
   const handlePayload = useCallback((table: WatchedTable, payload: RealtimePostgresChangesPayload<ChangeRow>) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-    console.info(`[Realtime] ${TABLE_LABEL[table]} ${payload.eventType} received`, payload);
+    logger.debug('Realtime change', { table, event: payload.eventType });
 
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -74,13 +69,13 @@ export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) 
     channel.subscribe((startStatus, error) => {
       if (startStatus === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
         setReport({ id: receiptId, status: 'live' });
-        console.info(`[Realtime] Socket connected for receipt ${receiptId}`);
+        logger.debug('Realtime connected');
         return;
       }
 
       if (startStatus === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR || startStatus === REALTIME_SUBSCRIBE_STATES.TIMED_OUT) {
         setReport({ id: receiptId, status: 'error' });
-        console.error(`[Realtime] Socket failed for receipt ${receiptId}: ${startStatus}`, error);
+        logger.error('Realtime', { code: startStatus });
       }
     });
 
@@ -92,7 +87,7 @@ export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) 
 
       channelRef.current = null;
       void client.removeChannel(channel);
-      console.info('[Realtime] Socket disconnected');
+      logger.debug('Realtime disconnected');
     };
   }, [handlePayload, isActive, receiptId]);
 

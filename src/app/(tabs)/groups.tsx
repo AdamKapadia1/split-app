@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
+import { logger } from '@/utils/logger';
 import { formatPence } from '@/utils/money';
 import type { GroupLedgerStatus } from '@/utils/settlements';
 
@@ -53,7 +54,7 @@ export default function GroupsScreen() {
       if (hydrateRequest.current !== requestId) return;
       setSummaries(Object.fromEntries(rows.map((row) => [row.id, row])));
     } catch (error) {
-      console.error('Error loading group balances:', error);
+      logger.error('groups', { code: 'BALANCES_FAILED' });
       if (hydrateRequest.current !== requestId) return;
       setSummaries((current) => {
         const next = { ...current };
@@ -88,7 +89,7 @@ export default function GroupsScreen() {
       setGroups(next);
       void hydrateBalances(next, viewerId);
     } catch (error) {
-      console.error('Error fetching groups:', error);
+      logger.error('groups', { code: 'FETCH_FAILED' });
     } finally {
       setLoadingGroups(false);
       setIsRefreshing(false);
@@ -156,7 +157,7 @@ export default function GroupsScreen() {
       void hydrateBalances(nextGroups, viewerId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      console.error('Error creating group:', error);
+      logger.error('groups', { code: 'CREATE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Transaction Failed', 'Could not create the group securely.');
       void fetchGroups();

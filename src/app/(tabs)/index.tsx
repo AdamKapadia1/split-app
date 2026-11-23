@@ -15,6 +15,7 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup } from '@/services/GroupService';
 import { isAbortError, receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
+import { logger } from '@/utils/logger';
 import { formatSmartDate } from '@/utils/formatSmartDate';
 import {
   collapseHistoryToPreview,
@@ -193,7 +194,7 @@ export default function HomeScreen() {
       setInitialError(null);
     } catch (error) {
       if (isAbortError(error) || generation !== requestGenRef.current) return;
-      console.error('Error fetching receipts:', error);
+      logger.error('history', { code: 'FETCH_FAILED' });
       if (itemsRef.current.length === 0) setInitialError('Could not load receipts.');
     } finally {
       if (generation !== requestGenRef.current) return;
@@ -233,7 +234,7 @@ export default function HomeScreen() {
       commitPage(merged, page.hasMore, page.nextCursor, 'expanded');
     } catch (error) {
       if (isAbortError(error) || generation !== requestGenRef.current) return;
-      console.error('Error loading more receipts:', error);
+      logger.error('history', { code: 'PAGE_FAILED' });
       setLoadMoreError('Could not load more receipts.');
     } finally {
       if (token === moreTokenRef.current) inFlightMoreRef.current = false;
@@ -247,7 +248,7 @@ export default function HomeScreen() {
       const next = await groupService.getAccountProfile(userId);
       setProfile(next);
     } catch (error) {
-      console.error('Error loading account profile:', error);
+      logger.error('account', { code: 'PROFILE_FAILED' });
     }
   }, [userId]);
 
@@ -262,7 +263,7 @@ export default function HomeScreen() {
       setGroups(next);
       setGroupsLoaded(true);
     } catch (error) {
-      console.error('Error loading history groups:', error);
+      logger.error('history', { code: 'GROUPS_FAILED' });
     }
   }, [userId]);
 
@@ -317,7 +318,7 @@ export default function HomeScreen() {
 
   const confirmDelete = useCallback(async (id: string) => {
     if (!supabase) {
-      console.error('Delete failed: Supabase is not configured.');
+      logger.error('receipt delete', { code: 'NOT_CONFIGURED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'Could not delete receipt from the database.');
       return;
@@ -329,10 +330,7 @@ export default function HomeScreen() {
     try {
       const { data, error } = await supabase.from('receipts').delete().eq('id', id).select();
       if (error || !data || data.length === 0) {
-        console.error(
-          'Delete failed:',
-          error ?? 'No rows were deleted. Row-level security may have blocked the delete.',
-        );
+        logger.error('receipt delete', { code: 'DELETE_BLOCKED' });
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         Alert.alert('Error', 'Could not delete receipt from the database.');
         void loadFirstPage('refresh');
@@ -341,7 +339,7 @@ export default function HomeScreen() {
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      console.error('Delete failed:', error);
+      logger.error('receipt delete', { code: 'DELETE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'Could not delete receipt from the database.');
       void loadFirstPage('refresh');

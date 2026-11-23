@@ -1,6 +1,8 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
+import { logger } from '@/utils/logger';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs, Split } from '@/types/database.types';
 import { toMinorUnits } from '@/utils/money';
 import {
@@ -210,20 +212,16 @@ export class ReceiptService {
       const args: SetReceiptSettledArgs = { p_receipt_id: id, p_settled: settled };
       const { data, error } = await client.rpc('set_receipt_settled', args);
       if (error) {
-        console.error('[ReceiptService] [setReceiptSettled]', error);
-        throw new ReceiptServiceError('SETTLE_FAILED', error.message, error);
+        throw new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.', error);
       }
 
       const row = Array.isArray(data) ? data[0] : data;
       if (!row) {
-        const empty = new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.');
-        console.error('[ReceiptService] [setReceiptSettled]', empty);
-        throw empty;
+        throw new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.');
       }
       return parseReceipt(row, 'SETTLE_FAILED');
     } catch (caught) {
       if (caught instanceof ReceiptServiceError) throw caught;
-      console.error('[ReceiptService] [setReceiptSettled]', caught);
       throw new ReceiptServiceError('SETTLE_FAILED', 'Could not update the receipt.', caught instanceof Error ? caught : null);
     }
   }
@@ -283,7 +281,7 @@ export class ReceiptService {
       }
       if (signal?.aborted || isAbortError(groupsResult.error)) throw abortError(groupsResult.error);
       if (groupsResult.error) {
-        console.error('[ReceiptService] [fetchReceiptHistoryPage] groups', groupsResult.error);
+        logger.error('ReceiptService', { method: 'fetchReceiptHistoryPage', code: 'GROUPS_FAILED' });
       }
 
       const names = groupsResult.error ? new Map<string, string>() : groupNameMap(groupsResult.data);
@@ -292,7 +290,7 @@ export class ReceiptService {
         try {
           parsed.push(parseReceipt(row, 'FETCH_FAILED'));
         } catch (error) {
-          console.error('[ReceiptService] [fetchReceiptHistoryPage] row', error);
+          logger.error('ReceiptService', { method: 'fetchReceiptHistoryPage', code: 'ROW_FAILED' });
         }
       }
 
@@ -365,8 +363,10 @@ function requireClient() {
 
 function logged(method: string, code: ReceiptServiceCode, fallback: string, caught: unknown): ReceiptServiceError {
   const error = caught instanceof ReceiptServiceError ? caught : new ReceiptServiceError(code, fallback, caught instanceof Error ? caught : null);
-  console.error(`[ReceiptService] [${method}] Error: ${error.message}`, caught);
-  return error;
+  const message = mapErrorToUserMessage(error.originalError ?? error, fallback);
+  logger.error('ReceiptService', { method, code: error.code });
+  if (message === error.message) return error;
+  return new ReceiptServiceError(error.code, message, error.originalError);
 }
 
 function requirePageLimit(limit: number): number {

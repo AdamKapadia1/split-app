@@ -1,6 +1,7 @@
 import type { PostgrestError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
+import { logger } from '@/utils/logger';
 import {
   normalizeAccountNumber,
   normalizeSortCode,
@@ -218,6 +219,6 @@ function requireClient() {
 function asPayoutError(error: unknown, code: PayoutServiceCode, fallback: string): PayoutServiceError {
   if (error instanceof PayoutServiceError) return error;
   const postgresCode = error && typeof error === 'object' && 'code' in error ? String((error as PostgrestError).code ?? '') : '';
-  console.error(`[PayoutService] ${code}${postgresCode ? ` ${postgresCode}` : ''}`);
+  logger.error('PayoutService', { code, postgresCode: postgresCode || undefined });
   return new PayoutServiceError(code, fallback);
 }

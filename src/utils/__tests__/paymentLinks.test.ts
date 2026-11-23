@@ -141,11 +141,11 @@ let failed = 0;
 for (const test of tests) {
   try {
     test.run();
-    console.log(`ok ${test.name}`);
+    process.stdout.write(`ok ${test.name}\n`);
   } catch (error) {
     failed += 1;
-    console.error(`not ok ${test.name}`);
-    console.error(error);
+    process.stderr.write(`not ok ${test.name}\n`);
+    process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : 'unknown test failure'}\n`);
   }
 }
 

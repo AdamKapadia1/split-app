@@ -12,6 +12,8 @@ import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
 import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { logger } from '@/utils/logger';
 
 type LedgerReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -149,7 +151,7 @@ export default function ReceiptLedgerScreen() {
           setGroupError(null);
         } catch (error) {
           if (cancelled) return;
-          console.error('Failed to load group split:', error);
+          logger.error('receipt', { code: 'GROUP_FAILED' });
           setMembers([]);
           setClaims({});
           setPaidById(null);
@@ -157,7 +159,7 @@ export default function ReceiptLedgerScreen() {
           setGroupError('Could not load this group.');
         }
       } catch (error) {
-        if (!cancelled) console.error('Failed to load ledger:', error);
+        if (!cancelled) logger.error('receipt', { code: 'LEDGER_FAILED' });
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -227,8 +229,8 @@ export default function ReceiptLedgerScreen() {
       setSaved(true);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      console.error('Failed to save split:', error);
-      setSaveError(error instanceof Error ? error.message : 'Could not save this split.');
+      logger.error('receipt', { code: 'SAVE_FAILED' });
+      setSaveError(mapErrorToUserMessage(error, 'Could not save this split.'));
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setSaving(false);
@@ -328,9 +330,9 @@ export default function ReceiptLedgerScreen() {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (settled) router.back();
     } catch (error) {
-      console.error('Failed to update receipt archive:', error);
+      logger.error('receipt', { code: 'ARCHIVE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Could not update receipt', error instanceof Error ? error.message : 'Try again.');
+      Alert.alert('Could not update receipt', mapErrorToUserMessage(error, 'Try again.'));
     } finally {
       setTogglingSettled(false);
     }

@@ -2,6 +2,7 @@ import type { PostgrestError } from '@supabase/supabase-js';
 import type { CountryCode } from 'libphonenumber-js';
 
 import { supabase } from '@/lib/supabase';
+import { logger } from '@/utils/logger';
 import { toE164 } from '@/utils/phone';
 import {
   deriveGroupLedgerStatus,
@@ -323,7 +324,7 @@ function notifyGroupList() {
     try {
       listener();
     } catch (error) {
-      console.error('[GroupService] group list listener failed', error);
+      logger.error('GroupService listener', { code: 'LISTENER_FAILED' });
     }
   });
 }
@@ -338,33 +339,20 @@ function requireClient() {
 function asGroupError(error: unknown): GroupServiceError {
   if (error instanceof GroupServiceError) return error;
 
-  console.error('[GroupService]', error);
+  logger.error('GroupService', { code: postgresCode(error) || 'REQUEST_FAILED' });
 
   const code = postgresCode(error);
-  const message = postgresMessage(error);
   if (code === 'P0002') return new GroupServiceError('NOT_FOUND', 'No account found for that phone number.');
   if (code === '23505') return new GroupServiceError('ALREADY_MEMBER', 'Already in this group.');
   if (code === '22023') return new GroupServiceError('INVALID_PHONE', 'Enter a valid phone number.');
-  if (code === '42501' || /forbidden|not authenticated/i.test(message)) {
-    return new GroupServiceError('PERMISSION_DENIED', message || 'You do not have permission to change this group.');
-  }
-  if (/group not found|not a member/i.test(message)) {
-    return new GroupServiceError('NOT_FOUND', message);
-  }
-
-  const detail = [message, code].filter((part) => part.length > 0).join(' ');
-  return new GroupServiceError('NETWORK_ERROR', detail || 'Could not update group members.');
+  if (code === '42501') return new GroupServiceError('PERMISSION_DENIED', 'You do not have permission to change this group.');
+  if (code === 'PGRST116') return new GroupServiceError('NOT_FOUND', 'That group could not be found.');
+  return new GroupServiceError('NETWORK_ERROR', 'Could not update group members.');
 }
 
 function postgresCode(error: unknown) {
   if (!error || typeof error !== 'object' || !('code' in error)) return '';
   return String((error as PostgrestError).code ?? '');
-}
-
-function postgresMessage(error: unknown) {
-  if (!error || typeof error !== 'object' || !('message' in error)) return '';
-  const message = (error as PostgrestError).message;
-  return typeof message === 'string' ? message : '';
 }
 
 function firstProfile(value: unknown): ProfileRow | null {
@@ -569,7 +557,7 @@ function ledgerStatusForGroup(
       currentUserId: viewerId,
     });
   } catch (error) {
-    console.error('[GroupService] group balance', groupId, error);
+    logger.error('GroupService balance', { code: 'BALANCE_FAILED' });
     const receiptCount = receipts.length;
     return {
       kind: receiptCount === 0 ? 'empty' : 'needs_split',

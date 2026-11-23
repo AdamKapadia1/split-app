@@ -5,8 +5,9 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PayoutServiceError, payoutService, type PayoutMethod, type PayoutMethodKind } from '@/services/PayoutService';
+import { payoutService, type PayoutMethod, type PayoutMethodKind } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import {
   buildProfilePreviewUrl,
   formatSortCode,
@@ -204,7 +205,7 @@ export function PayoutSetup({ visible, userId, onClose, onSaved }: PayoutSetupPr
       }
       onClose();
     } catch (error) {
-      setSaveError(error instanceof PayoutServiceError ? error.message : 'Could not save payout details.');
+      setSaveError(mapErrorToUserMessage(error, 'Could not save payout details.'));
     } finally {
       setSaving(false);
     }
@@ -294,7 +295,7 @@ export function PayoutSetup({ visible, userId, onClose, onSaved }: PayoutSetupPr
       setTestedHandle(null);
       onSaved(saved);
     } catch (error) {
-      setSaveError(error instanceof PayoutServiceError ? error.message : 'Could not remove these details.');
+      setSaveError(mapErrorToUserMessage(error, 'Could not remove these details.'));
     } finally {
       setSaving(false);
     }

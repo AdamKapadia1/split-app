@@ -5,9 +5,12 @@ import { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { GroupSelectorSheet } from '@/components/GroupSelectorSheet';
+import { ensureAiScanConsent } from '@/lib/aiConsent';
 import { supabase } from '@/lib/supabase';
 
 import { theme } from '@/theme/theme';
+import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { logger } from '@/utils/logger';
 import { receiptService } from '../../services/ReceiptService';
 import { ReceiptScanError, VisionService } from '../../services/VisionService';
 
@@ -32,7 +35,7 @@ export default function ScannerScreen() {
       setPendingPhotoBase64(photo.base64);
       setGroupSheetVisible(true);
     } catch (error) {
-      console.error(error);
+      logger.error('scanner capture', { code: 'CAPTURE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
     } finally {
@@ -46,6 +49,10 @@ export default function ScannerScreen() {
 
     setIsCapturing(true);
     try {
+      if (!(await ensureAiScanConsent())) {
+        setPendingPhotoBase64(null);
+        return;
+      }
       if (!supabase) throw new Error('Not logged in');
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user?.id) throw new Error('Not logged in');
@@ -77,10 +84,9 @@ export default function ScannerScreen() {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.push(`/receipt/${newReceipt.id}`);
     } catch (error) {
-      console.error(error);
+      logger.error('scanner parse', { code: error instanceof ReceiptScanError ? error.code : 'PARSE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message = error instanceof ReceiptScanError ? error.message : 'Could not read the line items. Please try again.';
-      Alert.alert('Failed to parse receipt', message);
+      Alert.alert('Failed to parse receipt', mapErrorToUserMessage(error, 'Could not read the line items. Please try again.'));
     } finally {
       setPendingPhotoBase64(null);
       setIsCapturing(false);

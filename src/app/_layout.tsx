@@ -3,7 +3,9 @@ import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { NightScreen } from '@/components/night-screen';
+import { PrivacyShield } from '@/components/PrivacyShield';
 import { Colors } from '@/constants/theme';
 import { theme } from '@/theme/theme';
 import { useSupabaseSession } from '@/lib/use-session';
@@ -23,12 +25,15 @@ const AppTheme = {
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={styles.root}>
-      <ThemeProvider value={AppTheme}>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </ThemeProvider>
-    </GestureHandlerRootView>
+    <AppErrorBoundary>
+      <GestureHandlerRootView style={styles.root}>
+        <ThemeProvider value={AppTheme}>
+          <StatusBar style="light" />
+          <RootNavigator />
+        </ThemeProvider>
+        <PrivacyShield />
+      </GestureHandlerRootView>
+    </AppErrorBoundary>
   );
 }
 
