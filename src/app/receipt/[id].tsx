@@ -8,14 +8,17 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
+import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
+import { listRecentNudgedRecipients, sendSettlementNudge } from '@/services/NotificationService';
 import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
-import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
-import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { mapErrorToUserMessage, mapSettlementNudgeError } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
+import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
+import { createTapId } from '@/utils/notifications';
 
 type LedgerReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -86,6 +89,7 @@ const LedgerItem = memo(function LedgerItem({
 
 export default function ReceiptLedgerScreen() {
   const router = useRouter();
+  const { session } = useSupabaseSession();
   const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
   const receiptId = Array.isArray(idParam) ? idParam[0] : idParam;
 
@@ -97,6 +101,9 @@ export default function ReceiptLedgerScreen() {
   const [claims, setClaims] = useState<Record<string, string[]>>({});
   const [activeMemberId, setActiveMemberId] = useState<string | null>(null);
   const [paidById, setPaidById] = useState<string | null>(null);
+  const [savedShares, setSavedShares] = useState<Record<string, number>>({});
+  const [nudgedRecipients, setNudgedRecipients] = useState<string[]>([]);
+  const [nudgingId, setNudgingId] = useState<string | null>(null);
   const [groupError, setGroupError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -136,6 +143,7 @@ export default function ReceiptLedgerScreen() {
         if (!data.receipt.group_id) {
           setMembers([]);
           setClaims({});
+          setSavedShares({});
           setPaidById(null);
           setActiveMemberId(null);
           setGroupError(null);
@@ -159,8 +167,14 @@ export default function ReceiptLedgerScreen() {
             }
           }
           const preferred = preferredMemberId(data.receipt, roster);
+          const shareMap: Record<string, number> = {};
+          for (const split of savedSplits) {
+            if (!memberIds.has(split.user_id)) continue;
+            shareMap[split.user_id] = (shareMap[split.user_id] ?? 0) + split.amount_minor;
+          }
           setMembers(roster);
           setClaims(nextClaims);
+          setSavedShares(shareMap);
           setPaidById(preferred);
           setActiveMemberId(preferred);
           setGroupError(null);
@@ -169,6 +183,7 @@ export default function ReceiptLedgerScreen() {
           logger.error('receipt', { code: 'GROUP_FAILED' });
           setMembers([]);
           setClaims({});
+          setSavedShares({});
           setPaidById(null);
           setActiveMemberId(null);
           setGroupError('Could not load this group.');
@@ -185,6 +200,50 @@ export default function ReceiptLedgerScreen() {
       cancelled = true;
     };
   }, [receiptId]);
+
+  useEffect(() => {
+    if (!receiptId || !session?.user.id) return;
+    let cancelled = false;
+    void listRecentNudgedRecipients(receiptId)
+      .then((ids) => {
+        if (!cancelled) setNudgedRecipients(ids);
+      })
+      .catch(() => {
+        if (!cancelled) logger.error('notifications', { code: 'NUDGE_LIST_FAILED' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [receiptId, session?.user.id]);
+
+  const sendNudge = useCallback(async (recipientId: string) => {
+    if (!receiptData || nudgingId) return;
+    const tapId = createTapId();
+    setNudgingId(recipientId);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      const result = await sendSettlementNudge(receiptData.receipt.id, recipientId, tapId);
+      if (result.sent || result.reason === 'NUDGE_COOLDOWN') {
+        setNudgedRecipients((current) => (current.includes(recipientId) ? current : [...current, recipientId]));
+      }
+      if (result.sent) {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return;
+      }
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Alert.alert('Reminder not sent', result.message || 'Could not send that reminder. Please try again.');
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code === 'NUDGE_COOLDOWN') {
+        setNudgedRecipients((current) => (current.includes(recipientId) ? current : [...current, recipientId]));
+      }
+      logger.error('notifications', { code: code || 'NUDGE_FAILED' });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Reminder not sent', mapSettlementNudgeError(error));
+    } finally {
+      setNudgingId(null);
+    }
+  }, [nudgingId, receiptData]);
 
   const toggleItem = useCallback((itemId: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -241,6 +300,7 @@ export default function ReceiptLedgerScreen() {
       setReceiptData((current) => (
         current ? { ...current, receipt: { ...current.receipt, paid_by: paidById } } : current
       ));
+      setSavedShares(shares);
       setSaved(true);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
@@ -522,28 +582,58 @@ export default function ReceiptLedgerScreen() {
                 {people.map((person) => {
                   const selected = person.id === activeMemberId;
                   const share = shares[person.id] ?? 0;
+                  const creditorId = paidById ?? receipt.host_id;
+                  const alreadyNudged = nudgedRecipients.includes(person.id);
+                  const showNudge = session?.user.id === receipt.host_id
+                    && !receipt.settled_at
+                    && person.id !== session.user.id
+                    && person.id !== creditorId
+                    && (savedShares[person.id] ?? 0) > 0;
                   return (
-                    <Pressable
-                      key={person.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${person.name}, ${formatPence(share)}`}
-                      accessibilityState={{ selected }}
-                      onPress={() => {
-                        setActiveMemberId(person.id);
-                        void Haptics.selectionAsync();
-                      }}
-                      style={[styles.memberCard, selected ? styles.memberCardActive : styles.memberCardIdle]}
-                    >
-                      <AvatarBadge name={person.name} userId={person.id} size={28} active={selected} />
-                      <View style={styles.memberCopy}>
-                        <Text style={styles.memberName} numberOfLines={1}>{person.name}</Text>
-                        <MoneyText
-                          amountMinor={share}
-                          size="sm"
-                          color={share > 0 ? theme.colors.textPrimary : theme.colors.textSecondary}
-                        />
-                      </View>
-                    </Pressable>
+                    <View key={person.id} style={styles.memberSlot}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${person.name}, ${formatPence(share)}`}
+                        accessibilityState={{ selected }}
+                        onPress={() => {
+                          setActiveMemberId(person.id);
+                          void Haptics.selectionAsync();
+                        }}
+                        style={[styles.memberCard, selected ? styles.memberCardActive : styles.memberCardIdle]}
+                      >
+                        <AvatarBadge name={person.name} userId={person.id} size={28} active={selected} />
+                        <View style={styles.memberCopy}>
+                          <Text style={styles.memberName} numberOfLines={1}>{person.name}</Text>
+                          <MoneyText
+                            amountMinor={share}
+                            size="sm"
+                            color={share > 0 ? theme.colors.textPrimary : theme.colors.textSecondary}
+                          />
+                        </View>
+                      </Pressable>
+                      {showNudge ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={alreadyNudged ? 'Nudged' : `Nudge ${person.name}`}
+                          accessibilityState={{ disabled: alreadyNudged || nudgingId !== null, busy: nudgingId === person.id }}
+                          disabled={alreadyNudged || nudgingId !== null}
+                          onPress={() => {
+                            void sendNudge(person.id);
+                          }}
+                          style={({ pressed }) => [
+                            styles.nudgePill,
+                            alreadyNudged && styles.nudgePillDone,
+                            pressed && !alreadyNudged && styles.nudgePillPressed,
+                          ]}
+                        >
+                          {nudgingId === person.id ? (
+                            <ActivityIndicator size="small" color={theme.colors.accentText} />
+                          ) : (
+                            <Text style={[styles.nudgePillText, alreadyNudged && styles.nudgePillTextDone]}>{alreadyNudged ? 'Nudged' : 'Nudge'}</Text>
+                          )}
+                        </Pressable>
+                      ) : null}
+                    </View>
                   );
                 })}
               </ScrollView>
@@ -924,6 +1014,24 @@ const styles = StyleSheet.create({
   equalPillPressed: { backgroundColor: theme.colors.surfacePressed },
   equalText: { color: theme.colors.accent, fontSize: 12, lineHeight: 16, fontWeight: '600' },
   memberScroller: { paddingHorizontal: 16, gap: 10 },
+  memberSlot: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  nudgePill: {
+    height: 28,
+    paddingHorizontal: 10,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+  },
+  nudgePillPressed: { backgroundColor: theme.colors.accentPressed },
+  nudgePillDone: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+  },
+  nudgePillText: { color: theme.colors.accentText, fontSize: 12, fontWeight: '700' },
+  nudgePillTextDone: { color: theme.colors.textSecondary, fontWeight: '600' },
   memberCard: {
     minWidth: 124,
     padding: 10,

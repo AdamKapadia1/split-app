@@ -91,6 +91,19 @@ function isSafeCode(code: string) {
   return SAFE_CODE.test(code);
 }
 
+export function mapSettlementNudgeError(error: unknown, fallback = 'Could not send that reminder. Please try again.'): string {
+  const code = readCode(error);
+  if (code === 'NUDGE_COOLDOWN') return 'You already sent a reminder about this bill in the last 24 hours.';
+  if (code === 'RATE_LIMITED') return 'You have sent too many reminders. Please try again in an hour.';
+  if (code === 'RECIPIENT_OPTED_OUT') return 'This person has turned off settlement reminders.';
+  if (code === 'NO_REGISTERED_DEVICE') return 'This person does not have notifications set up on a device yet.';
+  if (code === 'NOTHING_OWED') return 'There is nothing unsettled to remind them about.';
+  if (code === 'ALREADY_SETTLED') return 'This receipt is already marked settled.';
+  if (code === 'NOT_AUTHORIZED') return 'You cannot send a reminder for this receipt.';
+  if (code === 'PUSH_NOT_CONFIGURED') return 'Reminders are temporarily unavailable. Please try again later.';
+  return mapErrorToUserMessage(error, fallback);
+}
+
 function isSafeMessage(message: string) {
   const trimmed = message.trim();
   if (!trimmed || trimmed.length > 180) return false;

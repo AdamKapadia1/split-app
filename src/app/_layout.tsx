@@ -1,6 +1,8 @@
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
@@ -9,6 +11,9 @@ import { PrivacyShield } from '@/components/PrivacyShield';
 import { Colors } from '@/constants/theme';
 import { theme } from '@/theme/theme';
 import { useSupabaseSession } from '@/lib/use-session';
+import { registerForPushNotificationsAsync } from '@/services/NotificationService';
+import { logger } from '@/utils/logger';
+import { receiptIdFromNotificationData } from '@/utils/notifications';
 
 const AppTheme = {
   ...DarkTheme,
@@ -39,6 +44,12 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const { session, ready } = useSupabaseSession();
+  const userId = session?.user.id ?? null;
+
+  useEffect(() => {
+    if (!userId) return;
+    void registerForPushNotificationsAsync(userId);
+  }, [userId]);
 
   if (!ready) {
     return (
@@ -51,6 +62,7 @@ function RootNavigator() {
   }
 
   return (
+    <>
     <Stack
       screenOptions={{
         headerShown: false,
@@ -71,7 +83,48 @@ function RootNavigator() {
         <Stack.Screen name="sign-in" />
       </Stack.Protected>
     </Stack>
+    <SettlementNudgeLinks userId={userId} />
+    </>
   );
+}
+
+function SettlementNudgeLinks({ userId }: { userId: string | null }) {
+  const router = useRouter();
+  const handled = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!userId || Platform.OS === 'web') return;
+    let cancelled = false;
+
+    function openFrom(response: Notifications.NotificationResponse | null) {
+      if (!response) return;
+      const key = response.notification.request.identifier;
+      if (handled.current.has(key)) return;
+      const receiptId = receiptIdFromNotificationData(response.notification.request.content.data);
+      if (!receiptId) return;
+      handled.current.add(key);
+      router.push(`/receipt/${receiptId}`);
+    }
+
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      openFrom(response);
+    });
+
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!cancelled) openFrom(response);
+      })
+      .catch(() => {
+        logger.debug('notifications', { code: 'COLD_START_LINK_FAILED' });
+      });
+
+    return () => {
+      cancelled = true;
+      subscription.remove();
+    };
+  }, [router, userId]);
+
+  return null;
 }
 
 const styles = StyleSheet.create({

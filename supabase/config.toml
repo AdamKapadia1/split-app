@@ -5,3 +5,7 @@ project_id = "split-app"
 
 [functions.scan-receipt]
 verify_jwt = false
+
+# The function verifies the user JWT itself via auth.getUser.
+[functions.send-settlement-nudge]
+verify_jwt = false

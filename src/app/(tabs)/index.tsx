@@ -13,6 +13,7 @@ import { MoneyText } from '@/components/MoneyText';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup } from '@/services/GroupService';
+import { unregisterPushTokenAsync } from '@/services/NotificationService';
 import { isAbortError, receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import { logger } from '@/utils/logger';
@@ -297,6 +298,8 @@ export default function HomeScreen() {
   async function handleLogout() {
     if (!supabase) return;
     setAccountOpen(false);
+    const userId = session?.user.id;
+    if (userId) await unregisterPushTokenAsync(userId);
     await supabase.auth.signOut();
   }
 

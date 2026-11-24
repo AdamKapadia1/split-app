@@ -2,12 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { PayoutSetup } from '@/components/payout-setup';
 import { purgeLocalAppData, supabase } from '@/lib/supabase';
 import { purgeAllUserReceiptImages } from '@/services/ReceiptImageService';
+import { getNotificationPreferences, unregisterPushTokenAsync, updateNotificationPreferences, type NotificationPreferences } from '@/services/NotificationService';
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
@@ -18,7 +19,7 @@ type InfoTopic = 'payments' | 'privacy';
 
 const PAYMENTS_COPY = 'Midnight never holds your money and never starts a transfer. When you pay someone, the payment happens in your own banking app, directly between the two of you.';
 
-const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. Receipt photos stay in private storage and are removed when you delete your account. You can erase your login, profile, payout details, and receipt photos at any time. UK GDPR gives you that right to erasure.';
+const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. Receipt photos stay in private storage and are removed when you delete your account. Settlement reminders are service messages about a bill you already share. You can turn them off, and you can hide pound amounts on the lock screen. Push tokens and those choices are erased when you delete your account. You can erase your login, profile, payout details, and receipt photos at any time. UK GDPR gives you that right to erasure.';
 
 type AccountSettingsSheetProps = {
   visible: boolean;
@@ -42,11 +43,18 @@ export function AccountSettingsSheet({
   const [payoutLoading, setPayoutLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [info, setInfo] = useState<InfoTopic | null>(null);
+  const [prefs, setPrefs] = useState<NotificationPreferences>({
+    settlementNudgesEnabled: true,
+    hideAmountsInNotifications: false,
+  });
+  const [prefsReady, setPrefsReady] = useState(false);
+  const [savingPref, setSavingPref] = useState<'nudges' | 'amounts' | null>(null);
   const watchKey = visible && userId ? userId : null;
   const [seenKey, setSeenKey] = useState<string | null>(null);
   if (seenKey !== watchKey) {
     setSeenKey(watchKey);
     setPayoutLoading(watchKey !== null);
+    setPrefsReady(false);
     if (!watchKey) setPayout(null);
   }
 
@@ -63,10 +71,39 @@ export function AccountSettingsSheet({
       .finally(() => {
         if (!cancelled) setPayoutLoading(false);
       });
+    void getNotificationPreferences(watchKey)
+      .then((next) => {
+        if (!cancelled) setPrefs(next);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPrefs({ settlementNudgesEnabled: true, hideAmountsInNotifications: false });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPrefsReady(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [watchKey]);
+
+  async function savePreference(next: NotificationPreferences, key: 'nudges' | 'amounts') {
+    if (!watchKey || !prefsReady || savingPref) return;
+    const previous = prefs;
+    setPrefs(next);
+    setSavingPref(key);
+    void Haptics.selectionAsync();
+    try {
+      await updateNotificationPreferences(watchKey, next);
+    } catch (error) {
+      setPrefs(previous);
+      logger.error('notifications', { code: 'PREFS_SAVE_FAILED' });
+      Alert.alert('Could not save notification settings', mapErrorToUserMessage(error, 'Please try again.'));
+    } finally {
+      setSavingPref(null);
+    }
+  }
 
   function close() {
     if (isDeleting) return;
@@ -111,6 +148,11 @@ export function AccountSettingsSheet({
     try {
       if (!supabase) throw new Error('Supabase is not configured.');
       if (userId) {
+        try {
+          await unregisterPushTokenAsync(userId);
+        } catch {
+          logger.warn('delete account', { code: 'PUSH_UNREGISTER_FAILED' });
+        }
         try {
           await purgeAllUserReceiptImages(userId);
         } catch {
@@ -161,6 +203,7 @@ export function AccountSettingsSheet({
             </Pressable>
           </View>
 
+          <ScrollView style={styles.scroll} bounces={false} showsVerticalScrollIndicator={false}>
           <View style={styles.list}>
             {info ? (
               <View style={styles.info}>
@@ -192,6 +235,41 @@ export function AccountSettingsSheet({
               </View>
               <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
             </Pressable>
+            <View style={styles.divider} />
+            <Text style={styles.sectionLabel}>Notifications</Text>
+            <View style={styles.row}>
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowLabel}>Settlement nudges</Text>
+                <Text style={styles.rowStatus}>Reminders when someone is waiting to be paid</Text>
+              </View>
+              <Switch
+                accessibilityLabel="Settlement nudges"
+                value={prefs.settlementNudgesEnabled}
+                disabled={!prefsReady || savingPref !== null || isDeleting}
+                onValueChange={(enabled) => {
+                  void savePreference({ ...prefs, settlementNudgesEnabled: enabled }, 'nudges');
+                }}
+                trackColor={{ false: '#3F3F46', true: theme.colors.accent }}
+                thumbColor="#FAFAFA"
+              />
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowLabel}>Hide £ amounts on lock screen</Text>
+                <Text style={styles.rowStatus}>Reminders name the bill, not the amount</Text>
+              </View>
+              <Switch
+                accessibilityLabel="Hide pound amounts on the lock screen"
+                value={prefs.hideAmountsInNotifications}
+                disabled={!prefsReady || savingPref !== null || isDeleting}
+                onValueChange={(enabled) => {
+                  void savePreference({ ...prefs, hideAmountsInNotifications: enabled }, 'amounts');
+                }}
+                trackColor={{ false: '#3F3F46', true: theme.colors.accent }}
+                thumbColor="#FAFAFA"
+              />
+            </View>
             <View style={styles.divider} />
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Currency</Text>
@@ -257,6 +335,7 @@ export function AccountSettingsSheet({
           </Pressable>
             </>
           )}
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
       <PayoutSetup
@@ -292,7 +371,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderStrong,
     padding: 20,
     marginHorizontal: 16,
+    maxHeight: '88%',
   },
+  scroll: { flexGrow: 0 },
   header: { flexDirection: 'row', alignItems: 'center' },
   identity: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 12 },
   name: { fontSize: 17, lineHeight: 22, fontWeight: '700', color: theme.colors.textPrimary },
@@ -331,6 +412,13 @@ const styles = StyleSheet.create({
   rowValue: { flexShrink: 1, fontSize: 14, lineHeight: 18, color: theme.colors.textMuted },
   currencyValue: { fontSize: 14, lineHeight: 18, color: theme.colors.textMuted },
   divider: { height: StyleSheet.hairlineWidth, marginLeft: 14, backgroundColor: theme.colors.border },
+  sectionLabel: {
+    ...theme.typography.sectionLabel,
+    color: theme.colors.textMuted,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 2,
+  },
   editor: { marginTop: 20, gap: 12 },
   editorLabel: { fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
   input: {
