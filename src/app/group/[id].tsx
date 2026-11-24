@@ -17,6 +17,7 @@ import { createIdempotencyKey, SettlementServiceError, settlementService, type G
 import { theme } from '@/theme/theme';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatSmartDate } from '@/utils/formatSmartDate';
+import { computeGroupNetBalance, type GroupNetBalance } from '@/utils/homeBalances';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { formatPence, toMinorUnits } from '@/utils/money';
@@ -319,6 +320,29 @@ export default function GroupLedgerScreen() {
       } satisfies GroupLedgerStatus;
     }
   }, [memberIds, receipts, settlements, splits, viewerId]);
+  const personalStanding = useMemo(() => {
+    const settledIds = new Set(settledReceipts.map((receipt) => receipt.id));
+    const names = new Map(members.map((member) => [member.userId, member.fullName]));
+    return computeGroupNetBalance(receipts.map((receipt) => {
+      const creditorId = receipt.paid_by?.trim() || receipt.host_id;
+      return {
+        id: receipt.id,
+        hostId: receipt.host_id,
+        paidBy: receipt.paid_by ?? null,
+        creditorName: names.get(creditorId) ?? 'Someone',
+        merchantName: receipt.merchant_name,
+        createdAt: receipt.created_at,
+        settled: settledIds.has(receipt.id) || receipt.settled_at != null || receipt.status === 'settled',
+        shares: splits
+          .filter((split) => split.receipt_id === receipt.id)
+          .map((split) => ({
+            userId: split.user_id,
+            displayName: names.get(split.user_id) ?? 'Someone',
+            amountPence: split.amount_minor,
+          })),
+      };
+    }), viewerId);
+  }, [members, receipts, settledReceipts, splits, viewerId]);
   const totalHistoryCount = useMemo(
     () => settlements.length + settledReceipts.length,
     [settledReceipts.length, settlements.length],
@@ -666,6 +690,7 @@ export default function GroupLedgerScreen() {
             <Text accessibilityRole="header" style={styles.groupName} numberOfLines={2}>{groupName}</Text>
             <Text style={styles.heroLabel}>Total group spend</Text>
             <MoneyText amountMinor={totalSpendMinor} size="hero" splitDecimals />
+            <PersonalStanding balance={personalStanding} />
             <View style={styles.heroPill}>
               <GroupHeroPill status={groupStatus} />
             </View>
@@ -848,7 +873,21 @@ export default function GroupLedgerScreen() {
                 </View>
               </View>
             ) : activeReceipts.length === 0 ? (
-              <Text style={styles.emptyLine}>Scan a receipt into this group and it will show up here.</Text>
+              <View style={styles.emptyReceiptCard}>
+                <View style={styles.emptyReceiptIcon}>
+                  <Ionicons name="receipt-outline" size={22} color={theme.colors.textSecondary} />
+                </View>
+                <Text style={styles.emptyReceiptTitle}>No receipts yet</Text>
+                <Text style={styles.emptyReceiptBody}>Scan a receipt into this group and it will show up here.</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Scan first bill"
+                  onPress={scanBill}
+                  style={styles.emptyReceiptButton}
+                >
+                  <Text style={styles.emptyReceiptButtonText}>Scan first bill</Text>
+                </Pressable>
+              </View>
             ) : (
               <View style={styles.card}>
                 {activeReceipts.map((item, index) => renderReceiptRow(item, index))}
@@ -1082,6 +1121,28 @@ export default function GroupLedgerScreen() {
   );
 }
 
+function PersonalStanding({ balance }: { balance: GroupNetBalance }) {
+  if (balance.status === 'owed') {
+    return (
+      <View style={[styles.standingPill, styles.standingOwed]}>
+        <Text style={[styles.standingText, styles.standingOwedText]}>{`You're owed ${formatPence(balance.netPence)}`}</Text>
+      </View>
+    );
+  }
+  if (balance.status === 'owes') {
+    return (
+      <View style={[styles.standingPill, styles.standingOwe]}>
+        <Text style={[styles.standingText, styles.standingOweText]}>{`You owe ${formatPence(Math.abs(balance.netPence))}`}</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={[styles.standingPill, styles.standingSettled]}>
+      <Text style={styles.standingText}>All settled up</Text>
+    </View>
+  );
+}
+
 function GroupHeroPill({ status }: { status: GroupLedgerStatus }) {
   switch (status.kind) {
     case 'empty':
@@ -1144,6 +1205,25 @@ const styles = StyleSheet.create({
   groupName: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, marginBottom: 16 },
   heroLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 4 },
   heroPill: { marginTop: 10 },
+  standingPill: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: theme.radius.full,
+  },
+  standingOwed: { backgroundColor: 'rgba(16, 185, 129, 0.14)' },
+  standingOwe: { backgroundColor: 'rgba(245, 158, 11, 0.14)' },
+  standingSettled: { backgroundColor: theme.colors.surfaceElevated },
+  standingText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    fontVariant: ['tabular-nums'],
+  },
+  standingOwedText: { color: '#10B981' },
+  standingOweText: { color: '#F59E0B' },
   actions: {
     marginTop: 20,
     paddingHorizontal: 20,
@@ -1273,7 +1353,35 @@ const styles = StyleSheet.create({
   },
   markPaidBusy: { opacity: 0.7 },
   markPaidText: { color: theme.colors.accent, fontSize: 12, lineHeight: 16, fontWeight: '600' },
-  emptyLine: { ...theme.typography.caption, color: theme.colors.textMuted, paddingLeft: 4 },
+  emptyReceiptCard: {
+    backgroundColor: '#141417',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 20,
+    paddingVertical: 28,
+    alignItems: 'center',
+  },
+  emptyReceiptIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  emptyReceiptTitle: { marginTop: 12, fontSize: 16, lineHeight: 22, fontWeight: '600', color: theme.colors.textPrimary },
+  emptyReceiptBody: { marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary, textAlign: 'center' },
+  emptyReceiptButton: {
+    alignSelf: 'stretch',
+    marginTop: 18,
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+  },
+  emptyReceiptButtonText: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: theme.colors.accentText },
   allSettledCard: {
     backgroundColor: theme.colors.surface,
     borderRadius: 16,

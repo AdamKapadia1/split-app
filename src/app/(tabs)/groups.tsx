@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
+import { hapticImpactLight } from '@/utils/haptics';
 import { logger } from '@/utils/logger';
 import { formatPence } from '@/utils/money';
 import type { GroupLedgerStatus } from '@/utils/settlements';
@@ -25,6 +26,9 @@ type Group = {
 
 export default function GroupsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ create?: string | string[] }>();
+  const createFlag = Array.isArray(params.create) ? params.create[0] : params.create;
+  const openedCreateRef = useRef(false);
   const { session } = useSupabaseSession();
   const userId = session?.user.id ?? null;
   const [groups, setGroups] = useState<Group[]>([]);
@@ -106,6 +110,17 @@ export default function GroupsScreen() {
     void fetchGroups('refresh');
   }), [fetchGroups]);
 
+  useEffect(() => {
+    if (createFlag !== '1') {
+      openedCreateRef.current = false;
+      return;
+    }
+    if (openedCreateRef.current) return;
+    openedCreateRef.current = true;
+    setModalVisible(true);
+    router.setParams({ create: '' });
+  }, [createFlag, router]);
+
   const handleCreateGroup = async () => {
     const trimmedName = newGroupName.trim();
     if (!trimmedName) {
@@ -167,7 +182,7 @@ export default function GroupsScreen() {
   };
 
   const openModal = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    hapticImpactLight();
     setModalVisible(true);
   };
 
@@ -191,6 +206,14 @@ export default function GroupsScreen() {
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
         <Text accessibilityRole="header" style={styles.title}>Groups</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="New group"
+          onPress={openModal}
+          style={({ pressed }) => [styles.newPill, pressed && styles.newPillPressed]}
+        >
+          <Text style={styles.newPillText}>+ New</Text>
+        </Pressable>
       </View>
 
       {loadingGroups && groups.length === 0 ? (
@@ -229,7 +252,7 @@ export default function GroupsScreen() {
                   <Ionicons name="people-outline" size={22} color={theme.colors.accent} />
                 </View>
                 <Text style={styles.emptyTitle}>No groups yet</Text>
-                <Text style={styles.emptySubtitle}>Tap + to create a group for dinners or trips.</Text>
+                <Text style={styles.emptySubtitle}>Use + New to create a group for dinners or trips.</Text>
               </View>
             ) : (
               groups.map((item, index) => {
@@ -297,15 +320,6 @@ export default function GroupsScreen() {
           </View>
         </ScrollView>
       )}
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Create group"
-        onPress={openModal}
-        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-      >
-        <Ionicons name="add" size={24} color={theme.colors.accentText} />
-      </Pressable>
 
       <Modal visible={isModalVisible} animationType="fade" transparent onRequestClose={closeModal}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
@@ -497,10 +511,26 @@ function BalancePill({ status }: { status: GroupLedgerStatus }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.canvas },
-  header: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12 },
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
+  newPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.accent,
+  },
+  newPillPressed: { backgroundColor: theme.colors.accentPressed },
+  newPillText: { fontSize: 14, lineHeight: 18, fontWeight: '700', color: theme.colors.accentText },
   loader: { marginTop: 48 },
-  scrollContent: { paddingBottom: 120 },
+  scrollContent: { paddingBottom: 32 },
   banner: {
     marginHorizontal: 16,
     marginBottom: 20,
@@ -590,23 +620,6 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { marginTop: 12, fontSize: 16, fontWeight: '600', color: theme.colors.textPrimary },
   emptySubtitle: { marginTop: 4, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary, textAlign: 'center' },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
-    shadowColor: theme.colors.accent,
-    shadowOpacity: 0.28,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  fabPressed: { backgroundColor: theme.colors.accentPressed },
   modalOverlay: {
     flex: 1,
     backgroundColor: theme.colors.scrim,

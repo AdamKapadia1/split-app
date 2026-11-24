@@ -1,36 +1,46 @@
-import { useEffect } from 'react';
-import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
-
-import { Colors, Radius } from '@/constants/theme';
+import { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 
 type SkeletonProps = {
   style?: StyleProp<ViewStyle>;
 };
 
+/**
+ * Dark-surface placeholder. Opacity pulses on the UI thread.
+ * Callers own width and height through `style`.
+ */
 export function Skeleton({ style }: SkeletonProps) {
-  const opacity = useSharedValue(0.4);
+  const opacity = useRef(new Animated.Value(0.45)).current;
 
   useEffect(() => {
-    opacity.value = withRepeat(withTiming(1, { duration: 900 }), -1, true);
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 0.45,
+          duration: 750,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    pulse.start();
+    return () => {
+      pulse.stop();
+    };
   }, [opacity]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-  }));
-
-  return <Animated.View style={[styles.bone, style, animatedStyle]} />;
+  return <Animated.View style={[styles.bone, style, { opacity }]} />;
 }
 
 const styles = StyleSheet.create({
   bone: {
     height: 14,
-    borderRadius: Radius.card / 2,
-    backgroundColor: Colors.skeleton,
+    borderRadius: 8,
+    backgroundColor: '#27272E',
+    overflow: 'hidden',
   },
 });

@@ -12,6 +12,7 @@ import { getNotificationPreferences, unregisterPushTokenAsync, updateNotificatio
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
+import { hapticSelection } from '@/utils/haptics';
 import { logger } from '@/utils/logger';
 import { maskAccountNumber } from '@/utils/paymentLinks';
 
@@ -28,6 +29,8 @@ type AccountSettingsSheetProps = {
   subtitle: string;
   onClose: () => void;
   onLogout: () => void;
+  /** Opens payout details as soon as the sheet is shown. */
+  openPayout?: boolean;
 };
 
 export function AccountSettingsSheet({
@@ -37,6 +40,7 @@ export function AccountSettingsSheet({
   subtitle,
   onClose,
   onLogout,
+  openPayout = false,
 }: AccountSettingsSheetProps) {
   const [payoutOpen, setPayoutOpen] = useState(false);
   const [payout, setPayout] = useState<PayoutMethod | null>(null);
@@ -49,8 +53,16 @@ export function AccountSettingsSheet({
   });
   const [prefsReady, setPrefsReady] = useState(false);
   const [savingPref, setSavingPref] = useState<'nudges' | 'amounts' | null>(null);
-  const watchKey = visible && userId ? userId : null;
   const [seenKey, setSeenKey] = useState<string | null>(null);
+  const watchKey = visible && userId ? userId : null;
+
+  useEffect(() => {
+    if (!visible) {
+      setPayoutOpen(false);
+      return;
+    }
+    if (openPayout) setPayoutOpen(true);
+  }, [openPayout, visible]);
   if (seenKey !== watchKey) {
     setSeenKey(watchKey);
     setPayoutLoading(watchKey !== null);
@@ -247,6 +259,7 @@ export function AccountSettingsSheet({
                 value={prefs.settlementNudgesEnabled}
                 disabled={!prefsReady || savingPref !== null || isDeleting}
                 onValueChange={(enabled) => {
+                  hapticSelection();
                   void savePreference({ ...prefs, settlementNudgesEnabled: enabled }, 'nudges');
                 }}
                 trackColor={{ false: '#3F3F46', true: theme.colors.accent }}
@@ -264,6 +277,7 @@ export function AccountSettingsSheet({
                 value={prefs.hideAmountsInNotifications}
                 disabled={!prefsReady || savingPref !== null || isDeleting}
                 onValueChange={(enabled) => {
+                  hapticSelection();
                   void savePreference({ ...prefs, hideAmountsInNotifications: enabled }, 'amounts');
                 }}
                 trackColor={{ false: '#3F3F46', true: theme.colors.accent }}

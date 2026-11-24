@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { Tabs } from 'expo-router';
 import { StyleSheet } from 'react-native';
 
 import { theme } from '@/theme/theme';
+import { hapticSelection } from '@/utils/haptics';
 
 function tabIconColor(color: unknown) {
   return typeof color === 'string' ? color : theme.colors.textMuted;
@@ -14,11 +14,12 @@ export default function TabLayout() {
     <Tabs
       screenListeners={{
         tabPress: () => {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          hapticSelection();
         },
       }}
       screenOptions={{
         headerShown: false,
+        tabBarHideOnKeyboard: true,
         tabBarStyle: {
           backgroundColor: theme.colors.canvas,
           borderTopColor: theme.colors.border,
@@ -40,8 +41,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'History',
-          tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={22} color={tabIconColor(color)} />,
+          title: 'Home',
+          tabBarIcon: ({ color }) => <Ionicons name="home-outline" size={22} color={tabIconColor(color)} />,
         }}
       />
       <Tabs.Screen
@@ -49,6 +50,13 @@ export default function TabLayout() {
         options={{
           title: 'Groups',
           tabBarIcon: ({ color }) => <Ionicons name="people-outline" size={22} color={tabIconColor(color)} />,
+        }}
+      />
+      <Tabs.Screen
+        name="history"
+        options={{
+          title: 'History',
+          tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={22} color={tabIconColor(color)} />,
         }}
       />
       <Tabs.Screen
