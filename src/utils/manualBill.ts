@@ -1,4 +1,4 @@
-/** Largest manual bill Midnight will save: £50,000.00. */
+/** Largest manual bill Velor will save: £50,000.00. */
 export const MANUAL_BILL_MAX_PENCE = 5_000_000;
 
 const MERCHANT_MAX = 80;

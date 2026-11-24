@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { APP_NAME } from '@/constants/brand';
 import { theme } from '@/theme/theme';
 import { captureSanitizedException } from '@/utils/sentry';
 
@@ -40,8 +41,9 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
           <View style={styles.iconWrap}>
             <Ionicons name="alert-circle" size={28} color={theme.colors.danger} />
           </View>
-          <Text style={styles.title}>Something went wrong</Text>
-          <Text style={styles.body}>Your receipts and balances are safe. Try reloading the screen.</Text>
+          <Text style={styles.mark}>{APP_NAME}</Text>
+          <Text style={styles.title}>Something needs a moment</Text>
+          <Text style={styles.body}>Your receipts and balances are safe. Try again when you are ready.</Text>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Try Again"
@@ -73,6 +75,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 28,
     alignItems: 'center',
+  },
+  mark: {
+    marginTop: 16,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+    color: theme.colors.textMuted,
   },
   iconWrap: {
     width: 52,

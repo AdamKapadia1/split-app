@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "split-app",
+    "name": "Velor",
     "slug": "split-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -17,8 +17,8 @@
         "LSApplicationQueriesSchemes": [
           "sms"
         ],
-        "NSCameraUsageDescription": "Scan paper receipts with the camera so you can split the bill with friends.",
-        "NSPhotoLibraryUsageDescription": "Import receipt photos from your library to split bills with friends.",
+        "NSCameraUsageDescription": "Velor uses your camera to scan itemised receipts accurately.",
+        "NSPhotoLibraryUsageDescription": "Velor uses your photo library so you can import itemised receipts.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false
         }
@@ -72,7 +72,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Scan paper receipts with the camera so you can split the bill with friends.",
+          "cameraPermission": "Velor uses your camera to scan itemised receipts accurately.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
@@ -80,7 +80,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Import receipt photos from your library to split bills with friends.",
+          "photosPermission": "Velor uses your photo library so you can import itemised receipts.",
           "microphonePermission": false
         }
       ],

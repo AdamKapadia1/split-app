@@ -10,6 +10,7 @@ import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DestinationSheet, loadDestinationGroups, PERSONAL_DESTINATION, type BillDestination, type DestinationGroup } from '@/components/DestinationSheet';
+import { APP_NAME } from '@/constants/brand';
 import { ManualBillModal } from '@/components/ManualBillModal';
 import { ensureAiScanConsent } from '@/lib/aiConsent';
 import { supabase } from '@/lib/supabase';
@@ -394,7 +395,7 @@ export default function ScanScreen() {
             <Text style={styles.permissionTitle}>{askForCamera ? 'Camera access' : 'Camera access is off'}</Text>
             <Text style={styles.permissionBody}>
               {askForCamera
-                ? 'Midnight uses the camera to photograph a receipt so you can split it. You can also import a photo or enter the bill by hand.'
+                ? `${APP_NAME} uses your camera to scan itemised receipts accurately. You can also import a photo or enter the bill by hand.`
                 : 'Camera access is turned off, so a live scan is unavailable. Turn it on in Settings, import a photo, or enter the bill by hand.'}
             </Text>
             {askForCamera ? (

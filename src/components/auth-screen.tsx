@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NightScreen } from '@/components/night-screen';
+import { APP_NAME, APP_TAGLINE } from '@/constants/brand';
 import { Colors, Spacing } from '@/constants/theme';
 import { mediumHaptic, tickHaptic } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
@@ -98,7 +99,8 @@ export function AuthScreen() {
             styles.content,
             { paddingTop: insets.top + Spacing.five, paddingBottom: Math.max(insets.bottom, Spacing.four) },
           ]}>
-          <Text style={styles.kicker}>SPLIT</Text>
+          <Text style={styles.kicker}>{APP_NAME}</Text>
+          <Text style={styles.tagline}>{APP_TAGLINE}</Text>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.subtitle}>Sign in to host a split, or join one you were sent.</Text>
 
@@ -189,6 +191,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 2.4,
+  },
+  tagline: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+    letterSpacing: -0.1,
+    marginTop: -8,
   },
   title: {
     color: Colors.text,

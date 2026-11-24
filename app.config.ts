@@ -16,7 +16,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
 
   return {
     ...config,
-    name: config.name ?? 'split-app',
+    name: config.name ?? 'Velor',
     slug: config.slug ?? 'split-app',
     plugins: [
       ...plugins,

@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { APP_NAME } from '@/constants/brand';
 import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
 import { logger } from '@/utils/logger';
@@ -279,7 +280,7 @@ export function PaymentSheetModal({
               {submitting ? <ActivityIndicator color={theme.colors.accent} /> : <Text style={styles.markText}>{"I've Paid — Mark as Paid"}</Text>}
             </Pressable>
 
-            <Text style={styles.disclaimer}>{"Payments happen directly in your banking app. Always verify the recipient's name and amount before confirming."}</Text>
+            <Text style={styles.disclaimer}>{`Payments happen in your banking app. Settled via ${APP_NAME}. Always verify the recipient's name and amount before confirming.`}</Text>
           </ScrollView>
         </View>
       </View>

@@ -7,6 +7,7 @@ import Animated, { FadeIn, FadeInRight } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Frost } from '@/components/frost';
+import { sharedViaBrand } from '@/constants/brand';
 import { NightScreen } from '@/components/night-screen';
 import { Colors, Spacing } from '@/constants/theme';
 import { theme } from '@/theme/theme';
@@ -246,7 +247,7 @@ export default function SplitScreen() {
     try {
       const assigned = people.filter((person) => Object.values(claims).some((c) => c.includes(person.id)));
       if (assigned.length === 0) {
-        await Share.share({ message: 'Receipt Breakdown: No items assigned yet.' });
+        await Share.share({ message: `Receipt breakdown: no items assigned yet. ${sharedViaBrand()}` });
         return;
       }
       const parts = assigned.map((person) => {
@@ -256,7 +257,7 @@ export default function SplitScreen() {
         const { owed } = shareFor(ledgerData.items, claims, person.id, Number(ledgerData.receipt.subtotal), Number(ledgerData.receipt.service_charge));
         return `${person.name} owes ${formatMoney(owed, ledgerData.receipt.currency_code)}`;
       });
-      await Share.share({ message: `Receipt Breakdown: ${parts.join(' | ')} (Includes tax & tip)` });
+      await Share.share({ message: `Receipt breakdown: ${parts.join(' | ')}. Includes tax and tip. ${sharedViaBrand()}` });
     } catch {
       // Dismissed
     }

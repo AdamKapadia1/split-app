@@ -350,8 +350,8 @@ export default function HomeScreen() {
                     <View style={styles.emptyIcon}>
                       <Ionicons name="receipt-outline" size={22} color={theme.colors.textSecondary} />
                     </View>
-                    <Text style={styles.emptyTitle}>No bills split yet</Text>
-                    <Text style={styles.emptyBody}>Scan a receipt to split items with friends in seconds.</Text>
+                    <Text style={styles.emptyTitle}>No bills yet</Text>
+                    <Text style={styles.emptyBody}>Scan a receipt to itemise the bill and settle the total.</Text>
                     <Pressable
                       accessibilityRole="button"
                       accessibilityLabel="Scan your first bill"

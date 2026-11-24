@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
+import { APP_NAME } from '@/constants/brand';
 import { GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { theme } from '@/theme/theme';
 import { formatPhoneAsYouType, SUPPORTED_COUNTRIES, toE164 } from '@/utils/phone';
@@ -143,7 +144,7 @@ export function AddMemberModal({ visible, groupId, groupName, onMemberAdded, onC
     submittingRef.current = true;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const name = groupName.trim() || 'my group';
-    const message = `Hey! I added you to "${name}" to split our bills. Download the app and sign up with this number to join automatically.`;
+    const message = `You're invited to "${name}" on ${APP_NAME}. Sign up with this number to join.`;
     const e164Phone = invitePhone ?? toE164(phone, country);
 
     try {

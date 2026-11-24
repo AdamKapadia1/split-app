@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { APP_COPYRIGHT, APP_NAME } from '@/constants/brand';
 import { PayoutSetup } from '@/components/payout-setup';
 import { purgeLocalAppData, supabase } from '@/lib/supabase';
 import { purgeAllUserReceiptImages } from '@/services/ReceiptImageService';
@@ -18,9 +19,9 @@ import { maskAccountNumber } from '@/utils/paymentLinks';
 
 type InfoTopic = 'payments' | 'privacy';
 
-const PAYMENTS_COPY = 'Midnight never holds your money and never starts a transfer. When you pay someone, the payment happens in your own banking app, directly between the two of you.';
+const PAYMENTS_COPY = `${APP_NAME} never holds your money and never starts a transfer. When you pay someone, the payment happens in your own banking app, directly between the two of you.`;
 
-const PRIVACY_COPY = 'Payout details you save are visible only to people who share a group or a split with you. Other people\'s bank details are not cached on this device. Receipt photos stay in private storage and are removed when you delete your account. Settlement reminders are service messages about a bill you already share. You can turn them off, and you can hide pound amounts on the lock screen. Push tokens and those choices are erased when you delete your account. You can erase your login, profile, payout details, and receipt photos at any time. UK GDPR gives you that right to erasure.';
+const PRIVACY_COPY = `Payout details you save in ${APP_NAME} are visible only to people who share a group or a split with you. Other people's bank details are not cached on this device. Receipt photos stay in private storage and are removed when you delete your account. Settlement reminders are service messages about a bill you already share. You can turn them off, and you can hide pound amounts on the lock screen. Push tokens and those choices are erased when you delete your account. You can erase your login, profile, payout details, and receipt photos at any time. UK GDPR gives you that right to erasure.`;
 
 type AccountSettingsSheetProps = {
   visible: boolean;
@@ -347,6 +348,8 @@ export function AccountSettingsSheet({
               <Text style={styles.deleteAccountText}>Delete Account</Text>
             )}
           </Pressable>
+          <Text style={styles.legal}>{APP_NAME}</Text>
+          <Text style={styles.copyright}>{APP_COPYRIGHT}</Text>
             </>
           )}
           </ScrollView>
@@ -477,6 +480,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   deleteAccountText: { fontSize: 15, fontWeight: '600', color: theme.colors.danger },
+  legal: {
+    marginTop: 18,
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    color: theme.colors.textSecondary,
+  },
+  copyright: {
+    marginTop: 2,
+    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 16,
+    color: theme.colors.textMuted,
+  },
   info: { paddingHorizontal: 14, paddingVertical: 14, gap: 8 },
   infoBack: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start' },
   infoBackText: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: theme.colors.textSecondary },

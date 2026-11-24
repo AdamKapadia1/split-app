@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState, StyleSheet, Text, View } from 'react-native';
 
+import { APP_NAME } from '@/constants/brand';
 import { theme } from '@/theme/theme';
 
 export function PrivacyShield() {
@@ -17,7 +18,7 @@ export function PrivacyShield() {
 
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.shield}>
-      <Text style={styles.mark}>Midnight</Text>
+      <Text style={styles.mark}>{APP_NAME}</Text>
     </View>
   );
 }

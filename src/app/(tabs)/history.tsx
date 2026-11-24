@@ -779,7 +779,7 @@ function HistoryEmpty({ onScan }: { onScan: () => void }) {
           <Ionicons name="receipt-outline" size={22} color={theme.colors.accent} />
         </View>
         <Text style={styles.emptyTitle}>No receipts yet</Text>
-        <Text style={styles.emptySubtitle}>Scan your first bill to start splitting.</Text>
+        <Text style={styles.emptySubtitle}>Scan your first bill to itemise it and settle the total.</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Scan your first bill"

@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 import { Alert, Platform } from 'react-native';
 
+import { APP_NAME } from '@/constants/brand';
 import { AI_SCAN_CONSENT_KEY } from '@/lib/storageKeys';
 
 const secureOptions = {
@@ -30,7 +31,7 @@ export function requestAiScanConsent(): Promise<boolean> {
   return new Promise((resolve) => {
     Alert.alert(
       'Send this receipt to be read?',
-      'Midnight sends the receipt photo to Anthropic so it can read the merchant and line items. Only the photo is sent, and only for that scan. Bank details are not part of the scan.',
+      `${APP_NAME} sends the receipt photo to be read, so the merchant and line items can be itemised. Only the photo is sent, and only for that scan. Bank details are not part of the scan.`,
       [
         { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
         {
