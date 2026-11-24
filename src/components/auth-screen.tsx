@@ -100,9 +100,8 @@ export function AuthScreen() {
           setError(signInError.message);
           return;
         }
-        const refreshToken = data.session?.refresh_token;
         const signedInEmail = data.session?.user.email ?? trimmedEmail;
-        if (refreshToken) void rememberBiometricSession(refreshToken, signedInEmail);
+        if (data.session) void rememberBiometricSession(signedInEmail, password);
         return;
       }
 
@@ -134,20 +133,21 @@ export function AuthScreen() {
       const stored = await readBiometricSession();
       if (!stored) {
         setBiometricLabel(null);
-        setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
+        setNotice('Sign in with your password once to turn Face ID back on.');
         return;
       }
-      const { data, error: refreshError } = await supabase.auth.refreshSession({ refresh_token: stored.refreshToken });
-      const nextToken = data.session?.refresh_token;
-      if (refreshError || !nextToken) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: stored.email,
+        password: stored.password,
+      });
+      if (signInError) {
         await clearBiometricSession();
         setBiometricLabel(null);
-        setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
+        setNotice('Sign in with your password once to turn Face ID back on.');
         return;
       }
-      await saveBiometricSession(nextToken, data.session?.user.email ?? stored.email);
     } catch {
-      setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
+      setNotice('Sign in with your password once to turn Face ID back on.');
     } finally {
       setBusy(false);
     }
@@ -275,13 +275,13 @@ export function AuthScreen() {
   );
 }
 
-async function rememberBiometricSession(refreshToken: string, email: string) {
+async function rememberBiometricSession(email: string, password: string) {
   const hardware = await isBiometricAvailable();
   if (!hardware.available) return;
   const preference = await getBiometricPreference();
   if (preference === 'off') return;
   if (preference === 'on') {
-    await saveBiometricSession(refreshToken, email);
+    await saveBiometricSession(email, password);
     return;
   }
   Alert.alert(
@@ -289,7 +289,7 @@ async function rememberBiometricSession(refreshToken: string, email: string) {
     `${APP_NAME} can unlock on this device with ${hardware.label}. You can turn this off in account settings.`,
     [
       { text: 'Not now', style: 'cancel', onPress: () => { void setBiometricPreference('off'); } },
-      { text: 'Enable', onPress: () => { void saveBiometricSession(refreshToken, email); } },
+      { text: 'Enable', onPress: () => { void saveBiometricSession(email, password); } },
     ],
   );
 }

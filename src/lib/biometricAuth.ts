@@ -6,6 +6,7 @@ export type BiometricLabel = 'Face ID' | 'Touch ID' | 'Passcode';
 
 const REFRESH_KEY = 'splitapp.biometric_refresh';
 const EMAIL_KEY = 'splitapp.biometric_email';
+const PASSWORD_KEY = 'splitapp.biometric_password';
 const PREF_KEY = 'splitapp.biometric_pref';
 
 const secureOptions = {
@@ -29,13 +30,13 @@ export async function isBiometricAvailable(): Promise<{ available: boolean; labe
   }
 }
 
-export async function saveBiometricSession(refreshToken: string, email: string) {
+export async function saveBiometricSession(email: string, password: string) {
   if (Platform.OS === 'web') return;
-  const token = refreshToken.trim();
   const address = email.trim();
-  if (!token || !address) return;
-  await SecureStore.setItemAsync(REFRESH_KEY, token, secureOptions);
+  if (!address || password.length === 0) return;
+  await SecureStore.deleteItemAsync(REFRESH_KEY, secureOptions).catch(() => undefined);
   await SecureStore.setItemAsync(EMAIL_KEY, address, secureOptions);
+  await SecureStore.setItemAsync(PASSWORD_KEY, password, secureOptions);
   await SecureStore.setItemAsync(PREF_KEY, 'on', secureOptions);
 }
 
@@ -43,26 +44,27 @@ export async function clearBiometricSession() {
   if (Platform.OS === 'web') return;
   await SecureStore.deleteItemAsync(REFRESH_KEY, secureOptions).catch(() => undefined);
   await SecureStore.deleteItemAsync(EMAIL_KEY, secureOptions).catch(() => undefined);
+  await SecureStore.deleteItemAsync(PASSWORD_KEY, secureOptions).catch(() => undefined);
 }
 
 export async function hasBiometricSession() {
   if (Platform.OS === 'web') return false;
   try {
-    const token = await SecureStore.getItemAsync(REFRESH_KEY, secureOptions);
     const email = await SecureStore.getItemAsync(EMAIL_KEY, secureOptions);
-    return Boolean(token && email);
+    const password = await SecureStore.getItemAsync(PASSWORD_KEY, secureOptions);
+    return Boolean(email && password);
   } catch {
     return false;
   }
 }
 
-export async function readBiometricSession(): Promise<{ refreshToken: string; email: string } | null> {
+export async function readBiometricSession(): Promise<{ email: string; password: string } | null> {
   if (Platform.OS === 'web') return null;
   try {
-    const refreshToken = await SecureStore.getItemAsync(REFRESH_KEY, secureOptions);
     const email = await SecureStore.getItemAsync(EMAIL_KEY, secureOptions);
-    if (!refreshToken || !email) return null;
-    return { refreshToken, email };
+    const password = await SecureStore.getItemAsync(PASSWORD_KEY, secureOptions);
+    if (!email || !password) return null;
+    return { email, password };
   } catch {
     return null;
   }

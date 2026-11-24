@@ -229,14 +229,24 @@ export function AccountSettingsSheet({
         return;
       }
       const session = supabase ? (await supabase.auth.getSession()).data.session : null;
-      const refreshToken = session?.refresh_token;
       const email = session?.user.email;
-      if (!refreshToken || !email) {
+      if (!supabase || !email) {
         Alert.alert('Could not turn on Face ID', 'Sign in again, then enable it from account settings.');
         setBioEnabled(false);
         return;
       }
-      await saveBiometricSession(refreshToken, email);
+      const password = await confirmPassword(email);
+      if (!password) {
+        setBioEnabled(false);
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        Alert.alert('Password did not match', 'Face ID was not turned on.');
+        setBioEnabled(false);
+        return;
+      }
+      await saveBiometricSession(email, password);
       setBioEnabled(true);
     } catch {
       Alert.alert('Could not update Face ID', 'Please try again.');
@@ -441,6 +451,25 @@ export function AccountSettingsSheet({
       />
     </Modal>
   );
+}
+
+function confirmPassword(email: string) {
+  return new Promise<string | null>((resolve) => {
+    if (Platform.OS !== 'ios' || typeof Alert.prompt !== 'function') {
+      Alert.alert('Confirm your password', 'Sign out, then sign in with your password to turn Face ID on.');
+      resolve(null);
+      return;
+    }
+    Alert.prompt(
+      'Confirm your password',
+      `This stays in the Keychain for ${email}.`,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+        { text: 'Enable', onPress: (value?: string) => resolve(value && value.length > 0 ? value : null) },
+      ],
+      'secure-text',
+    );
+  });
 }
 
 function payoutStatus(method: PayoutMethod | null) {
