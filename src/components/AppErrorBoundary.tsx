@@ -1,51 +1,55 @@
-import { reloadAppAsync } from 'expo';
-import { Component, type ReactNode } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '@/theme/theme';
-import { logger } from '@/utils/logger';
+import { captureSanitizedException } from '@/utils/sentry';
 
 type AppErrorBoundaryProps = {
   children: ReactNode;
 };
 
 type AppErrorBoundaryState = {
-  errorCode: string | null;
+  hasError: boolean;
 };
 
-function errorCode(error: Error) {
-  return /^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(error.name) ? error.name : 'Error';
-}
-
 export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
-  state: AppErrorBoundaryState = { errorCode: null };
+  state: AppErrorBoundaryState = { hasError: false };
 
-  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
-    return { errorCode: errorCode(error) };
+  static getDerivedStateFromError(): AppErrorBoundaryState {
+    return { hasError: true };
   }
 
-  componentDidCatch(error: Error) {
-    logger.error('AppErrorBoundary', { code: errorCode(error) });
-  }
-
-  reload = () => {
-    void reloadAppAsync('Recover from an unexpected error').catch(() => {
-      this.setState({ errorCode: null });
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    captureSanitizedException(error, {
+      boundary: 'root',
+      componentStack: info.componentStack ?? '',
     });
+  }
+
+  tryAgain = () => {
+    this.setState({ hasError: false });
   };
 
   render() {
-    if (!this.state.errorCode) return this.props.children;
+    if (!this.state.hasError) return this.props.children;
 
     return (
       <View style={styles.screen}>
-        <Text style={styles.mark}>Midnight</Text>
-        <Text style={styles.title}>Something went wrong</Text>
-        <Text style={styles.body}>The screen closed before it could show your details. You can reload and pick up where you left off.</Text>
-        <Text style={styles.code}>{this.state.errorCode}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="Reload App" onPress={this.reload} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
-          <Text style={styles.buttonText}>Reload App</Text>
-        </Pressable>
+        <View style={styles.card}>
+          <View style={styles.iconWrap}>
+            <Ionicons name="alert-circle" size={28} color={theme.colors.danger} />
+          </View>
+          <Text style={styles.title}>Something went wrong</Text>
+          <Text style={styles.body}>Your receipts and balances are safe. Try reloading the screen.</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Try Again"
+            onPress={this.tryAgain}
+            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+            <Text style={styles.buttonText}>Try Again</Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -54,46 +58,50 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.colors.canvas,
+    backgroundColor: '#0A0A0C',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: 24,
   },
-  mark: {
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: theme.colors.textMuted,
+  card: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#141417',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 18,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    alignItems: 'center',
+  },
+  iconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.dangerSubtle,
   },
   title: {
-    marginTop: 16,
-    fontSize: 28,
-    lineHeight: 34,
+    marginTop: 18,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '700',
-    letterSpacing: -0.6,
+    letterSpacing: -0.4,
     color: theme.colors.textPrimary,
     textAlign: 'center',
   },
   body: {
-    marginTop: 12,
+    marginTop: 8,
     fontSize: 15,
     lineHeight: 22,
     color: theme.colors.textSecondary,
     textAlign: 'center',
   },
-  code: {
-    marginTop: 20,
-    fontSize: 12,
-    lineHeight: 16,
-    letterSpacing: 0.4,
-    color: theme.colors.textMuted,
-  },
   button: {
-    marginTop: 28,
+    marginTop: 24,
+    alignSelf: 'stretch',
     height: 48,
-    paddingHorizontal: 22,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',

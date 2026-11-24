@@ -66,11 +66,29 @@ export function redactSensitive(value: unknown, depth = 0): unknown {
   return REDACTED;
 }
 
+function reportHandledError(args: unknown[]) {
+  if (isDev()) return;
+  try {
+    const { captureSanitizedException } = require('./sentry') as typeof import('./sentry');
+    const error = args.find((arg): arg is Error => arg instanceof Error);
+    const summary = args.find((arg): arg is string => typeof arg === 'string');
+    const reported = error ?? new Error(summary ? redactString(summary).slice(0, 300) : 'Handled application error');
+    const details = redactSensitive(
+      args.map((arg) => (arg instanceof Error ? { name: arg.name, message: arg.message } : arg)),
+    );
+    captureSanitizedException(reported, { details });
+  } catch {
+    // Crash reporting must never take down a handled error path.
+  }
+}
+
 function emit(level: LogLevel, args: unknown[]) {
   if (!shouldEmitLog(level)) return;
   const sanitized = args.map((arg) => redactSensitive(arg));
-  if (level === 'error') console.error(...sanitized);
-  else if (level === 'warn') console.warn(...sanitized);
+  if (level === 'error') {
+    reportHandledError(args);
+    console.error(...sanitized);
+  } else if (level === 'warn') console.warn(...sanitized);
   else console.log(...sanitized);
 }
 

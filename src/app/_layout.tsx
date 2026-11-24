@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/react-native';
 import { DarkTheme, Stack, ThemeProvider, useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
@@ -14,6 +15,9 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { registerForPushNotificationsAsync } from '@/services/NotificationService';
 import { logger } from '@/utils/logger';
 import { receiptIdFromNotificationData } from '@/utils/notifications';
+import { initSentry, setSentryUser } from '@/utils/sentry';
+
+initSentry();
 
 const AppTheme = {
   ...DarkTheme,
@@ -28,7 +32,7 @@ const AppTheme = {
   },
 };
 
-export default function RootLayout() {
+function RootLayout() {
   return (
     <AppErrorBoundary>
       <GestureHandlerRootView style={styles.root}>
@@ -45,6 +49,10 @@ export default function RootLayout() {
 function RootNavigator() {
   const { session, ready } = useSupabaseSession();
   const userId = session?.user.id ?? null;
+
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -126,6 +134,8 @@ function SettlementNudgeLinks({ userId }: { userId: string | null }) {
 
   return null;
 }
+
+export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.canvas },
