@@ -21,6 +21,7 @@ import { hapticImpactLight, hapticSelection, hapticSuccess, hapticWarning } from
 import {
   computeHomeBalances,
   formatPenceParts,
+  isReceiptBalanceSettled,
   type AttentionItem,
   type HomeBalanceReceipt,
   type HomeBalances,
@@ -128,7 +129,7 @@ export default function HomeScreen() {
       setIsInitialLoading(false);
       return;
     }
-    if (kind === 'load') setIsInitialLoading(true);
+    if (kind === 'load' && !hasLoadedRef.current) setIsInitialLoading(true);
     if (kind === 'refresh') setIsRefreshing(true);
     try {
       const receipts = await fetchHomeFeed();
@@ -377,11 +378,14 @@ export default function HomeScreen() {
                     >
                       <View style={styles.activityCopy}>
                         <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
-                        <Text style={styles.activityMeta} numberOfLines={1}>
-                          {formatSmartDate(receipt.createdAt)}
-                          {' · '}
-                          {receipt.groupName?.trim() || 'Personal'}
-                        </Text>
+                        <View style={styles.activityMetaRow}>
+                          <Text style={styles.activityMeta} numberOfLines={1}>
+                            {formatSmartDate(receipt.createdAt)}
+                            {' · '}
+                            {receipt.groupName?.trim() || 'Personal'}
+                          </Text>
+                          <BalanceStatusPill settled={isReceiptBalanceSettled(toBalanceReceipt(receipt))} />
+                        </View>
                       </View>
                       <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
                     </Pressable>
@@ -538,6 +542,16 @@ function AttentionRow({
           </Pressable>
         )}
       </View>
+    </View>
+  );
+}
+
+function BalanceStatusPill({ settled }: { settled: boolean }) {
+  return (
+    <View style={[styles.statusPill, settled ? styles.statusSettled : styles.statusOpen]}>
+      <Text style={[styles.statusText, settled ? styles.statusSettledText : styles.statusOpenText]}>
+        {settled ? 'Settled' : 'Unsettled'}
+      </Text>
     </View>
   );
 }
@@ -761,7 +775,14 @@ const styles = StyleSheet.create({
   cardPressed: { backgroundColor: '#1C1C21' },
   activityCopy: { flex: 1, minWidth: 0 },
   activityTitle: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
-  activityMeta: { marginTop: 2, fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
+  activityMetaRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  activityMeta: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
+  statusPill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
+  statusSettled: { backgroundColor: 'rgba(16, 185, 129, 0.16)' },
+  statusOpen: { backgroundColor: 'rgba(245, 158, 11, 0.16)' },
+  statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },
+  statusSettledText: { color: '#10B981' },
+  statusOpenText: { color: '#F59E0B' },
   activityAmount: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: POUNDS, fontVariant: ['tabular-nums'] },
   emptyCard: {
     backgroundColor: CARD,

@@ -913,7 +913,14 @@ const HistoryRow = memo(function HistoryRow({
             <View style={styles.nameRow}>
               <Text style={styles.merchant} numberOfLines={1} ellipsizeMode="tail">{title}</Text>
             </View>
-            <Text style={styles.date}>{formatSmartDate(item.created_at)}</Text>
+            <View style={styles.metaRow}>
+              <Text style={styles.date} numberOfLines={1}>{formatSmartDate(item.created_at)}</Text>
+              <View style={[styles.statusPill, item.balance_settled ? styles.statusSettled : styles.statusOpen]}>
+                <Text style={[styles.statusText, item.balance_settled ? styles.statusSettledText : styles.statusOpenText]}>
+                  {item.balance_settled ? 'Settled' : 'Unsettled'}
+                </Text>
+              </View>
+            </View>
           </View>
           <View style={styles.trail}>
             <MoneyText amountMinor={item.total_minor} size="md" color={theme.colors.textPrimary} />
@@ -1090,7 +1097,14 @@ const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
   nameRow: { flexDirection: 'row' },
   merchant: { flex: 1, fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
-  date: { marginTop: 2, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  date: { flexShrink: 1, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  metaRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusPill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
+  statusSettled: { backgroundColor: 'rgba(16, 185, 129, 0.16)' },
+  statusOpen: { backgroundColor: 'rgba(245, 158, 11, 0.16)' },
+  statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },
+  statusSettledText: { color: '#10B981' },
+  statusOpenText: { color: '#F59E0B' },
   trail: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deleteAction: {
     width: 76,

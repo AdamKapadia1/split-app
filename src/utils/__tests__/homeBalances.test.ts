@@ -3,6 +3,7 @@ import {
   computeHomeBalances,
   formatPenceParts,
   HOME_ATTENTION_LIMIT,
+  isReceiptBalanceSettled,
   type HomeBalanceReceipt,
 } from '../homeBalances';
 
@@ -213,6 +214,22 @@ it('sums a group standing from the same unsettled shares', () => {
     netPence: 1420,
     status: 'owed',
   });
+});
+
+it('treats an archived receipt or a zero open balance as settled', () => {
+  assertEqual(isReceiptBalanceSettled(receipt({ id: 'archived', settled: true, shares: [] })), true);
+  assertEqual(isReceiptBalanceSettled(receipt({
+    id: 'clear',
+    shares: [
+      { userId: 'ada', displayName: 'Ada', amountPence: 500 },
+      { userId: 'ben', displayName: 'Ben', amountPence: 0 },
+    ],
+  })), true);
+  assertEqual(isReceiptBalanceSettled(receipt({
+    id: 'open',
+    shares: [{ userId: 'ben', displayName: 'Ben', amountPence: 250 }],
+  })), false);
+  assertEqual(isReceiptBalanceSettled(receipt({ id: 'unsplit', shares: [] })), false);
 });
 
 it('returns a settled standing when nobody is signed in', () => {

@@ -116,6 +116,31 @@ export function computeGroupNetBalance(
  * `pounds` is grouped (`1,000`). `pence` includes the dot (`.50`).
  * Non-integers become `0.00` instead of being rounded through a float.
  */
+/**
+ * True when the receipt is archived, or every saved share is already clear.
+ * A receipt with no shares is still open: nobody has been given a balance yet.
+ */
+export function isReceiptBalanceSettled(
+  receipt: Pick<HomeBalanceReceipt, 'settled' | 'hostId' | 'paidBy' | 'shares'>,
+): boolean {
+  if (receipt.settled) return true;
+  const creditorId = receipt.paidBy?.trim() || receipt.hostId.trim();
+  let comparable = false;
+  for (const share of receipt.shares) {
+    if (share.settled) {
+      comparable = true;
+      continue;
+    }
+    const amountPence = integerPence(share.amountPence);
+    if (amountPence === null || amountPence < 0) continue;
+    comparable = true;
+    if (amountPence === 0) continue;
+    const debtorId = share.userId.trim();
+    if (debtorId && debtorId !== creditorId) return false;
+  }
+  return comparable;
+}
+
 export function formatPenceParts(pence: number): PenceParts {
   const minor = integerPence(pence) ?? 0;
   const sign = minor < 0 ? '-' : '';

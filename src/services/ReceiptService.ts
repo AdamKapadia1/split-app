@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/utils/logger';
 import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import type { Item, Receipt, ReceiptSplit, ReceiptStatus, SetReceiptSettledArgs, Split } from '@/types/database.types';
+import { isReceiptBalanceSettled } from '@/utils/homeBalances';
 import { toMinorUnits } from '@/utils/money';
 import { assertReceiptImagePath } from '@/utils/receiptImage';
 import {
@@ -308,8 +309,9 @@ export class ReceiptService {
       }
 
       const page = sliceLookaheadPage(parsed, pageLimit);
+      const shares = await loadHistoryShares(client, page.items.map((receipt) => receipt.id), signal);
       return {
-        items: page.items.map((receipt) => toReceiptHistoryItem(receipt, names)),
+        items: page.items.map((receipt) => toReceiptHistoryItem(receipt, names, shares.get(receipt.id) ?? [])),
         hasMore: page.hasMore,
         nextCursor: page.nextCursor,
       };
@@ -420,7 +422,11 @@ function abortError(source: unknown): Error {
   return error;
 }
 
-function toReceiptHistoryItem(receipt: StoredReceipt, names: Map<string, string>): ReceiptHistoryItem {
+function toReceiptHistoryItem(
+  receipt: StoredReceipt,
+  names: Map<string, string>,
+  shares: readonly { userId: string; amountPence: number }[],
+): ReceiptHistoryItem {
   const groupId = receipt.group_id;
   return {
     id: receipt.id,
@@ -430,7 +436,52 @@ function toReceiptHistoryItem(receipt: StoredReceipt, names: Map<string, string>
     restaurant_name: receipt.restaurant_name,
     total_minor: toMinorUnits(Number(receipt.total_amount || 0)),
     created_at: receipt.created_at,
+    balance_settled: isReceiptBalanceSettled({
+      settled: Boolean(receipt.settled_at) || receipt.status === 'settled',
+      hostId: receipt.host_id,
+      paidBy: receipt.paid_by,
+      shares: shares.map((share) => ({
+        userId: share.userId,
+        displayName: '',
+        amountPence: share.amountPence,
+      })),
+    }),
   };
+}
+
+async function loadHistoryShares(
+  client: NonNullable<typeof supabase>,
+  receiptIds: readonly string[],
+  signal?: AbortSignal,
+): Promise<Map<string, { userId: string; amountPence: number }[]>> {
+  const shares = new Map<string, { userId: string; amountPence: number }[]>();
+  if (receiptIds.length === 0 || signal?.aborted) return shares;
+  try {
+    let query = client.from('receipt_splits').select('receipt_id, user_id, amount_minor').in('receipt_id', receiptIds);
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (signal?.aborted || isAbortError(error)) throw abortError(error);
+    if (error) throw error;
+    if (!Array.isArray(data)) return shares;
+    for (const entry of data) {
+      if (!entry || typeof entry !== 'object') continue;
+      const row = entry as { receipt_id?: unknown; user_id?: unknown; amount_minor?: unknown };
+      if (typeof row.receipt_id !== 'string' || typeof row.user_id !== 'string') continue;
+      const amountPence = typeof row.amount_minor === 'number' && Number.isInteger(row.amount_minor)
+        ? row.amount_minor
+        : typeof row.amount_minor === 'string' && /^\d+$/.test(row.amount_minor)
+          ? Number(row.amount_minor)
+          : null;
+      if (amountPence === null || !Number.isSafeInteger(amountPence)) continue;
+      const list = shares.get(row.receipt_id) ?? [];
+      list.push({ userId: row.user_id, amountPence });
+      shares.set(row.receipt_id, list);
+    }
+  } catch (error) {
+    if (signal?.aborted || isAbortError(error)) throw abortError(error);
+    logger.error('ReceiptService', { method: 'fetchReceiptHistoryPage', code: 'SPLITS_FAILED' });
+  }
+  return shares;
 }
 
 function requireId(value: string, field: string): string {

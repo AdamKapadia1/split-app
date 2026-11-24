@@ -424,15 +424,29 @@ export default function ReceiptLedgerScreen() {
 
   async function commitSettled(settled: boolean) {
     if (togglingSettled) return;
+    const previous = receipt;
     setTogglingSettled(true);
+    setReceiptData((current) => (
+      current
+        ? {
+          ...current,
+          receipt: {
+            ...current.receipt,
+            settled_at: settled ? new Date().toISOString() : null,
+            settled_by: settled ? session?.user.id ?? current.receipt.settled_by : null,
+          },
+        }
+        : current
+    ));
     try {
       const updated = await receiptService.setReceiptSettled(receipt.id, settled);
       setReceiptData((current) => (
-        current ? { ...current, receipt: { ...current.receipt, settled_at: updated.settled_at, settled_by: updated.settled_by } } : current
+        current ? { ...current, receipt: { ...current.receipt, settled_at: updated.settled_at, settled_by: updated.settled_by, status: updated.status } } : current
       ));
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (settled) router.back();
     } catch (error) {
+      setReceiptData((current) => (current ? { ...current, receipt: previous } : current));
       logger.error('receipt', { code: 'ARCHIVE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Could not update receipt', mapErrorToUserMessage(error, 'Try again.'));
@@ -454,7 +468,36 @@ export default function ReceiptLedgerScreen() {
             <Text style={styles.headerTitle} numberOfLines={1}>{merchantName}</Text>
             <Text style={styles.headerDate} numberOfLines={1}>{receiptDate}</Text>
           </View>
-          <MoneyText amountMinor={toMinorUnits(Number(receipt.total_amount || 0))} size="lg" color={theme.colors.textPrimary} />
+          <View style={styles.headerTrail}>
+            <MoneyText amountMinor={toMinorUnits(Number(receipt.total_amount || 0))} size="sm" color={theme.colors.textPrimary} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={receipt.settled_at ? 'Settled' : 'Mark Settled'}
+              accessibilityState={{ busy: togglingSettled }}
+              disabled={togglingSettled}
+              onPress={receipt.settled_at ? askReopen : askMarkSettled}
+              style={({ pressed }) => [
+                styles.settlePill,
+                receipt.settled_at ? styles.settlePillDone : null,
+                pressed && !receipt.settled_at && styles.settlePillPressed,
+              ]}
+            >
+              {togglingSettled ? (
+                <ActivityIndicator size="small" color={receipt.settled_at ? '#FFFFFF' : theme.colors.textPrimary} />
+              ) : (
+                <>
+                  <Ionicons
+                    name={receipt.settled_at ? 'checkmark-circle' : 'checkmark-circle-outline'}
+                    size={14}
+                    color={receipt.settled_at ? '#FFFFFF' : theme.colors.positive}
+                  />
+                  <Text style={[styles.settlePillText, receipt.settled_at && styles.settlePillTextDone]}>
+                    {receipt.settled_at ? 'Settled' : 'Mark Settled'}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          </View>
         </View>
         {isGroup ? (
           <View style={styles.progressTrack}>
@@ -470,47 +513,6 @@ export default function ReceiptLedgerScreen() {
           </View>
         ) : null}
       </SafeAreaView>
-
-      {receipt.settled_at ? (
-        <View style={styles.settledBanner}>
-          <View style={styles.settledBannerCopy}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={theme.colors.positive} />
-            <Text style={styles.settledBannerText} numberOfLines={1}>Marked as settled</Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Reopen"
-            disabled={togglingSettled}
-            onPress={askReopen}
-            style={({ pressed }) => [styles.reopenPill, pressed && styles.settlePillPressed]}
-          >
-            {togglingSettled ? (
-              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-            ) : (
-              <Text style={styles.reopenText}>Reopen</Text>
-            )}
-          </Pressable>
-        </View>
-      ) : (
-        <View style={styles.settleActions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Mark Settled"
-            disabled={togglingSettled}
-            onPress={askMarkSettled}
-            style={({ pressed }) => [styles.settlePill, pressed && styles.settlePillPressed]}
-          >
-            {togglingSettled ? (
-              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle-outline" size={14} color={theme.colors.positive} />
-                <Text style={styles.settlePillText}>Mark Settled</Text>
-              </>
-            )}
-          </Pressable>
-        </View>
-      )}
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {receipt.image_path ? (
@@ -876,8 +878,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.canvas },
   headerSafe: { backgroundColor: theme.colors.canvas },
   headerRow: {
-    height: 52,
+    minHeight: 52,
     paddingHorizontal: theme.spacing.lg,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -887,45 +890,27 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, minWidth: 0, marginHorizontal: 12 },
   headerTitle: { fontSize: 16, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   headerDate: { marginTop: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
+  headerTrail: { alignItems: 'flex-end', gap: 6 },
   progressTrack: { height: 3, width: '100%', backgroundColor: theme.colors.surfaceElevated },
   progressFill: { height: 3 },
-  settleActions: { alignItems: 'flex-end', marginHorizontal: 16, marginTop: 12 },
   settlePill: {
-    height: 32,
-    paddingHorizontal: 12,
+    height: 28,
+    paddingHorizontal: 10,
     borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceElevated,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.borderStrong,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
+  },
+  settlePillDone: {
+    backgroundColor: '#10B981',
+    borderColor: '#10B981',
   },
   settlePillPressed: { backgroundColor: theme.colors.surfacePressed },
-  settlePillText: { fontSize: 12, fontWeight: '600', color: theme.colors.textPrimary },
-  settledBanner: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.positiveSubtle,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(52, 211, 153, 0.30)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  settledBannerCopy: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  settledBannerText: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: theme.colors.positive },
-  reopenPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceElevated,
-  },
-  reopenText: { color: theme.colors.textPrimary, fontSize: 12, fontWeight: '600' },
+  settlePillText: { fontSize: 12, fontWeight: '700', color: theme.colors.textPrimary },
+  settlePillTextDone: { color: '#FFFFFF' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
   missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },

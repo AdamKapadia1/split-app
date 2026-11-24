@@ -104,6 +104,8 @@ export type HistoryReceiptInput = {
 /** Ledger row rendered by History. `total_minor` is integer pence. */
 export type ReceiptHistoryItem = HistoryReceiptInput & {
   restaurant_name: string | null;
+  /** Archived, or no participant still owes pence on this receipt. */
+  balance_settled: boolean;
 };
 
 const CURSOR_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})?$/;
