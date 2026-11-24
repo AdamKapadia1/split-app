@@ -1,260 +1,28 @@
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
-import { useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Redirect, useLocalSearchParams } from 'expo-router';
 
-import { GroupSelectorSheet } from '@/components/GroupSelectorSheet';
-import { ensureAiScanConsent } from '@/lib/aiConsent';
-import { supabase } from '@/lib/supabase';
-
-import { uploadReceiptImage } from '@/services/ReceiptImageService';
-import { theme } from '@/theme/theme';
-import { mapErrorToUserMessage, readSafeErrorCode } from '@/utils/errorMapper';
-import { logger } from '@/utils/logger';
-import { receiptService } from '../../services/ReceiptService';
-import { ReceiptScanError, VisionService } from '../../services/VisionService';
-
-type CapturedReceipt = {
-  uri: string;
-  base64: string;
-};
-
-export default function ScannerScreen() {
-  const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [pendingPhoto, setPendingPhoto] = useState<CapturedReceipt | null>(null);
-  const [isGroupSheetVisible, setGroupSheetVisible] = useState(false);
-
-  const takePicture = async () => {
-    if (!cameraRef.current || isCapturing) return;
-
-    setIsCapturing(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-    try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5, exif: false });
-      if (!photo?.uri || !photo.base64) {
-        throw new Error('The camera did not return image data.');
-      }
-      setPendingPhoto({ uri: photo.uri, base64: photo.base64 });
-      setGroupSheetVisible(true);
-    } catch (error) {
-      logger.error('scanner capture', { code: 'CAPTURE_FAILED' });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Capture Failed', 'Could not take the photo. Please try again.');
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
-  const processReceiptWithGroup = async (groupId: string | null) => {
-    setGroupSheetVisible(false);
-    if (!pendingPhoto) return;
-    const photo = pendingPhoto;
-
-    setIsCapturing(true);
-    let stage: 'save_receipt' | 'parse' | 'save_items' | 'save_totals' | 'upload_image' = 'save_receipt';
-    try {
-      if (!(await ensureAiScanConsent())) {
-        setPendingPhoto(null);
-        return;
-      }
-      if (!supabase) throw new Error('Not logged in');
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user?.id) throw new Error('Not logged in');
-
-      stage = 'save_receipt';
-      const newReceipt = await receiptService.createEmptyReceipt(session.user.id, groupId);
-      stage = 'parse';
-      const aiData = await VisionService.analyzeReceipt(photo.base64);
-
-      if (aiData.items.length > 0) {
-        stage = 'save_items';
-        await receiptService.addScannedItems(
-          newReceipt.id,
-          aiData.items.map((item: { name: string; price: number }) => ({
-            original_name: item.name,
-            display_name: item.name,
-            price: item.price,
-            quantity: 1,
-            is_tax_exempt: false,
-          })),
-        );
-      }
-
-      stage = 'save_totals';
-      await receiptService.updateReceiptTotals(newReceipt.id, {
-        merchant_name: aiData.merchant_name,
-        subtotal: aiData.subtotal,
-        tax_amount: aiData.tax,
-        total_amount: aiData.total,
-        status: 'open',
-      });
-
-      stage = 'upload_image';
-      try {
-        const imagePath = await uploadReceiptImage(session.user.id, newReceipt.id, photo.uri);
-        await receiptService.setReceiptImagePath(newReceipt.id, imagePath);
-      } catch (error) {
-        logger.warn('scanner', { stage: 'upload_image', code: readSafeErrorCode(error, 'IMAGE_UPLOAD_FAILED') });
-      }
-
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.push(`/receipt/${newReceipt.id}`);
-    } catch (error) {
-      logger.error('scanner', {
-        stage,
-        code: error instanceof ReceiptScanError ? error.code : readSafeErrorCode(error, 'PARSE_FAILED'),
-      });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Failed to parse receipt', mapErrorToUserMessage(error, 'Could not read the line items. Please try again.'));
-    } finally {
-      setPendingPhoto(null);
-      setIsCapturing(false);
-    }
-  };
-
-  if (!permission) {
-    return <View style={styles.screen} />;
-  }
-
-  if (!permission.granted) {
-    return (
-      <View style={styles.denied}>
-        <Text style={styles.title}>Camera Access Required</Text>
-        <Text style={styles.subtitle}>Midnight needs your camera to scan and split receipts.</Text>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Grant Permission"
-          activeOpacity={0.85}
-          onPress={() => {
-            void requestPermission();
-          }}
-          style={styles.permissionButton}>
-          <Text style={styles.permissionLabel}>Grant Permission</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.screen}>
-      <CameraView ref={cameraRef} facing="back" style={StyleSheet.absoluteFill} />
-      <View pointerEvents="none" style={styles.guideFrame}>
-        <View style={styles.guide} />
-      </View>
-
-      <View style={styles.footer}>
-        <TouchableOpacity
-          accessibilityRole="button"
-          accessibilityLabel="Shutter"
-          accessibilityState={{ disabled: isCapturing, busy: isCapturing }}
-          activeOpacity={0.85}
-          disabled={isCapturing}
-          onPress={() => {
-            void takePicture();
-          }}
-          style={styles.shutterOuter}>
-          {isCapturing ? (
-            <ActivityIndicator color={theme.colors.accent} size="large" />
-          ) : (
-            <View style={styles.shutterInner} />
-          )}
-        </TouchableOpacity>
-      </View>
-      <GroupSelectorSheet
-        visible={isGroupSheetVisible}
-        onSelect={processReceiptWithGroup}
-        onCancel={() => {
-          setGroupSheetVisible(false);
-          setPendingPhoto(null);
-        }}
-      />
-    </View>
-  );
+function firstParam(value: string | string[] | undefined) {
+  const picked = Array.isArray(value) ? value[0] : value;
+  const trimmed = picked?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: theme.colors.canvas,
-  },
-  denied: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    backgroundColor: theme.colors.canvas,
-  },
-  title: {
-    ...theme.typography.screenTitle,
-    color: theme.colors.textPrimary,
-    textAlign: 'center',
-  },
-  subtitle: {
-    marginTop: 12,
-    color: theme.colors.textSecondary,
-    fontSize: 16,
-    lineHeight: 24,
-    textAlign: 'center',
-  },
-  permissionButton: {
-    marginTop: 28,
-    minHeight: 52,
-    paddingHorizontal: 24,
-    borderRadius: theme.radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
-  },
-  permissionLabel: {
-    color: theme.colors.accentText,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  guideFrame: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingBottom: 120,
-  },
-  guide: {
-    width: '78%',
-    height: '62%',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.textPrimary,
-    borderRadius: theme.radius.lg,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 100,
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.canvas,
-    paddingTop: 20,
-    paddingBottom: 20,
-  },
-  shutterOuter: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 4,
-    borderColor: theme.colors.textPrimary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
-  },
-  shutterInner: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: theme.colors.textPrimary,
-  },
-});
+/** Keeps older Scan links working after the tab moved to `/scan`. */
+export default function ScannerRedirect() {
+  const params = useLocalSearchParams<{ groupId?: string | string[]; groupName?: string | string[] }>();
+  const groupId = firstParam(params.groupId);
+  const groupName = firstParam(params.groupName);
+
+  if (!groupId && !groupName) return <Redirect href="/scan" />;
+
+  return (
+    <Redirect
+      href={{
+        pathname: '/scan',
+        params: {
+          ...(groupId ? { groupId } : {}),
+          ...(groupName ? { groupName } : {}),
+        },
+      }}
+    />
+  );
+}

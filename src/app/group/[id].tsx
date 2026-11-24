@@ -582,7 +582,11 @@ export default function GroupLedgerScreen() {
 
   function scanBill() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push('/scanner');
+    if (!groupId) return;
+    router.push({
+      pathname: '/scan',
+      params: { groupId, groupName },
+    });
   }
 
   function settleUp() {

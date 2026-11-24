@@ -60,12 +60,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="scanner"
+        name="scan"
         options={{
           title: 'Scan',
           tabBarIcon: ({ color }) => <Ionicons name="camera-outline" size={22} color={tabIconColor(color)} />,
         }}
       />
+      <Tabs.Screen name="scanner" options={{ href: null }} />
       <Tabs.Screen name="split" options={{ href: null }} />
     </Tabs>
   );
