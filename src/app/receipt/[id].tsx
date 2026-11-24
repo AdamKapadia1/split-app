@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
@@ -18,6 +18,8 @@ import type { Item, Receipt, Split } from '@/types/database.types';
 import { mapErrorToUserMessage, mapSettlementNudgeError } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils/money';
+import { parseGBPToPence, penceToPounds } from '@/utils/manualBill';
+import { receiptDiscrepancy, splitExtrasMinor } from '@/utils/receiptReconciliation';
 import { createTapId } from '@/utils/notifications';
 
 type LedgerReceipt = Receipt & {
@@ -113,6 +115,13 @@ export default function ReceiptLedgerScreen() {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
+  const [splitBasis, setSplitBasis] = useState<'items' | 'receipt'>('receipt');
+  const [adjustMode, setAdjustMode] = useState<'add' | 'edit' | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [draftPrice, setDraftPrice] = useState('');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [adjusting, setAdjusting] = useState(false);
   const viewerGeneration = useRef(0);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -283,7 +292,7 @@ export default function ReceiptLedgerScreen() {
   const saveSplit = useCallback(async () => {
     if (!receiptData || !paidById || members.length === 0 || saving) return;
     const memberIds = members.map((member) => member.userId);
-    const shares = memberShares(receiptData.items, claims, memberIds, receiptData.receipt);
+    const shares = memberShares(receiptData.items, claims, memberIds, receiptData.receipt, splitBasis);
     setSaving(true);
     setSaveError(null);
     setSaved(false);
@@ -310,7 +319,7 @@ export default function ReceiptLedgerScreen() {
     } finally {
       setSaving(false);
     }
-  }, [claims, members, paidById, receiptData, saving]);
+  }, [claims, members, paidById, receiptData, saving, splitBasis]);
 
   const closeViewer = useCallback(() => {
     viewerGeneration.current += 1;
@@ -386,16 +395,70 @@ export default function ReceiptLedgerScreen() {
   const people = members.map((member) => toAssignee(member));
   const activeMember = people.find((person) => person.id === activeMemberId) ?? null;
   const memberIds = members.map((member) => member.userId);
-  const shares = isGroup ? memberShares(items, claims, memberIds, receipt) : {};
+  const shares = isGroup ? memberShares(items, claims, memberIds, receipt, splitBasis) : {};
   const unassigned = isGroup ? unassignedMinor(items, claims) : 0;
   const isTaxIncluded = receiptExtrasMinor(items, receipt) === 0 && Number(receipt.tax_amount || 0) > 0;
   const merchantName = receipt.restaurant_name || receipt.merchant_name || 'Ledger';
   const receiptDate = new Date(receipt.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   const lineTotalMinor = items.reduce((sum, item) => sum + lineMinor(item), 0);
+  const receiptTotalMinor = toMinorUnits(Number(receipt.total_amount || 0));
+  const discrepancy = receiptDiscrepancy(lineTotalMinor, receiptTotalMinor);
+  const differenceLabel = discrepancy.differenceMinor > 0
+    ? `${formatPence(discrepancy.differenceMinor)} short of the receipt`
+    : `${formatPence(Math.abs(discrepancy.differenceMinor))} over the receipt`;
   const assignedMinor = Math.max(0, lineTotalMinor - unassigned);
   const progress = Math.min(100, Math.round((assignedMinor / Math.max(1, lineTotalMinor)) * 100));
   const blocked = isGroup && unassigned > 0;
   const saveDisabled = saving || blocked || !paidById || members.length === 0;
+
+  async function refreshSubtotal(nextItems: Item[]) {
+    const nextMinor = nextItems.reduce((sum, item) => sum + lineMinor(item), 0);
+    const updated = await receiptService.updateReceiptTotals(receipt.id, { subtotal: penceToPounds(nextMinor) });
+    setReceiptData((current) => current ? { ...current, receipt: { ...current.receipt, ...updated }, items: nextItems } : current);
+    setSaved(false);
+  }
+
+  async function commitAdjustment() {
+    if (adjusting) return;
+    const pricePence = parseGBPToPence(draftPrice);
+    if (pricePence == null) {
+      setAdjustError('Enter a price in pounds.');
+      return;
+    }
+    setAdjusting(true);
+    setAdjustError(null);
+    try {
+      if (adjustMode === 'add') {
+        const name = draftName.trim();
+        if (!name) {
+          setAdjustError('Name the missing item.');
+          setAdjusting(false);
+          return;
+        }
+        const created = await receiptService.addScannedItems(receipt.id, [{
+          original_name: name,
+          display_name: name,
+          price: penceToPounds(pricePence),
+          quantity: 1,
+          is_tax_exempt: false,
+        }]);
+        await refreshSubtotal([...items, ...created]);
+      } else if (editingItemId) {
+        await receiptService.updateItemPrice(editingItemId, penceToPounds(pricePence));
+        const nextItems = items.map((item) => item.id === editingItemId ? { ...item, price: penceToPounds(pricePence) } : item);
+        await refreshSubtotal(nextItems);
+      }
+      setAdjustMode(null);
+      setDraftName('');
+      setDraftPrice('');
+      setEditingItemId(null);
+    } catch (error) {
+      logger.error('receipt', { code: 'RECONCILE_FAILED' });
+      setAdjustError(mapErrorToUserMessage(error, 'Could not update the bill.'));
+    } finally {
+      setAdjusting(false);
+    }
+  }
 
   function askMarkSettled() {
     if (togglingSettled) return;
@@ -648,6 +711,82 @@ export default function ReceiptLedgerScreen() {
           </View>
         ) : null}
 
+        {!discrepancy.matches ? (
+          <View style={styles.reconcile}>
+            <Text style={styles.reconcileTitle}>Lines and total do not match</Text>
+            <Text style={styles.reconcileBody}>
+              {`Sum of items ${formatPence(discrepancy.itemsMinor)}. Receipt total ${formatPence(discrepancy.receiptTotalMinor)}. ${differenceLabel}.`}
+            </Text>
+            <View style={styles.reconcileActions}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Add a missing item" onPress={() => { setAdjustMode('add'); setAdjustError(null); }} style={styles.reconcileChip}>
+                <Text style={styles.reconcileChipText}>Add item</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Edit an item price" onPress={() => { setAdjustMode('edit'); setAdjustError(null); }} style={styles.reconcileChip}>
+                <Text style={styles.reconcileChipText}>Edit price</Text>
+              </Pressable>
+            </View>
+            <View style={styles.reconcileActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: splitBasis === 'items' }}
+                onPress={() => { setSplitBasis('items'); setSaved(false); }}
+                style={[styles.reconcileChip, splitBasis === 'items' && styles.reconcileChipOn]}
+              >
+                <Text style={[styles.reconcileChipText, splitBasis === 'items' && styles.reconcileChipTextOn]}>Split itemised sum</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: splitBasis === 'receipt' }}
+                onPress={() => { setSplitBasis('receipt'); setSaved(false); }}
+                style={[styles.reconcileChip, splitBasis === 'receipt' && styles.reconcileChipOn]}
+              >
+                <Text style={[styles.reconcileChipText, splitBasis === 'receipt' && styles.reconcileChipTextOn]}>Split receipt total</Text>
+              </Pressable>
+            </View>
+            {adjustMode === 'edit' ? (
+              <View style={styles.reconcileList}>
+                {items.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    onPress={() => setEditingItemId(item.id)}
+                    style={[styles.reconcileChoice, editingItemId === item.id && styles.reconcileChipOn]}
+                  >
+                    <Text style={styles.reconcileChoiceText} numberOfLines={1}>{item.display_name || item.original_name}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            {adjustMode === 'add' || (adjustMode === 'edit' && editingItemId) ? (
+              <View style={styles.reconcileForm}>
+                {adjustMode === 'add' ? (
+                  <TextInput
+                    accessibilityLabel="Missing item name"
+                    placeholder="Item"
+                    placeholderTextColor={theme.colors.textMuted}
+                    value={draftName}
+                    onChangeText={setDraftName}
+                    style={styles.reconcileInput}
+                  />
+                ) : null}
+                <TextInput
+                  accessibilityLabel="Item price"
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  placeholderTextColor={theme.colors.textMuted}
+                  value={draftPrice}
+                  onChangeText={setDraftPrice}
+                  style={styles.reconcileInput}
+                />
+                <Pressable accessibilityRole="button" accessibilityLabel="Save adjustment" disabled={adjusting} onPress={() => { void commitAdjustment(); }} style={styles.reconcileSave}>
+                  <Text style={styles.reconcileSaveText}>{adjusting ? 'Saving' : 'Save'}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {adjustError ? <Text style={styles.reconcileError}>{adjustError}</Text> : null}
+          </View>
+        ) : null}
+
         <View style={styles.ledger}>
           {items.map((item, index) => {
             const assigned = people.filter((person) => (claims[item.id] ?? []).includes(person.id));
@@ -858,14 +997,21 @@ function receiptExtrasMinor(items: Item[], receipt: Receipt) {
   return extrasMinor(items.reduce((sum, item) => sum + lineMinor(item), 0), toMinorUnits(receipt.total_amount));
 }
 
-function memberShares(items: Item[], claims: Record<string, string[]>, memberIds: string[], receipt: Receipt) {
+function memberShares(
+  items: Item[],
+  claims: Record<string, string[]>,
+  memberIds: string[],
+  receipt: Receipt,
+  basis: 'items' | 'receipt',
+) {
+  const lines = items.reduce((sum, item) => sum + lineMinor(item), 0);
   return allocateByItems(
     items.map((item) => ({
       id: item.id,
       priceMinor: lineMinor(item),
       assignedUserIds: claims[item.id] ?? [],
     })),
-    receiptExtrasMinor(items, receipt),
+    splitExtrasMinor(lines, toMinorUnits(receipt.total_amount), basis),
     memberIds,
   );
 }
@@ -1035,6 +1181,53 @@ const styles = StyleSheet.create({
   memberName: { fontSize: 13, lineHeight: 17, fontWeight: '600', color: theme.colors.textPrimary },
   assignHint: { paddingHorizontal: 16, marginBottom: 10, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
   errorText: { color: theme.colors.danger, fontSize: 14, lineHeight: 20, marginHorizontal: 16, marginBottom: 10 },
+  reconcile: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.28)',
+    gap: 8,
+  },
+  reconcileTitle: { fontSize: 14, lineHeight: 18, fontWeight: '700', color: '#FDE68A' },
+  reconcileBody: { fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  reconcileActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  reconcileChip: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  reconcileChipOn: { backgroundColor: theme.colors.accent, borderColor: theme.colors.accent },
+  reconcileChipText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: theme.colors.textPrimary },
+  reconcileChipTextOn: { color: theme.colors.accentText },
+  reconcileList: { gap: 6 },
+  reconcileChoice: { borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: theme.colors.surface },
+  reconcileChoiceText: { fontSize: 13, lineHeight: 18, color: theme.colors.textPrimary },
+  reconcileForm: { gap: 8 },
+  reconcileInput: {
+    height: 44,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.canvas,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    color: theme.colors.textPrimary,
+    fontSize: 15,
+  },
+  reconcileSave: {
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+  },
+  reconcileSaveText: { fontSize: 14, fontWeight: '700', color: theme.colors.accentText },
+  reconcileError: { fontSize: 13, lineHeight: 18, color: theme.colors.danger },
   ledger: {
     marginHorizontal: 16,
     backgroundColor: theme.colors.surface,

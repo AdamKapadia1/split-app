@@ -102,6 +102,18 @@ export class ReceiptService {
     }
   }
 
+  async updateItemPrice(itemId: string, price: number): Promise<void> {
+    try {
+      const id = requireId(itemId, 'itemId');
+      const amount = requireMoney(price, 'price');
+      const client = requireClient();
+      const { error } = await client.from('items').update({ price: amount }).eq('id', id);
+      if (error) throw new ReceiptServiceError('UPDATE_FAILED', error.message, error);
+    } catch (caught) {
+      throw logged('updateItemPrice', 'UPDATE_FAILED', 'Could not update that item.', caught);
+    }
+  }
+
   async setReceiptImagePath(receiptId: string, imagePath: string): Promise<void> {
     try {
       const id = requireId(receiptId, 'receiptId');

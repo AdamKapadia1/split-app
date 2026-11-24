@@ -283,6 +283,7 @@ export default function ScanScreen() {
         merchant_name: parsed.merchant_name,
         subtotal: parsed.subtotal,
         tax_amount: parsed.tax,
+        service_charge: parsed.service,
         total_amount: parsed.total,
         status: 'open',
       });

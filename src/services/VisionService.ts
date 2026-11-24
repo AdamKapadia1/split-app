@@ -1,6 +1,7 @@
 import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@supabase/supabase-js';
 
 import { supabase } from '@/lib/supabase';
+import { reconcileScannedReceipt } from '@/utils/receiptReconciliation';
 
 const MAX_IMAGE_BASE64_CHARS = 6_800_000;
 const SCAN_TIMEOUT_MS = 35_000;
@@ -16,6 +17,7 @@ export type ScannedReceipt = {
   items: ScannedReceiptItem[];
   subtotal: number;
   tax: number;
+  service: number;
   total: number;
 };
 
@@ -176,6 +178,7 @@ function normalizeReceipt(value: unknown): ScannedReceipt | null {
     items?: unknown;
     subtotal?: unknown;
     tax?: unknown;
+    service?: unknown;
     total?: unknown;
   };
 
@@ -189,13 +192,22 @@ function normalizeReceipt(value: unknown): ScannedReceipt | null {
       })
     : [];
 
-  return {
-    merchant_name: readMerchantName(record),
-    website: typeof record.website === 'string' && record.website.trim() ? record.website.trim() : null,
+  const reconciled = reconcileScannedReceipt({
     items,
     subtotal: asMoney(record.subtotal),
     tax: asMoney(record.tax),
+    service: asMoney(record.service),
     total: asMoney(record.total),
+  });
+
+  return {
+    merchant_name: readMerchantName(record),
+    website: typeof record.website === 'string' && record.website.trim() ? record.website.trim() : null,
+    items: reconciled.items,
+    subtotal: reconciled.subtotal,
+    tax: reconciled.tax,
+    service: reconciled.service,
+    total: reconciled.total,
   };
 }
 
