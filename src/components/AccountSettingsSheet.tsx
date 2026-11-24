@@ -7,6 +7,15 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressa
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { APP_COPYRIGHT, APP_NAME } from '@/constants/brand';
 import { PayoutSetup } from '@/components/payout-setup';
+import {
+  clearBiometricSession,
+  getBiometricPreference,
+  hasBiometricSession,
+  isBiometricAvailable,
+  saveBiometricSession,
+  setBiometricPreference,
+  type BiometricLabel,
+} from '@/lib/biometricAuth';
 import { purgeLocalAppData, supabase } from '@/lib/supabase';
 import { purgeAllUserReceiptImages } from '@/services/ReceiptImageService';
 import { getNotificationPreferences, unregisterPushTokenAsync, updateNotificationPreferences, type NotificationPreferences } from '@/services/NotificationService';
@@ -54,6 +63,10 @@ export function AccountSettingsSheet({
   });
   const [prefsReady, setPrefsReady] = useState(false);
   const [savingPref, setSavingPref] = useState<'nudges' | 'amounts' | null>(null);
+  const [bioLabel, setBioLabel] = useState<BiometricLabel>('Face ID');
+  const [bioAvailable, setBioAvailable] = useState(false);
+  const [bioEnabled, setBioEnabled] = useState(false);
+  const [bioBusy, setBioBusy] = useState(false);
   const [seenKey, setSeenKey] = useState<string | null>(null);
   const watchKey = visible && userId ? userId : null;
 
@@ -95,6 +108,17 @@ export function AccountSettingsSheet({
       })
       .finally(() => {
         if (!cancelled) setPrefsReady(true);
+      });
+    void isBiometricAvailable()
+      .then(async (hardware) => {
+        if (cancelled) return;
+        setBioAvailable(hardware.available);
+        setBioLabel(hardware.label);
+        const [preference, stored] = await Promise.all([getBiometricPreference(), hasBiometricSession()]);
+        if (!cancelled) setBioEnabled(preference === 'on' && stored);
+      })
+      .catch(() => {
+        if (!cancelled) setBioAvailable(false);
       });
     return () => {
       cancelled = true;
@@ -172,6 +196,12 @@ export function AccountSettingsSheet({
           logger.warn('delete account', { code: 'IMAGE_PURGE_FAILED' });
         }
       }
+      try {
+        await clearBiometricSession();
+        await setBiometricPreference('off');
+      } catch {
+        logger.warn('delete account', { code: 'BIOMETRIC_CLEAR_FAILED' });
+      }
       const { error } = await supabase.rpc('delete_my_account');
       if (error) throw error;
       await purgeLocalAppData();
@@ -187,7 +217,36 @@ export function AccountSettingsSheet({
     }
   }
 
+  async function toggleBiometric(enabled: boolean) {
+    if (bioBusy || isDeleting || !bioAvailable) return;
+    setBioBusy(true);
+    hapticSelection();
+    try {
+      if (!enabled) {
+        await clearBiometricSession();
+        await setBiometricPreference('off');
+        setBioEnabled(false);
+        return;
+      }
+      const session = supabase ? (await supabase.auth.getSession()).data.session : null;
+      const refreshToken = session?.refresh_token;
+      const email = session?.user.email;
+      if (!refreshToken || !email) {
+        Alert.alert('Could not turn on Face ID', 'Sign in again, then enable it from account settings.');
+        setBioEnabled(false);
+        return;
+      }
+      await saveBiometricSession(refreshToken, email);
+      setBioEnabled(true);
+    } catch {
+      Alert.alert('Could not update Face ID', 'Please try again.');
+    } finally {
+      setBioBusy(false);
+    }
+  }
+
   const payoutLabel = payoutStatus(payout);
+  const biometricTitle = bioLabel === 'Touch ID' ? 'Touch ID Sign-In' : bioLabel === 'Passcode' ? 'Passcode Sign-In' : 'Face ID Sign-In';
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent onRequestClose={close}>
@@ -280,6 +339,25 @@ export function AccountSettingsSheet({
                 onValueChange={(enabled) => {
                   hapticSelection();
                   void savePreference({ ...prefs, hideAmountsInNotifications: enabled }, 'amounts');
+                }}
+                trackColor={{ false: '#3F3F46', true: theme.colors.accent }}
+                thumbColor="#FAFAFA"
+              />
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <View style={styles.rowCopy}>
+                <Text style={styles.rowLabel}>{biometricTitle}</Text>
+                <Text style={styles.rowStatus}>
+                  {bioAvailable ? `Unlock ${APP_NAME} on this device` : 'Not available on this device'}
+                </Text>
+              </View>
+              <Switch
+                accessibilityLabel={biometricTitle}
+                value={bioEnabled}
+                disabled={!bioAvailable || bioBusy || isDeleting}
+                onValueChange={(enabled) => {
+                  void toggleBiometric(enabled);
                 }}
                 trackColor={{ false: '#3F3F46', true: theme.colors.accent }}
                 thumbColor="#FAFAFA"

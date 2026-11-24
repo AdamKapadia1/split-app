@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -18,6 +19,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VelorBrand } from '@/components/VelorBrand';
 import { APP_NAME } from '@/constants/brand';
 import { luxury } from '@/constants/theme';
+import {
+  authenticateWithBiometrics,
+  clearBiometricSession,
+  getBiometricPreference,
+  hasBiometricSession,
+  isBiometricAvailable,
+  readBiometricSession,
+  saveBiometricSession,
+  setBiometricPreference,
+  type BiometricLabel,
+} from '@/lib/biometricAuth';
 import { mediumHaptic, pulseHaptic, tickHaptic } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
 
@@ -33,6 +45,20 @@ export function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [focused, setFocused] = useState<Field>(null);
+  const [biometricLabel, setBiometricLabel] = useState<BiometricLabel | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const hardware = await isBiometricAvailable();
+      if (!hardware.available || cancelled) return;
+      const ready = await hasBiometricSession();
+      if (!cancelled && ready) setBiometricLabel(hardware.label);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function choose(next: Mode) {
     if (next === mode || busy) {
@@ -66,13 +92,17 @@ export function AuthScreen() {
 
     try {
       if (mode === 'sign-in') {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
           email: trimmedEmail,
           password,
         });
         if (signInError) {
           setError(signInError.message);
+          return;
         }
+        const refreshToken = data.session?.refresh_token;
+        const signedInEmail = data.session?.user.email ?? trimmedEmail;
+        if (refreshToken) void rememberBiometricSession(refreshToken, signedInEmail);
         return;
       }
 
@@ -87,6 +117,37 @@ export function AuthScreen() {
       if (!data.session) {
         setNotice('Check your email to confirm your account.');
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signInWithBiometric() {
+    if (!supabase || busy) return;
+    pulseHaptic();
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const unlocked = await authenticateWithBiometrics();
+      if (!unlocked) return;
+      const stored = await readBiometricSession();
+      if (!stored) {
+        setBiometricLabel(null);
+        setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
+        return;
+      }
+      const { data, error: refreshError } = await supabase.auth.refreshSession({ refresh_token: stored.refreshToken });
+      const nextToken = data.session?.refresh_token;
+      if (refreshError || !nextToken) {
+        await clearBiometricSession();
+        setBiometricLabel(null);
+        setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
+        return;
+      }
+      await saveBiometricSession(nextToken, data.session?.user.email ?? stored.email);
+    } catch {
+      setNotice('Session expired. Please sign in with your password once to re-enable Face ID.');
     } finally {
       setBusy(false);
     }
@@ -187,6 +248,21 @@ export function AuthScreen() {
                 {busy ? <ActivityIndicator color="#050609" /> : <Text style={styles.ctaLabel}>{action}</Text>}
               </LinearGradient>
             </Pressable>
+            {mode === 'sign-in' && biometricLabel ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Sign in with ${biometricLabel}`}
+                accessibilityState={{ disabled: busy, busy }}
+                disabled={busy}
+                onPress={() => {
+                  void signInWithBiometric();
+                }}
+                style={({ pressed }) => [styles.bioButton, pressed && !busy && styles.ctaPressed, busy && styles.ctaBusy]}
+              >
+                <Ionicons name={biometricLabel === 'Touch ID' ? 'finger-print' : 'scan-outline'} size={18} color="#F7F8FA" />
+                <Text style={styles.bioLabel}>{`Sign in with ${biometricLabel}`}</Text>
+              </Pressable>
+            ) : null}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -196,6 +272,25 @@ export function AuthScreen() {
         <Text style={styles.footerText}>{`Encrypted UK settlements · Powered by ${APP_NAME}`}</Text>
       </View>
     </View>
+  );
+}
+
+async function rememberBiometricSession(refreshToken: string, email: string) {
+  const hardware = await isBiometricAvailable();
+  if (!hardware.available) return;
+  const preference = await getBiometricPreference();
+  if (preference === 'off') return;
+  if (preference === 'on') {
+    await saveBiometricSession(refreshToken, email);
+    return;
+  }
+  Alert.alert(
+    `Sign in with ${hardware.label}?`,
+    `${APP_NAME} can unlock on this device with ${hardware.label}. You can turn this off in account settings.`,
+    [
+      { text: 'Not now', style: 'cancel', onPress: () => { void setBiometricPreference('off'); } },
+      { text: 'Enable', onPress: () => { void saveBiometricSession(refreshToken, email); } },
+    ],
   );
 }
 
@@ -358,6 +453,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.2,
+  },
+  bioButton: {
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(139,149,255,0.35)',
+    backgroundColor: '#141724',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  bioLabel: {
+    color: '#F7F8FA',
+    fontSize: 15,
+    fontWeight: '600',
   },
   footer: {
     position: 'absolute',
