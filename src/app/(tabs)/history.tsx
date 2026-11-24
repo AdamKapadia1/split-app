@@ -637,7 +637,7 @@ export default function HistoryScreen() {
           ) : (
             <HistoryEmpty onScan={() => {
               hapticImpactLight();
-              router.push('/scanner');
+              router.push('/scan');
             }} />
           )}
           refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={theme.colors.accent} />}

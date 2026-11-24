@@ -285,7 +285,7 @@ export default function HomeScreen() {
                   label="Scan Bill"
                   icon="scan-outline"
                   tint={theme.colors.accent}
-                  onPress={() => router.push('/scanner')}
+                  onPress={() => router.push('/scan')}
                 />
                 <QuickAction
                   label="New Group"
@@ -357,7 +357,7 @@ export default function HomeScreen() {
                       accessibilityLabel="Scan your first bill"
                       onPress={() => {
                         hapticImpactLight();
-                        router.push('/scanner');
+                        router.push('/scan');
                       }}
                       style={styles.primaryButton}
                     >
