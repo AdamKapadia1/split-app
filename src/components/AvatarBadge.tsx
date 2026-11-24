@@ -12,7 +12,7 @@ const TINTS = [
   { backgroundColor: 'rgba(251, 146, 60, 0.18)', color: '#FDBA74' },
 ] as const;
 
-const FONT_SIZE = { 18: 8, 20: 9, 28: 11, 36: 13, 40: 14, 44: 15 } as const;
+const FONT_SIZE = { 18: 8, 20: 9, 24: 10, 28: 11, 36: 13, 40: 14, 44: 15 } as const;
 
 type AvatarBadgeProps = {
   name: string;

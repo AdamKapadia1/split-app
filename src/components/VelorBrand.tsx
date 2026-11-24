@@ -6,11 +6,13 @@ import { luxury } from '@/constants/theme';
 
 type VelorBrandProps = {
   variant?: 'hero' | 'header' | 'watermark';
+  /** Overrides the watermark opacity. Header and hero ignore this. */
+  opacity?: number;
 };
 
 const WORDMARK = APP_NAME.toUpperCase();
 
-export function VelorBrand({ variant = 'hero' }: VelorBrandProps) {
+export function VelorBrand({ variant = 'hero', opacity }: VelorBrandProps) {
   if (variant === 'header') {
     return (
       <View style={styles.header}>
@@ -22,7 +24,7 @@ export function VelorBrand({ variant = 'hero' }: VelorBrandProps) {
 
   if (variant === 'watermark') {
     return (
-      <View style={styles.watermark}>
+      <View style={[styles.watermark, opacity != null ? { opacity } : null]}>
         <VelorMark size="small" mono />
         <VelorWordmark tracking="watermark" />
       </View>

@@ -10,7 +10,9 @@ import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DestinationSheet, loadDestinationGroups, PERSONAL_DESTINATION, type BillDestination, type DestinationGroup } from '@/components/DestinationSheet';
+import { VelorBrand } from '@/components/VelorBrand';
 import { APP_NAME } from '@/constants/brand';
+import { luxury } from '@/constants/theme';
 import { ManualBillModal } from '@/components/ManualBillModal';
 import { ensureAiScanConsent } from '@/lib/aiConsent';
 import { supabase } from '@/lib/supabase';
@@ -19,7 +21,7 @@ import { receiptService } from '@/services/ReceiptService';
 import { formatScanLimitMessage, ReceiptScanError, VisionService, type ScannedReceipt } from '@/services/VisionService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage, readSafeErrorCode } from '@/utils/errorMapper';
-import { hapticImpactLight, hapticSelection, hapticSuccess, hapticWarning } from '@/utils/haptics';
+import { hapticImpactLight, hapticImpactMedium, hapticSelection, hapticSuccess, hapticWarning } from '@/utils/haptics';
 import { logger } from '@/utils/logger';
 import { RECEIPT_IMAGE_JPEG_QUALITY, RECEIPT_IMAGE_MAX_WIDTH } from '@/utils/receiptImage';
 import { isValidGroupUuid } from '@/utils/receiptHistory';
@@ -138,7 +140,7 @@ export default function ScanScreen() {
 
   async function takePicture() {
     if (locked || !cameraRef.current) return;
-    hapticImpactLight();
+    hapticImpactMedium();
     await withBusy(async () => {
       let photo: { uri?: string; base64?: string } | undefined;
       try {
@@ -328,7 +330,12 @@ export default function ScanScreen() {
       )}
 
       {previewUri ? <Image source={{ uri: previewUri }} style={StyleSheet.absoluteFill} contentFit="cover" /> : null}
-      {cameraReady && !previewUri ? <Viewfinder /> : null}
+      {cameraReady && !previewUri ? (
+        <>
+          <ViewfinderVignette />
+          <Viewfinder />
+        </>
+      ) : null}
 
       {phase !== 'idle' ? (
         <View style={styles.overlay}>
@@ -361,46 +368,59 @@ export default function ScanScreen() {
         style={[styles.topScrim, { height: insets.top + 96 }]}
       />
       <View pointerEvents={locked ? 'none' : 'auto'} style={[styles.topBar, { top: insets.top + 8 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Destination, ${activeDestination.name}`}
-          onPress={openDestination}
-          style={({ pressed }) => [styles.destinationPill, pressed && styles.pillPressed]}
-        >
-          <Text style={styles.destinationText} numberOfLines={1}>{activeDestination.name} ▾</Text>
-        </Pressable>
-        {cameraReady ? (
+        <VelorBrand variant="header" />
+        <View style={styles.topActions}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={torchEnabled ? 'Turn torch off' : 'Turn torch on'}
-            accessibilityState={{ selected: torchEnabled }}
-            onPress={() => {
-              if (locked) return;
-              hapticSelection();
-              setTorchEnabled((enabled) => !enabled);
-            }}
-            style={({ pressed }) => [styles.torch, torchEnabled && styles.torchOn, pressed && styles.pillPressed]}
+            accessibilityLabel={`Destination, ${activeDestination.name}`}
+            onPress={openDestination}
+            style={({ pressed }) => [styles.glassButton, pressed && styles.pressed]}
           >
-            <Ionicons name={torchEnabled ? 'flash' : 'flash-off'} size={18} color={torchEnabled ? '#F59E0B' : '#FFFFFF'} />
+            <Ionicons name="people-outline" size={16} color="#FFFFFF" />
           </Pressable>
-        ) : <View style={styles.torchSpacer} />}
+          {cameraReady ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={torchEnabled ? 'Turn torch off' : 'Turn torch on'}
+              accessibilityState={{ selected: torchEnabled }}
+              onPress={() => {
+                if (locked) return;
+                hapticSelection();
+                setTorchEnabled((enabled) => !enabled);
+              }}
+              style={({ pressed }) => [styles.glassButton, torchEnabled && styles.torchOn, pressed && styles.pressed]}
+            >
+              <Ionicons name={torchEnabled ? 'flash' : 'flash-off'} size={16} color={torchEnabled ? '#F59E0B' : '#FFFFFF'} />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Destination, ${activeDestination.name}`}
+        onPress={openDestination}
+        style={[styles.destinationChip, { top: insets.top + 74 }]}
+      >
+        <Text style={styles.destinationText} numberOfLines={1}>{activeDestination.name}</Text>
+      </Pressable>
 
       {!permission ? <ActivityIndicator color={theme.colors.textPrimary} style={styles.centered} /> : null}
 
       {showPermissionCard ? (
         <View style={styles.permissionWrap}>
           <View style={styles.permissionCard}>
-            <Ionicons name="camera-outline" size={28} color={theme.colors.textPrimary} />
+            <VelorBrand variant="watermark" />
             <Text style={styles.permissionTitle}>{askForCamera ? 'Camera access' : 'Camera access is off'}</Text>
             <Text style={styles.permissionBody}>
               {askForCamera
-                ? `${APP_NAME} uses your camera to scan itemised receipts accurately. You can also import a photo or enter the bill by hand.`
+                ? `${APP_NAME} uses your camera to scan itemised receipts accurately.`
                 : 'Camera access is turned off, so a live scan is unavailable. Turn it on in Settings, import a photo, or enter the bill by hand.'}
             </Text>
             {askForCamera ? (
-              <Pressable accessibilityRole="button" accessibilityLabel="Allow camera" onPress={() => { void allowCamera(); }} style={styles.primaryButton}>
-                <Text style={styles.primaryLabel}>Allow Camera</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="Enable Camera" onPress={() => { hapticImpactLight(); void allowCamera(); }} style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}>
+                <LinearGradient colors={['#9AA3FF', '#7C86FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryFill}>
+                  <Text style={styles.primaryLabel}>Enable Camera</Text>
+                </LinearGradient>
               </Pressable>
             ) : (
               <Pressable accessibilityRole="button" accessibilityLabel="Open Settings" onPress={openSettings} style={styles.primaryButton}>
@@ -418,8 +438,7 @@ export default function ScanScreen() {
       ) : null}
 
       {cameraReady ? (
-        <View pointerEvents={locked ? 'none' : 'auto'} style={styles.bottomWrap}>
-          <LinearGradient pointerEvents="none" colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.78)']} style={styles.bottomScrim} />
+        <View pointerEvents={locked ? 'none' : 'auto'} style={[styles.bottomWrap, { paddingBottom: Math.max(insets.bottom, 16) }]}>
           <View style={styles.controls}>
             <Pressable
               accessibilityRole="button"
@@ -427,9 +446,9 @@ export default function ScanScreen() {
               accessibilityState={{ disabled: locked }}
               disabled={locked}
               onPress={() => { void importFromPhotos(); }}
-              style={({ pressed }) => [styles.sideButton, pressed && styles.pillPressed, locked && styles.locked]}
+              style={({ pressed }) => [styles.sideButton, pressed && styles.pressed, locked && styles.locked]}
             >
-              <Ionicons name="images-outline" size={22} color="#FFFFFF" />
+              <Ionicons name="images-outline" size={20} color="#FFFFFF" />
               <Text style={styles.sideLabel}>Photos</Text>
             </Pressable>
             <Pressable
@@ -448,7 +467,7 @@ export default function ScanScreen() {
               accessibilityState={{ disabled: locked }}
               disabled={locked}
               onPress={openManual}
-              style={({ pressed }) => [styles.sideButton, pressed && styles.pillPressed, locked && styles.locked]}
+              style={({ pressed }) => [styles.sideButton, pressed && styles.pressed, locked && styles.locked]}
             >
               <Ionicons name="create-outline" size={22} color="#FFFFFF" />
               <Text style={styles.sideLabel}>Manual</Text>
@@ -483,19 +502,26 @@ export default function ScanScreen() {
   );
 }
 
+function ViewfinderVignette() {
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <LinearGradient colors={['rgba(5,6,9,0.72)', 'rgba(5,6,9,0)']} style={styles.vignetteTop} />
+      <LinearGradient colors={['rgba(5,6,9,0)', 'rgba(5,6,9,0.78)']} style={styles.vignetteBottom} />
+    </View>
+  );
+}
+
 function Viewfinder() {
   return (
     <View pointerEvents="none" style={styles.viewfinderWrap}>
       <View style={styles.frame}>
-        <View style={styles.hintWrap}>
-          <View style={styles.hint}>
-            <Text style={styles.hintText}>Align receipt inside frame</Text>
-          </View>
-        </View>
         <View style={[styles.corner, styles.cornerTL]} />
         <View style={[styles.corner, styles.cornerTR]} />
         <View style={[styles.corner, styles.cornerBL]} />
         <View style={[styles.corner, styles.cornerBR]} />
+      </View>
+      <View style={styles.hint}>
+        <Text style={styles.hintText}>Align receipt within frame</Text>
       </View>
     </View>
   );
@@ -545,7 +571,7 @@ function firstParam(value: string | string[] | undefined) {
   return trimmed ? trimmed : undefined;
 }
 
-const CORNER = 28;
+const CORNER = 24;
 
 const styles = StyleSheet.create({
   screen: {
@@ -558,7 +584,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: theme.colors.canvas,
+    backgroundColor: luxury.bgCanvas,
   },
   topScrim: {
     position: 'absolute',
@@ -570,34 +596,40 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
+    minHeight: 56,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+    backgroundColor: 'rgba(5, 6, 9, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
-  destinationPill: {
-    maxWidth: '72%',
-    minHeight: 40,
-    paddingHorizontal: 14,
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  destinationChip: {
+    position: 'absolute',
+    alignSelf: 'center',
+    maxWidth: '70%',
+    minHeight: 32,
+    paddingHorizontal: 12,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(20,20,23,0.75)',
+    backgroundColor: 'rgba(5,6,9,0.62)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  destinationText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  torch: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  destinationText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  glassButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(20,20,23,0.75)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -605,13 +637,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,158,11,0.22)',
     borderColor: '#F59E0B',
   },
-  torchSpacer: {
-    width: 44,
-    height: 44,
-  },
-  pillPressed: {
-    opacity: 0.82,
-  },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.92 },
   viewfinderWrap: {
     position: 'absolute',
     top: 0,
@@ -626,60 +652,51 @@ const styles = StyleSheet.create({
     width: '78%',
     height: '58%',
   },
-  hintWrap: {
-    position: 'absolute',
-    top: 12,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 2,
-  },
+  vignetteTop: { position: 'absolute', top: 0, left: 0, right: 0, height: '28%' },
+  vignetteBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '34%' },
   hint: {
+    marginTop: 16,
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
-    backgroundColor: 'rgba(20,20,23,0.72)',
+    backgroundColor: 'rgba(5,6,9,0.62)',
   },
   hintText: {
     color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   corner: {
     position: 'absolute',
     width: CORNER,
     height: CORNER,
-    borderColor: 'rgba(255,255,255,0.92)',
+    borderColor: luxury.accentPrimary,
   },
   cornerTL: {
     top: 0,
     left: 0,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-    borderTopLeftRadius: 14,
+    borderTopWidth: 2.5,
+    borderLeftWidth: 2.5,
   },
   cornerTR: {
     top: 0,
     right: 0,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-    borderTopRightRadius: 14,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
   },
   cornerBL: {
     bottom: 0,
     left: 0,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderBottomLeftRadius: 14,
+    borderBottomWidth: 2.5,
+    borderLeftWidth: 2.5,
   },
   cornerBR: {
     bottom: 0,
     right: 0,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderBottomRightRadius: 14,
+    borderBottomWidth: 2.5,
+    borderRightWidth: 2.5,
   },
   overlay: {
     position: 'absolute',
@@ -738,10 +755,11 @@ const styles = StyleSheet.create({
   permissionCard: {
     paddingHorizontal: 22,
     paddingVertical: 24,
-    borderRadius: 22,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: '#141417',
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
+    backgroundColor: luxury.bgElevated,
     alignItems: 'center',
   },
   permissionTitle: {
@@ -764,13 +782,23 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     minHeight: 48,
     marginTop: 14,
-    borderRadius: 14,
+    borderRadius: 16,
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
+    backgroundColor: luxury.accentPrimary,
+    shadowColor: '#8B95FF',
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  primaryFill: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   primaryLabel: {
-    color: theme.colors.accentText,
+    color: '#050609',
     fontSize: 16,
     fontWeight: '700',
   },
@@ -794,28 +822,28 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-  },
-  bottomScrim: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 168,
+    backgroundColor: 'rgba(5, 6, 9, 0.85)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.10)',
   },
   controls: {
-    paddingTop: 28,
-    paddingBottom: 18,
-    paddingHorizontal: 28,
+    paddingTop: 16,
+    paddingHorizontal: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   sideButton: {
-    width: 76,
+    minWidth: 76,
     minHeight: 64,
+    paddingHorizontal: 12,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   sideLabel: {
     color: '#FFFFFF',
@@ -826,8 +854,8 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.72)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -835,7 +863,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: luxury.accentPrimary,
   },
   shutterPressed: {
     transform: [{ scale: 0.92 }],

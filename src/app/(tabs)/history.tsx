@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -10,6 +11,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AccountSettingsSheet } from '@/components/AccountSettingsSheet';
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
+import { VelorBrand } from '@/components/VelorBrand';
+import { luxury } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup } from '@/services/GroupService';
@@ -443,6 +446,8 @@ export default function HistoryScreen() {
       : `${selectedGroupTitle ?? 'Group'} spend`;
   const visibleCount = ledger.filteredCount;
   const countLabel = `${visibleCount}${hasMore ? '+' : ''} ${visibleCount === 1 && !hasMore ? 'receipt' : 'receipts'}`;
+  const settledVisible = items.reduce((count, item) => count + (item.balance_settled ? 1 : 0), 0);
+  const unsettledVisible = items.length - settledVisible;
 
   function commitSearch(value: string) {
     if (searchTimerRef.current) {
@@ -498,17 +503,35 @@ export default function HistoryScreen() {
 
   const listHeader = (
     <View>
-      <View style={styles.hero}>
-        <Text style={styles.heroLabel}>{heroLabel}</Text>
-        <MoneyText amountMinor={ledger.filteredTotalMinor} size="hero" splitDecimals />
-        <View style={styles.countPill}>
-          {isFiltered ? <View style={styles.countDot} /> : null}
-          <Text style={styles.countText}>{countLabel}</Text>
+      <LinearGradient
+        colors={['#171A26', '#0E1018', '#090A0F']}
+        locations={[0, 0.52, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.hero}
+      >
+        <View style={styles.heroTop}>
+          <Text style={styles.heroLabel}>{heroLabel}</Text>
+          <VelorBrand variant="watermark" opacity={0.28} />
         </View>
-      </View>
+        <MoneyText amountMinor={ledger.filteredTotalMinor} size="hero" splitDecimals figureSize={40} />
+        <View style={styles.metricStrip}>
+          <View style={styles.countPill}>
+            <Text style={styles.countText}>{countLabel}</Text>
+          </View>
+          <View style={styles.metricItem}>
+            <View style={[styles.metricDot, styles.metricSettled]} />
+            <Text style={styles.metricText}>{`${settledVisible} settled`}</Text>
+          </View>
+          <View style={styles.metricItem}>
+            <View style={[styles.metricDot, styles.metricOpen]} />
+            <Text style={styles.metricText}>{`${unsettledVisible} unsettled`}</Text>
+          </View>
+        </View>
+      </LinearGradient>
 
       <View style={[styles.search, isSearchFocused && styles.searchFocused]}>
-        <Ionicons name="search" size={16} color={isSearchFocused ? theme.colors.accent : theme.colors.textMuted} />
+        <Ionicons name="search" size={16} color={isSearchFocused ? luxury.accentPrimary : luxury.textMuted} />
         <TextInput
           accessibilityLabel="Search merchants"
           autoCorrect={false}
@@ -582,18 +605,22 @@ export default function HistoryScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
+        <View style={styles.brandRow}>
+          <VelorBrand variant="header" />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open account settings"
+            hitSlop={10}
+            onPress={() => {
+              hapticImpactLight();
+              setAccountOpen(true);
+            }}
+            style={styles.avatarRing}
+          >
+            <AvatarBadge name={displayName} userId={userId ?? undefined} size={36} />
+          </Pressable>
+        </View>
         <Text accessibilityRole="header" style={styles.title}>History</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open account settings"
-          hitSlop={10}
-          onPress={() => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setAccountOpen(true);
-          }}
-        >
-          <AvatarBadge name={displayName} userId={userId ?? undefined} size={36} />
-        </Pressable>
       </View>
 
       {showSkeleton ? (
@@ -779,7 +806,7 @@ function HistoryEmpty({ onScan }: { onScan: () => void }) {
           <Ionicons name="receipt-outline" size={22} color={theme.colors.accent} />
         </View>
         <Text style={styles.emptyTitle}>No receipts yet</Text>
-        <Text style={styles.emptySubtitle}>Scan your first bill to itemise it and settle the total.</Text>
+        <Text style={styles.emptySubtitle}>Scan a receipt to itemise the bill and settle the total.</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Scan your first bill"
@@ -815,7 +842,7 @@ function HistoryNoMatch({
       <View style={styles.noMatchBadge}>
         <Ionicons name="search" size={18} color={theme.colors.textMuted} />
       </View>
-      <Text style={styles.noMatchTitle}>No matching receipts</Text>
+      <Text style={styles.noMatchTitle}>No matching receipts found.</Text>
       <Text style={styles.noMatchSubtitle}>{detail}</Text>
       <Pressable
         accessibilityRole="button"
@@ -904,7 +931,7 @@ const HistoryRow = memo(function HistoryRow({
           accessibilityRole="button"
           accessibilityLabel={title}
           onPress={() => onOpen(item.id)}
-          style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
         >
           <View style={styles.monogram}>
             <Text style={styles.monogramText}>{title.trim().charAt(0).toUpperCase() || '?'}</Text>
@@ -916,6 +943,7 @@ const HistoryRow = memo(function HistoryRow({
             <View style={styles.metaRow}>
               <Text style={styles.date} numberOfLines={1}>{formatSmartDate(item.created_at)}</Text>
               <View style={[styles.statusPill, item.balance_settled ? styles.statusSettled : styles.statusOpen]}>
+                <View style={[styles.statusDot, item.balance_settled ? styles.metricSettled : styles.metricOpen]} />
                 <Text style={[styles.statusText, item.balance_settled ? styles.statusSettledText : styles.statusOpenText]}>
                   {item.balance_settled ? 'Settled' : 'Unsettled'}
                 </Text>
@@ -923,8 +951,8 @@ const HistoryRow = memo(function HistoryRow({
             </View>
           </View>
           <View style={styles.trail}>
-            <MoneyText amountMinor={item.total_minor} size="md" color={theme.colors.textPrimary} />
-            <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
+            <MoneyText amountMinor={item.total_minor} size="lg" color="#FFFFFF" />
+            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.28)" />
           </View>
         </Pressable>
       </Swipeable>
@@ -942,7 +970,7 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
         hapticSelection();
         onPress();
       }}
-      style={[styles.chip, active ? styles.chipActive : styles.chipInactive]}
+      style={({ pressed }) => [styles.chip, active ? styles.chipActive : styles.chipInactive, pressed && styles.pressed]}
     >
       <Text style={[styles.chipText, active ? styles.chipTextActive : styles.chipTextInactive]} numberOfLines={1}>
         {label}
@@ -952,53 +980,86 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.canvas },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 18,
+  container: { flex: 1, backgroundColor: luxury.bgCanvas },
+  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
+  brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 16,
   },
-  title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
+  avatarRing: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(16,185,129,0.16)',
+  },
+  title: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6, color: luxury.textPrimary },
   scrollContent: { paddingBottom: 32, flexGrow: 1 },
-  hero: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16 },
-  heroLabel: {
-    ...theme.typography.sectionLabel,
-    color: theme.colors.textMuted,
-    marginBottom: 4,
-    fontVariant: ['tabular-nums'],
+  hero: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.11)',
+    borderTopColor: 'rgba(255,255,255,0.16)',
+    padding: 20,
+    overflow: 'hidden',
   },
-  countPill: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  heroLabel: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+    color: 'rgba(255,255,255,0.48)',
+  },
+  metricStrip: {
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.07)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  countPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
-  countDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.accent },
-  countText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: theme.colors.textSecondary, fontVariant: ['tabular-nums'] },
+  countText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: luxury.textPrimary, fontVariant: ['tabular-nums'] },
+  metricItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metricDot: { width: 6, height: 6, borderRadius: 3 },
+  metricSettled: { backgroundColor: '#10B981' },
+  metricOpen: { backgroundColor: '#F59E0B' },
+  metricText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: 'rgba(247,248,250,0.62)', fontVariant: ['tabular-nums'] },
   search: {
     marginHorizontal: 16,
     marginBottom: 12,
-    height: 44,
+    height: 48,
     borderRadius: 14,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: '#07080D',
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: 'rgba(255,255,255,0.08)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
     gap: 8,
   },
-  searchFocused: { borderColor: theme.colors.accentBorder },
+  searchFocused: { borderColor: luxury.borderFocus },
   listDimmed: { opacity: 0.55 },
   searchInput: {
     flex: 1,
@@ -1024,18 +1085,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chipActive: {
-    backgroundColor: theme.colors.accentSubtle,
+    backgroundColor: '#161A2B',
     borderWidth: 1,
-    borderColor: theme.colors.accentBorder,
+    borderColor: 'rgba(139,149,255,0.55)',
+    shadowColor: '#8B95FF',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
   },
   chipInactive: {
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    backgroundColor: luxury.bgElevated,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   chipText: { fontSize: 13 },
-  chipTextActive: { fontWeight: '600', color: theme.colors.accent },
-  chipTextInactive: { fontWeight: '500', color: theme.colors.textSecondary },
+  chipTextActive: { fontWeight: '600', color: '#FFFFFF' },
+  chipTextInactive: { fontWeight: '500', color: 'rgba(247,248,250,0.58)' },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.92 },
   section: { marginHorizontal: 16, marginBottom: 22 },
   sectionBlock: { marginHorizontal: 16 },
   sectionBlockEnd: { marginBottom: 22 },
@@ -1048,60 +1114,60 @@ const styles = StyleSheet.create({
   sectionTitleRow: { maxWidth: '100%', minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
   sectionTitle: {
     flexShrink: 1,
-    ...theme.typography.sectionLabel,
-    color: theme.colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    color: 'rgba(247, 248, 250, 0.42)',
   },
   emptyCard: { marginHorizontal: 16 },
   card: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    backgroundColor: luxury.bgElevated,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
     overflow: 'hidden',
   },
   cardPiece: {
-    backgroundColor: theme.colors.surface,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    marginBottom: 8,
+    backgroundColor: luxury.bgElevated,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
     overflow: 'hidden',
   },
-  cardPieceStart: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopLeftRadius: theme.radius.lg,
-    borderTopRightRadius: theme.radius.lg,
-  },
-  cardPieceEnd: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomLeftRadius: theme.radius.lg,
-    borderBottomRightRadius: theme.radius.lg,
-  },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border, marginLeft: 66 },
+  cardPieceStart: {},
+  cardPieceEnd: {},
+  divider: { height: 0 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    backgroundColor: theme.colors.surface,
+    padding: 14,
+    backgroundColor: luxury.bgElevated,
   },
-  rowPressed: { backgroundColor: theme.colors.surfaceElevated },
   monogram: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surfaceElevated,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#141724',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   monogramText: { color: theme.colors.accent, fontSize: 16, fontWeight: '700' },
   copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 8 },
   nameRow: { flexDirection: 'row' },
-  merchant: { flex: 1, fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
-  date: { flexShrink: 1, fontSize: 13, lineHeight: 18, color: theme.colors.textSecondary },
+  merchant: { flex: 1, fontSize: 15, lineHeight: 20, fontWeight: '600', color: luxury.textPrimary },
+  date: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: luxury.textSecondary },
   metaRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  statusPill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
-  statusSettled: { backgroundColor: 'rgba(16, 185, 129, 0.16)' },
-  statusOpen: { backgroundColor: 'rgba(245, 158, 11, 0.16)' },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusSettled: { backgroundColor: luxury.positiveSoft },
+  statusOpen: { backgroundColor: luxury.warningSoft },
   statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },
   statusSettledText: { color: '#10B981' },
   statusOpenText: { color: '#F59E0B' },
@@ -1139,10 +1205,11 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     paddingVertical: 32,
     paddingHorizontal: 20,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    borderRadius: 18,
+    backgroundColor: luxury.bgElevated,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
     alignItems: 'center',
   },
   noMatchBadge: {

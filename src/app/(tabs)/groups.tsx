@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -8,6 +9,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
 import { Skeleton } from '@/components/skeleton';
+import { VelorBrand } from '@/components/VelorBrand';
+import { luxury } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
@@ -205,15 +208,20 @@ export default function GroupsScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <Text accessibilityRole="header" style={styles.title}>Groups</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="New group"
-          onPress={openModal}
-          style={({ pressed }) => [styles.newPill, pressed && styles.newPillPressed]}
-        >
-          <Text style={styles.newPillText}>+ New</Text>
-        </Pressable>
+        <VelorBrand variant="header" />
+        <View style={styles.titleRow}>
+          <Text accessibilityRole="header" style={styles.title}>Groups</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="New group"
+            onPress={openModal}
+            style={({ pressed }) => [styles.newShadow, pressed && styles.pressedTight]}
+          >
+            <LinearGradient colors={['#9AA3FF', '#7C86FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.newPill}>
+              <Text style={styles.newPillText}>+ New</Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
       </View>
 
       {loadingGroups && groups.length === 0 ? (
@@ -245,79 +253,81 @@ export default function GroupsScreen() {
             )
           ) : null}
           {groups.length > 0 ? <Text style={styles.sectionHeading}>Your groups</Text> : null}
-          <View style={styles.card}>
-            {groups.length === 0 ? (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyBadge}>
-                  <Ionicons name="people-outline" size={22} color={theme.colors.accent} />
-                </View>
-                <Text style={styles.emptyTitle}>No groups yet</Text>
-                <Text style={styles.emptySubtitle}>Use + New to create a group for dinners or trips.</Text>
-              </View>
-            ) : (
-              groups.map((item, index) => {
+          {groups.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <VelorBrand variant="watermark" />
+              <Text style={styles.emptyTitle}>No groups yet</Text>
+              <Text style={styles.emptySubtitle}>Create a group to split itemised bills with friends.</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="New group"
+                onPress={openModal}
+                style={({ pressed }) => [styles.emptyCta, pressed && styles.pressed]}
+              >
+                <Text style={styles.emptyCtaText}>+ New</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.list}>
+              {groups.map((item) => {
                 const summary = summaries[item.id];
                 const isSyncing = item.id.startsWith('temp-');
                 const memberCount = summary?.memberCount ?? 0;
                 const previews = summary?.memberPreviews ?? [];
                 return (
-                  <View key={item.id}>
-                    {index > 0 ? <View style={styles.divider} /> : null}
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={item.name}
-                      onPress={() => {
-                        if (isSyncing) {
-                          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                          return;
-                        }
-                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        router.push({ pathname: '/group/[id]', params: { id: item.id } });
-                      }}
-                      style={({ pressed }) => [styles.row, pressed && styles.rowPressed, isSyncing && styles.rowSyncing]}
-                    >
-                      <View style={styles.iconBadge}>
-                        <Ionicons name="people" size={18} color={theme.colors.accent} />
-                      </View>
-                      <View style={styles.copy}>
-                        <View style={styles.nameRow}>
-                          <Text style={styles.groupName} numberOfLines={1} ellipsizeMode="tail">{item.name}</Text>
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={item.name}
+                    onPress={() => {
+                      if (isSyncing) {
+                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                        return;
+                      }
+                      hapticImpactLight();
+                      router.push({ pathname: '/group/[id]', params: { id: item.id } });
+                    }}
+                    style={({ pressed }) => [styles.groupCard, pressed && styles.pressed, isSyncing && styles.rowSyncing]}
+                  >
+                    <View style={styles.iconBadge}>
+                      <Ionicons name="people" size={18} color={luxury.accentPrimary} />
+                    </View>
+                    <View style={styles.copy}>
+                      <Text style={styles.groupName} numberOfLines={1} ellipsizeMode="tail">{item.name}</Text>
+                      {isSyncing ? (
+                        <Text style={styles.syncing}>Syncing...</Text>
+                      ) : !summary ? (
+                        <Skeleton style={styles.memberSkeleton} />
+                      ) : (
+                        <View style={styles.subtitleRow}>
+                          {previews.length > 0 ? (
+                            <View style={styles.avatarStack}>
+                              {previews.map((member, memberIndex) => (
+                                <View key={member.id} style={[styles.avatarCutout, memberIndex > 0 && styles.avatarOverlap]}>
+                                  <AvatarBadge name={member.display_name} userId={member.id} size={24} />
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                          <Text style={styles.memberCount} numberOfLines={1} ellipsizeMode="tail">
+                            {`${memberCount} ${memberCount === 1 ? 'member' : 'members'}`}
+                          </Text>
                         </View>
-                        {isSyncing ? (
-                          <Text style={styles.syncing}>Syncing...</Text>
-                        ) : !summary ? (
-                          <Skeleton style={styles.memberSkeleton} />
-                        ) : (
-                          <View style={styles.subtitleRow}>
-                            {previews.length > 0 ? (
-                              <View style={styles.avatarStack}>
-                                {previews.map((member, memberIndex) => (
-                                  <View key={member.id} style={[styles.avatarCutout, memberIndex > 0 && styles.avatarOverlap]}>
-                                    <AvatarBadge name={member.display_name} userId={member.id} size={18} />
-                                  </View>
-                                ))}
-                              </View>
-                            ) : null}
-                            <Text style={styles.memberCount} numberOfLines={1} ellipsizeMode="tail">
-                              {`${memberCount} ${memberCount === 1 ? 'member' : 'members'}`}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                      <View style={styles.trail}>
-                        {isSyncing || loadingBalances || !summary ? (
-                          <Skeleton style={styles.balanceSkeleton} />
-                        ) : (
-                          <BalancePill status={summary.status} />
-                        )}
-                        <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-                      </View>
-                    </Pressable>
-                  </View>
+                      )}
+                    </View>
+                    <View style={styles.trail}>
+                      {isSyncing || loadingBalances || !summary ? (
+                        <Skeleton style={styles.balanceSkeleton} />
+                      ) : (
+                        <BalancePill status={summary.status} />
+                      )}
+                      <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.28)" />
+                    </View>
+                  </Pressable>
                 );
-              })
-            )}
-          </View>
+              })}
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -426,13 +436,16 @@ function NetBanner({
 
   if (totalUnsplit > 0) {
     return (
-      <View style={styles.banner}>
+      <View style={[styles.banner, styles.bannerWaiting]}>
         <View style={styles.bannerLeft}>
-          <View style={styles.warningDot} />
-          <Text style={styles.bannerCopy} numberOfLines={1}>
+          <View style={styles.warningHalo}>
+            <View style={styles.warningDot} />
+          </View>
+          <Text style={[styles.bannerCopy, styles.bannerWaitingText]} numberOfLines={1}>
             {`${totalUnsplit} ${totalUnsplit === 1 ? 'bill' : 'bills'} waiting to be split`}
           </Text>
         </View>
+        <Ionicons name="chevron-forward" size={16} color="#F59E0B" />
       </View>
     );
   }
@@ -510,40 +523,63 @@ function BalancePill({ status }: { status: GroupLedgerStatus }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.canvas },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 12,
+  container: { flex: 1, backgroundColor: luxury.bgCanvas },
+  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 8 },
+  titleRow: {
+    marginTop: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
-  title: { ...theme.typography.screenTitle, color: theme.colors.textPrimary },
+  title: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6, color: luxury.textPrimary },
+  newShadow: {
+    borderRadius: 999,
+    shadowColor: '#8B95FF',
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
   newPill: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.accent,
+    borderRadius: 999,
   },
-  newPillPressed: { backgroundColor: theme.colors.accentPressed },
-  newPillText: { fontSize: 14, lineHeight: 18, fontWeight: '700', color: theme.colors.accentText },
+  newPillText: { fontSize: 14, lineHeight: 18, fontWeight: '700', color: '#050609' },
+  pressed: { transform: [{ scale: 0.97 }], opacity: 0.92 },
+  pressedTight: { transform: [{ scale: 0.96 }], opacity: 0.92 },
   loader: { marginTop: 48 },
   scrollContent: { paddingBottom: 32 },
   banner: {
     marginHorizontal: 16,
+    marginTop: 8,
     marginBottom: 20,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    borderRadius: 16,
+    backgroundColor: luxury.bgElevated,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  bannerWaiting: {
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    borderColor: 'rgba(245, 158, 11, 0.24)',
+    borderTopColor: 'rgba(245, 158, 11, 0.24)',
+  },
+  bannerWaitingText: { color: '#FDE68A', fontWeight: '600' },
+  warningHalo: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(245,158,11,0.35)',
   },
   bannerSkeleton: {
     marginHorizontal: 16,
@@ -554,44 +590,50 @@ const styles = StyleSheet.create({
   },
   bannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.positive },
-  warningDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.warning },
+  warningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#F59E0B' },
   clearDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textSecondary },
   neutralDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textMuted },
   bannerCopy: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500', color: theme.colors.textSecondary },
   sectionHeading: {
-    ...theme.typography.sectionLabel,
-    color: theme.colors.textMuted,
-    marginBottom: 8,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    color: 'rgba(247, 248, 250, 0.42)',
+    marginBottom: 10,
     marginLeft: 20,
   },
-  card: {
-    marginHorizontal: 16,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    overflow: 'hidden',
+  list: { paddingHorizontal: 16, gap: 10 },
+  groupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: luxury.bgElevated,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
   },
-  divider: { height: StyleSheet.hairlineWidth, marginLeft: 66, backgroundColor: theme.colors.border },
-  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14 },
-  rowPressed: { backgroundColor: theme.colors.surfaceElevated },
   rowSyncing: { opacity: 0.6 },
   iconBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surfaceElevated,
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#151929',
+    borderWidth: 1,
+    borderColor: 'rgba(139,149,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   copy: { flex: 1, minWidth: 0, marginLeft: 12, marginRight: 10 },
   nameRow: { flexDirection: 'row' },
-  groupName: { flex: 1, fontSize: 16, lineHeight: 21, fontWeight: '600', color: theme.colors.textPrimary },
+  groupName: { fontSize: 16, lineHeight: 21, fontWeight: '700', color: luxury.textPrimary },
   subtitleRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 6 },
   avatarStack: { flexDirection: 'row', alignItems: 'center' },
-  avatarCutout: { borderWidth: 1.5, borderColor: theme.colors.surface, borderRadius: theme.radius.full },
-  avatarOverlap: { marginLeft: -5 },
-  memberCount: { flex: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
+  avatarCutout: { borderWidth: 2, borderColor: luxury.bgElevated, borderRadius: 999 },
+  avatarOverlap: { marginLeft: -6 },
+  memberCount: { flex: 1, fontSize: 12, lineHeight: 16, color: 'rgba(247,248,250,0.52)' },
   memberSkeleton: { width: 96, height: 14, borderRadius: 7, backgroundColor: theme.colors.surfaceElevated },
   syncing: { marginTop: 4, color: theme.colors.accent, fontSize: 12, fontWeight: '600' },
   trail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -603,12 +645,36 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
   },
   pillPositive: { backgroundColor: theme.colors.positiveSubtle },
-  pillWarning: { backgroundColor: theme.colors.warningSubtle },
+  pillWarning: {
+    backgroundColor: 'rgba(245,158,11,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.28)',
+  },
   pillText: { fontSize: 11, lineHeight: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
   pillTextNeutral: { color: theme.colors.textMuted },
   pillTextClear: { color: theme.colors.textSecondary },
   pillTextPositive: { color: theme.colors.positive },
-  pillTextWarning: { color: theme.colors.warning },
+  pillTextWarning: { color: '#F59E0B' },
+  emptyCard: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    backgroundColor: luxury.bgElevated,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
+    alignItems: 'center',
+  },
+  emptyCta: {
+    marginTop: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: luxury.accentPrimary,
+  },
+  emptyCtaText: { fontSize: 14, fontWeight: '700', color: '#050609' },
   emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
   emptyBadge: {
     width: 44,
@@ -627,10 +693,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   modalCard: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.xl,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.borderStrong,
+    backgroundColor: luxury.bgElevated,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+    borderTopColor: luxury.borderHighlight,
     padding: 20,
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
@@ -655,7 +722,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: theme.colors.textPrimary,
   },
-  inputFocused: { borderColor: theme.colors.accentBorder },
+  inputFocused: { borderColor: luxury.borderFocus },
   createButton: {
     height: 52,
     borderRadius: theme.radius.md,

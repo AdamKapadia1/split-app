@@ -11,6 +11,8 @@ type MoneyTextProps = {
   color?: string;
   splitDecimals?: boolean;
   showSign?: boolean;
+  /** Overrides the hero figure size when decimals are split. */
+  figureSize?: number;
 };
 
 const SIZE_STYLE = {
@@ -20,7 +22,7 @@ const SIZE_STYLE = {
   hero: theme.typography.hero,
 };
 
-export function MoneyText({ amountMinor, size = 'md', color, splitDecimals = false, showSign = false }: MoneyTextProps) {
+export function MoneyText({ amountMinor, size = 'md', color, splitDecimals = false, showSign = false, figureSize }: MoneyTextProps) {
   const formatted = showSign && amountMinor > 0 ? `+${formatPence(amountMinor)}` : formatPence(amountMinor);
   const ink = color ?? theme.colors.textPrimary;
 
@@ -35,10 +37,18 @@ export function MoneyText({ amountMinor, size = 'md', color, splitDecimals = fal
         adjustsFontSizeToFit
         minimumFontScale={0.55}
         numberOfLines={1}
-        style={[styles.heroWhole, { color: ink }]}
+        style={[
+          styles.heroWhole,
+          figureSize != null ? { fontSize: figureSize, lineHeight: figureSize + 6 } : null,
+          { color: ink },
+        ]}
       >
         {whole}
-        {fraction ? <Text style={styles.heroFraction}>{fraction}</Text> : null}
+        {fraction ? (
+          <Text style={[styles.heroFraction, figureSize != null ? { fontSize: figureSize, lineHeight: figureSize + 6 } : null]}>
+            {fraction}
+          </Text>
+        ) : null}
       </Text>
     );
   }
@@ -54,13 +64,16 @@ const styles = StyleSheet.create({
   tabular: { fontVariant: ['tabular-nums'] },
   heroWhole: {
     ...theme.typography.hero,
+    fontWeight: '700',
+    letterSpacing: -1.2,
+    color: '#FFFFFF',
     fontVariant: ['tabular-nums'],
   },
   heroFraction: {
     fontSize: 30,
     fontWeight: '600',
-    letterSpacing: -0.8,
-    color: theme.colors.textSecondary,
+    letterSpacing: -1.2,
+    color: 'rgba(255, 255, 255, 0.36)',
     fontVariant: ['tabular-nums'],
   },
 });

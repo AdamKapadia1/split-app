@@ -20,6 +20,11 @@ export function hapticImpactLight() {
   fire(Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light));
 }
 
+/** Capture and other primary hardware controls. */
+export function hapticImpactMedium() {
+  fire(Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium));
+}
+
 /** Confirmation after a nudge is sent or a payment is recorded. */
 export function hapticSuccess() {
   fire(Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
