@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -7,6 +8,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AccountSettingsSheet } from '@/components/AccountSettingsSheet';
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { Skeleton } from '@/components/skeleton';
+import { VelorBrand } from '@/components/VelorBrand';
+import { luxury } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService } from '@/services/GroupService';
@@ -28,13 +31,8 @@ import {
 } from '@/utils/homeBalances';
 import { createTapId } from '@/utils/notifications';
 
-const EMERALD = '#10B981';
-const AMBER = '#F59E0B';
-const CARD = '#141417';
-const BORDER = 'rgba(255, 255, 255, 0.08)';
-const SETTLED = '#71717A';
-const POUNDS = '#FAFAFA';
-const PENCE = '#A1A1AA';
+const CARD = luxury.bgElevated;
+const BORDER = luxury.borderSubtle;
 
 const EMPTY_BALANCES: HomeBalances = {
   owedToYouPence: 0,
@@ -199,18 +197,20 @@ export default function HomeScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
-          <Text accessibilityRole="header" style={styles.title} numberOfLines={1}>{name}</Text>
+        <View style={styles.topRow}>
+          <VelorBrand variant="header" />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open account settings"
+            hitSlop={10}
+            onPress={() => openAccount(false)}
+            style={styles.avatarRing}
+          >
+            <AvatarBadge name={displayName || name} userId={userId ?? undefined} size={40} />
+          </Pressable>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open account settings"
-          hitSlop={10}
-          onPress={() => openAccount(false)}
-        >
-          <AvatarBadge name={displayName || name} userId={userId ?? undefined} size={40} />
-        </Pressable>
+        <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
+        <Text accessibilityRole="header" style={styles.title} numberOfLines={1}>{name}</Text>
       </View>
 
       {isInitialLoading && feed === null ? (
@@ -365,31 +365,38 @@ export default function HomeScreen() {
                     </Pressable>
                   </View>
                 ) : (
-                  recent.map((receipt) => (
-                    <Pressable
-                      key={receipt.id}
-                      accessibilityRole="button"
-                      accessibilityLabel={merchantLabel(receipt)}
-                      onPress={() => {
-                        hapticImpactLight();
-                        router.push({ pathname: '/receipt/[id]', params: { id: receipt.id } });
-                      }}
-                      style={({ pressed }) => [styles.activityCard, pressed && styles.cardPressed]}
-                    >
-                      <View style={styles.activityCopy}>
-                        <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
-                        <View style={styles.activityMetaRow}>
-                          <Text style={styles.activityMeta} numberOfLines={1}>
-                            {formatSmartDate(receipt.createdAt)}
-                            {' · '}
-                            {receipt.groupName?.trim() || 'Personal'}
-                          </Text>
-                          <BalanceStatusPill settled={isReceiptBalanceSettled(toBalanceReceipt(receipt))} />
+                  recent.map((receipt) => {
+                    const settled = isReceiptBalanceSettled(toBalanceReceipt(receipt));
+                    return (
+                      <Pressable
+                        key={receipt.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={merchantLabel(receipt)}
+                        onPress={() => {
+                          hapticImpactLight();
+                          router.push({ pathname: '/receipt/[id]', params: { id: receipt.id } });
+                        }}
+                        style={({ pressed }) => [styles.activityCard, pressed && styles.cardPressed]}
+                      >
+                        <View style={styles.activityIcon}>
+                          <Ionicons name="receipt-outline" size={18} color={luxury.textPrimary} />
                         </View>
-                      </View>
-                      <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
-                    </Pressable>
-                  ))
+                        <View style={styles.activityCopy}>
+                          <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
+                          <View style={styles.activityMetaRow}>
+                            <Text style={styles.activityMeta} numberOfLines={1}>
+                              {formatSmartDate(receipt.createdAt)}
+                              {' · '}
+                              {receipt.groupName?.trim() || 'Personal'}
+                            </Text>
+                            <BalanceStatusPill settled={settled} />
+                          </View>
+                        </View>
+                        <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
+                        <Ionicons name="chevron-forward" size={16} color={luxury.textMuted} />
+                      </Pressable>
+                    );
+                  })
                 )}
               </View>
             </>
@@ -421,16 +428,25 @@ export default function HomeScreen() {
 
 function HeroCard({ balances }: { balances: HomeBalances }) {
   const parts = formatPenceParts(Math.abs(balances.netPence));
-  const statusColor = balances.status === 'owed' ? EMERALD : balances.status === 'owes' ? AMBER : SETTLED;
+  const settled = balances.status === 'settled';
   const statusLabel = balances.status === 'owed' ? "YOU'RE OWED" : balances.status === 'owes' ? 'YOU OWE' : 'ALL SETTLED UP';
 
   return (
-    <View style={styles.hero}>
-      <Text style={[styles.heroStatus, { color: statusColor }]}>{statusLabel}</Text>
-      <Text
-        accessibilityLabel={poundsLabel(balances.netPence)}
-        style={styles.heroAmount}
-      >
+    <LinearGradient
+      colors={['#171A26', '#0D0F16', '#090A0F']}
+      locations={[0, 0.55, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.hero}
+    >
+      <View style={styles.heroTop}>
+        <View style={[styles.heroStatus, settled ? styles.heroStatusSettled : styles.heroStatusOpen]}>
+          <View style={[styles.statusDot, { backgroundColor: settled ? luxury.positive : luxury.warning }]} />
+          <Text style={[styles.heroStatusText, { color: settled ? luxury.positive : luxury.warning }]}>{statusLabel}</Text>
+        </View>
+        <VelorBrand variant="watermark" />
+      </View>
+      <Text accessibilityLabel={poundsLabel(balances.netPence)} style={styles.heroAmount}>
         <Text style={styles.heroPounds}>{`£${parts.pounds}`}</Text>
         <Text style={styles.heroPence}>{parts.pence}</Text>
       </Text>
@@ -451,7 +467,7 @@ function HeroCard({ balances }: { balances: HomeBalances }) {
           <Text style={[styles.heroPillAmount, styles.amountOwe]}>{poundsLabel(balances.youOwePence)}</Text>
         </View>
       </View>
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -466,6 +482,7 @@ function QuickAction({
   tint: string;
   onPress: () => void;
 }) {
+  const primary = label === 'Scan Bill';
   return (
     <Pressable
       accessibilityRole="button"
@@ -478,8 +495,8 @@ function QuickAction({
     >
       {({ pressed }) => (
         <>
-          <View style={[styles.actionCircle, label === 'Scan Bill' && styles.actionCirclePrimary, pressed && styles.cardPressed]}>
-            <Ionicons name={icon} size={22} color={tint} />
+          <View style={[styles.actionCircle, primary && styles.actionCirclePrimary, pressed && styles.actionPressed]}>
+            <Ionicons name={icon} size={22} color={primary ? luxury.accentPrimary : tint} />
           </View>
           <Text style={styles.actionLabel}>{label}</Text>
         </>
@@ -526,7 +543,7 @@ function AttentionRow({
             style={[styles.actionPill, nudged && styles.actionPillDone]}
           >
             {busy ? (
-              <ActivityIndicator color={POUNDS} size="small" />
+              <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
               <Text style={[styles.actionPillText, nudged && styles.actionPillTextDone]}>{nudged ? 'Nudged' : 'Nudge'}</Text>
             )}
@@ -549,6 +566,7 @@ function AttentionRow({
 function BalanceStatusPill({ settled }: { settled: boolean }) {
   return (
     <View style={[styles.statusPill, settled ? styles.statusSettled : styles.statusOpen]}>
+      <View style={[styles.statusDot, { backgroundColor: settled ? luxury.positive : luxury.warning }]} />
       <Text style={[styles.statusText, settled ? styles.statusSettledText : styles.statusOpenText]}>
         {settled ? 'Settled' : 'Unsettled'}
       </Text>
@@ -574,72 +592,110 @@ function HomeSkeleton() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.canvas },
+  container: { flex: 1, backgroundColor: luxury.bgCanvas },
   header: {
     paddingHorizontal: 20,
     paddingTop: 8,
-    paddingBottom: 12,
+    paddingBottom: 8,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+  },
+  avatarRing: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: luxury.borderHighlight,
+  },
+  greeting: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    color: luxury.textMuted,
+    marginBottom: 4,
+  },
+  title: { fontSize: 26, lineHeight: 32, fontWeight: '700', letterSpacing: -0.5, color: luxury.textPrimary },
+  scroll: { paddingBottom: 28 },
+  hero: {
+    marginHorizontal: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.11)',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 4,
+    overflow: 'hidden',
+  },
+  heroTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
-  headerCopy: { flex: 1, minWidth: 0 },
-  greeting: {
-    ...theme.typography.sectionLabel,
-    color: theme.colors.textMuted,
-    marginBottom: 2,
-  },
-  title: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6, color: theme.colors.textPrimary },
-  scroll: { paddingBottom: 28 },
-  hero: {
-    marginHorizontal: 16,
-    backgroundColor: CARD,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: BORDER,
-    paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 8,
-  },
   heroStatus: {
-    ...theme.typography.sectionLabel,
-    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  heroAmount: { fontVariant: ['tabular-nums'] },
-  heroPounds: {
-    fontSize: 42,
-    lineHeight: 48,
+  heroStatusSettled: { backgroundColor: luxury.positiveSoft },
+  heroStatusOpen: { backgroundColor: luxury.warningSoft },
+  heroStatusText: {
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: '700',
-    letterSpacing: -1.4,
-    color: POUNDS,
+    letterSpacing: 1.2,
+  },
+  heroAmount: {
+    marginTop: 18,
+    fontSize: 44,
+    lineHeight: 50,
+    letterSpacing: -1,
+    fontVariant: ['tabular-nums'],
+  },
+  heroPounds: {
+    fontSize: 44,
+    lineHeight: 50,
+    fontWeight: '700',
+    letterSpacing: -1,
+    color: '#FFFFFF',
     fontVariant: ['tabular-nums'],
   },
   heroPence: {
-    fontSize: 28,
-    lineHeight: 48,
-    fontWeight: '600',
-    letterSpacing: -0.6,
-    color: PENCE,
+    fontSize: 44,
+    lineHeight: 50,
+    fontWeight: '500',
+    letterSpacing: -1,
+    color: 'rgba(255,255,255,0.38)',
     fontVariant: ['tabular-nums'],
   },
   heroSplit: {
-    marginTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: BORDER,
+    marginTop: 18,
+    borderTopWidth: 1,
+    borderTopColor: luxury.borderSubtle,
     flexDirection: 'row',
     alignItems: 'stretch',
   },
   heroPill: { flex: 1, paddingVertical: 14, gap: 4 },
   heroPillLabel: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  heroDivider: { width: StyleSheet.hairlineWidth, backgroundColor: BORDER, marginVertical: 12 },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  dotOwed: { backgroundColor: EMERALD },
-  dotOwe: { backgroundColor: AMBER },
-  heroPillCaption: { fontSize: 12, lineHeight: 16, fontWeight: '500', color: theme.colors.textSecondary },
-  heroPillAmount: { fontSize: 16, lineHeight: 21, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  amountOwed: { color: EMERALD },
-  amountOwe: { color: AMBER },
+  heroDivider: { width: 1, backgroundColor: luxury.borderSubtle, marginVertical: 12 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  dotOwed: { backgroundColor: luxury.positive },
+  dotOwe: { backgroundColor: luxury.warning },
+  heroPillCaption: { fontSize: 12, lineHeight: 16, fontWeight: '500', color: luxury.textSecondary },
+  heroPillAmount: { fontSize: 17, lineHeight: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  amountOwed: { color: luxury.positive },
+  amountOwe: { color: luxury.warning },
   banner: {
     marginHorizontal: 16,
     marginTop: 12,
@@ -687,25 +743,31 @@ const styles = StyleSheet.create({
   },
   action: { flex: 1, alignItems: 'center' },
   actionCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 60,
+    height: 60,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#1C1C21',
+    backgroundColor: '#10121A',
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: 'rgba(255,255,255,0.09)',
   },
   actionCirclePrimary: {
-    backgroundColor: 'rgba(129, 140, 248, 0.16)',
-    borderColor: 'rgba(16, 185, 129, 0.35)',
+    backgroundColor: '#151828',
+    borderColor: 'rgba(139,149,255,0.45)',
+    shadowColor: '#8B95FF',
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
+  actionPressed: { transform: [{ scale: 0.95 }] },
   actionLabel: {
     marginTop: 8,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '500',
-    color: theme.colors.textSecondary,
+    color: luxury.textSecondary,
     textAlign: 'center',
   },
   section: { marginTop: 28, paddingHorizontal: 16 },
@@ -716,7 +778,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     gap: 8,
   },
-  sectionLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted },
+  sectionLabel: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    color: luxury.textMuted,
+  },
   countBadge: {
     minWidth: 20,
     height: 20,
@@ -730,7 +799,7 @@ const styles = StyleSheet.create({
   },
   countText: { fontSize: 11, lineHeight: 14, fontWeight: '700', color: theme.colors.textPrimary, fontVariant: ['tabular-nums'] },
   seeAll: { marginLeft: 'auto' },
-  seeAllText: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: theme.colors.accent },
+  seeAllText: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: luxury.accentPrimary },
   attentionCard: {
     backgroundColor: CARD,
     borderRadius: 16,
@@ -747,7 +816,7 @@ const styles = StyleSheet.create({
   attentionTitle: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: theme.colors.textPrimary },
   attentionMeta: { marginTop: 2, fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
   attentionTrail: { alignItems: 'flex-end', gap: 6 },
-  attentionAmount: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: POUNDS, fontVariant: ['tabular-nums'] },
+  attentionAmount: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: '#FFFFFF', fontVariant: ['tabular-nums'] },
   actionPill: {
     minWidth: 72,
     minHeight: 30,
@@ -761,29 +830,47 @@ const styles = StyleSheet.create({
   actionPillText: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: theme.colors.accentText },
   actionPillTextDone: { color: theme.colors.textMuted },
   activityCard: {
-    backgroundColor: CARD,
-    borderRadius: 16,
+    backgroundColor: luxury.bgElevated,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: BORDER,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    borderColor: luxury.borderSubtle,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  cardPressed: { backgroundColor: '#1C1C21' },
+  cardPressed: { backgroundColor: luxury.bgElevatedHigh },
+  activityIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#151822',
+    borderWidth: 1,
+    borderColor: luxury.borderSubtle,
+  },
   activityCopy: { flex: 1, minWidth: 0 },
-  activityTitle: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
+  activityTitle: { fontSize: 15, lineHeight: 20, fontWeight: '600', color: luxury.textPrimary },
   activityMetaRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  activityMeta: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
-  statusPill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
-  statusSettled: { backgroundColor: 'rgba(16, 185, 129, 0.16)' },
-  statusOpen: { backgroundColor: 'rgba(245, 158, 11, 0.16)' },
+  activityMeta: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: luxury.textSecondary },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusSettled: { backgroundColor: luxury.positiveSoft },
+  statusOpen: { backgroundColor: luxury.warningSoft },
   statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },
-  statusSettledText: { color: '#10B981' },
-  statusOpenText: { color: '#F59E0B' },
-  activityAmount: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: POUNDS, fontVariant: ['tabular-nums'] },
+  statusSettledText: { color: luxury.positive },
+  statusOpenText: { color: luxury.warning },
+  activityAmount: { fontSize: 16, lineHeight: 20, fontWeight: '700', color: '#FFFFFF', fontVariant: ['tabular-nums'] },
   emptyCard: {
     backgroundColor: CARD,
     borderRadius: 16,

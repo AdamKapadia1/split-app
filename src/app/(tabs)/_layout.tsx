@@ -1,12 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { StyleSheet } from 'react-native';
 
-import { theme } from '@/theme/theme';
+import { luxury } from '@/constants/theme';
 import { hapticSelection } from '@/utils/haptics';
 
 function tabIconColor(color: unknown) {
-  return typeof color === 'string' ? color : theme.colors.textMuted;
+  return typeof color === 'string' ? color : luxury.textMuted;
 }
 
 export default function TabLayout() {
@@ -21,15 +20,15 @@ export default function TabLayout() {
         headerShown: false,
         tabBarHideOnKeyboard: true,
         tabBarStyle: {
-          backgroundColor: theme.colors.canvas,
-          borderTopColor: theme.colors.border,
-          borderTopWidth: StyleSheet.hairlineWidth,
+          backgroundColor: '#06070B',
+          borderTopColor: 'rgba(255,255,255,0.08)',
+          borderTopWidth: 1,
           elevation: 0,
           shadowOpacity: 0,
           paddingTop: 6,
         },
-        tabBarActiveTintColor: theme.colors.accent,
-        tabBarInactiveTintColor: theme.colors.textMuted,
+        tabBarActiveTintColor: luxury.accentPrimary,
+        tabBarInactiveTintColor: 'rgba(255,255,255,0.38)',
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',

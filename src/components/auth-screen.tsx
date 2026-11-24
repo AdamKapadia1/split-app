@@ -1,25 +1,28 @@
-import { useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { NightScreen } from '@/components/night-screen';
-import { APP_NAME, APP_TAGLINE } from '@/constants/brand';
-import { Colors, Spacing } from '@/constants/theme';
-import { mediumHaptic, tickHaptic } from '@/lib/haptics';
+import { VelorBrand } from '@/components/VelorBrand';
+import { APP_NAME } from '@/constants/brand';
+import { luxury } from '@/constants/theme';
+import { mediumHaptic, pulseHaptic, tickHaptic } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
-import { theme } from '@/theme/theme';
 
 type Mode = 'sign-in' | 'create';
+type Field = 'email' | 'password' | null;
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
@@ -29,6 +32,7 @@ export function AuthScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [focused, setFocused] = useState<Field>(null);
 
   function choose(next: Mode) {
     if (next === mode || busy) {
@@ -89,76 +93,125 @@ export function AuthScreen() {
   }
 
   const title = mode === 'sign-in' ? 'Welcome back' : 'Create your account';
+  const subtitle = mode === 'sign-in'
+    ? 'Sign in to host a split, or join one you were sent.'
+    : 'Open an account to itemise a bill and settle it.';
   const action = mode === 'sign-in' ? 'Sign In' : 'Create Account';
 
   return (
-    <NightScreen>
+    <View style={styles.canvas}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(139,149,255,0.14)', 'rgba(139,149,255,0.05)', 'rgba(5,6,9,0)']}
+        locations={[0, 0.42, 1]}
+        style={styles.glow}
+      />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill}>
-        <View
-          style={[
-            styles.content,
-            { paddingTop: insets.top + Spacing.five, paddingBottom: Math.max(insets.bottom, Spacing.four) },
-          ]}>
-          <Text style={styles.kicker}>{APP_NAME}</Text>
-          <Text style={styles.tagline}>{APP_TAGLINE}</Text>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>Sign in to host a split, or join one you were sent.</Text>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingTop: insets.top + 28, paddingBottom: Math.max(insets.bottom, 16) + 56 },
+          ]}
+        >
+          <BrandEntrance>
+            <VelorBrand variant="hero" />
+          </BrandEntrance>
 
-          <View style={styles.toggle}>
-            <Toggle label="Sign In" selected={mode === 'sign-in'} onPress={() => choose('sign-in')} />
-            <Toggle label="Create Account" selected={mode === 'create'} onPress={() => choose('create')} />
-          </View>
+          <View style={styles.card}>
+            <View style={styles.cardRim} />
+            <Text style={styles.title}>{title}</Text>
+            <Text style={styles.subtitle}>{subtitle}</Text>
 
-          <TextInput
-            accessibilityLabel="Email"
-            autoCapitalize="none"
-            autoComplete="email"
-            autoCorrect={false}
-            keyboardType="email-address"
-            placeholder="Email"
-            placeholderTextColor={theme.colors.textMuted}
-            selectionColor={theme.colors.accent}
-            textContentType="emailAddress"
-            value={email}
-            onChangeText={setEmail}
-            style={styles.input}
-          />
-          <TextInput
-            accessibilityLabel="Password"
-            autoCapitalize="none"
-            autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
-            autoCorrect={false}
-            placeholder="Password"
-            placeholderTextColor={theme.colors.textMuted}
-            selectionColor={theme.colors.accent}
-            secureTextEntry
-            textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
-            value={password}
-            onChangeText={setPassword}
-            style={styles.input}
-          />
-
-          {error ? <Text style={styles.error}>{error}</Text> : null}
-          {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel={action}
-            accessibilityState={{ disabled: busy, busy }}
-            activeOpacity={0.85}
-            disabled={busy}
-            onPress={() => {
-              void submit();
-            }}
-            style={[styles.buttonPress, busy && styles.buttonBusy]}>
-            <View style={styles.button}>
-              {busy ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.buttonLabel}>{action}</Text>}
+            <View style={styles.toggle}>
+              <Toggle label="Sign In" selected={mode === 'sign-in'} onPress={() => choose('sign-in')} />
+              <Toggle label="Create Account" selected={mode === 'create'} onPress={() => choose('create')} />
             </View>
-          </TouchableOpacity>
-        </View>
+
+            <TextInput
+              accessibilityLabel="Email"
+              autoCapitalize="none"
+              autoComplete="email"
+              autoCorrect={false}
+              keyboardType="email-address"
+              placeholder="Email"
+              placeholderTextColor={luxury.textMuted}
+              selectionColor={luxury.accentPrimary}
+              textContentType="emailAddress"
+              value={email}
+              onChangeText={setEmail}
+              onFocus={() => setFocused('email')}
+              onBlur={() => setFocused((current) => (current === 'email' ? null : current))}
+              style={[styles.input, focused === 'email' && styles.inputFocused]}
+            />
+            <TextInput
+              accessibilityLabel="Password"
+              autoCapitalize="none"
+              autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
+              autoCorrect={false}
+              placeholder="Password"
+              placeholderTextColor={luxury.textMuted}
+              selectionColor={luxury.accentPrimary}
+              secureTextEntry
+              textContentType={mode === 'sign-in' ? 'password' : 'newPassword'}
+              value={password}
+              onChangeText={setPassword}
+              onFocus={() => setFocused('password')}
+              onBlur={() => setFocused((current) => (current === 'password' ? null : current))}
+              style={[styles.input, focused === 'password' && styles.inputFocused]}
+            />
+
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={action}
+              accessibilityState={{ disabled: busy, busy }}
+              disabled={busy}
+              onPressIn={() => {
+                if (!busy) pulseHaptic();
+              }}
+              onPress={() => {
+                void submit();
+              }}
+              style={({ pressed }) => [styles.ctaShadow, pressed && !busy && styles.ctaPressed, busy && styles.ctaBusy]}
+            >
+              <LinearGradient
+                colors={['#9AA3FF', '#7C86FF']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.cta}
+              >
+                {busy ? <ActivityIndicator color="#050609" /> : <Text style={styles.ctaLabel}>{action}</Text>}
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
-    </NightScreen>
+
+      <View pointerEvents="none" style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <Ionicons name="lock-closed" size={11} color={luxury.textMuted} />
+        <Text style={styles.footerText}>{`Encrypted UK settlements · Powered by ${APP_NAME}`}</Text>
+      </View>
+    </View>
   );
+}
+
+function BrandEntrance({ children }: { children: ReactNode }) {
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    progress.value = withTiming(1, { duration: 450, easing: Easing.out(Easing.cubic) });
+  }, [progress]);
+
+  const style = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * 10 }],
+  }));
+
+  return <Animated.View style={style}>{children}</Animated.View>;
 }
 
 function Toggle({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
@@ -167,60 +220,74 @@ function Toggle({ label, selected, onPress }: { label: string; selected: boolean
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={onPress}
-      style={[styles.toggleItem, selected && styles.toggleItemSelected]}>
+      style={[styles.toggleItem, selected && styles.toggleItemSelected]}
+    >
       <Text style={[styles.toggleLabel, selected && styles.toggleLabelSelected]}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  fill: {
+  canvas: {
     flex: 1,
+    backgroundColor: luxury.bgCanvas,
   },
-  content: {
-    flex: 1,
+  fill: { flex: 1 },
+  glow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '46%',
+  },
+  scroll: {
+    flexGrow: 1,
     width: '100%',
     maxWidth: 440,
     alignSelf: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.three,
+    paddingHorizontal: 20,
   },
-  kicker: {
-    color: theme.colors.accent,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 2.4,
+  card: {
+    marginTop: 36,
+    backgroundColor: luxury.bgElevated,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+    padding: 20,
+    overflow: 'hidden',
+    gap: 12,
   },
-  tagline: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 20,
-    letterSpacing: -0.1,
-    marginTop: -8,
+  cardRim: {
+    position: 'absolute',
+    top: 0,
+    left: 16,
+    right: 16,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.16)',
   },
   title: {
-    color: Colors.text,
-    fontSize: 34,
-    lineHeight: 40,
-    fontWeight: '700',
-    letterSpacing: -0.8,
+    marginTop: 4,
+    color: luxury.textPrimary,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '600',
+    letterSpacing: -0.3,
   },
   subtitle: {
-    color: Colors.textSecondary,
-    fontSize: 16,
-    lineHeight: 24,
-    letterSpacing: -0.1,
-    marginBottom: Spacing.two,
+    marginTop: -4,
+    color: luxury.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
   },
   toggle: {
     flexDirection: 'row',
-    gap: Spacing.two,
+    gap: 4,
+    marginTop: 4,
     padding: 4,
     borderRadius: 16,
-    backgroundColor: theme.colors.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    backgroundColor: '#06070B',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   toggleItem: {
     flex: 1,
@@ -228,66 +295,84 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
   },
   toggleItemSelected: {
-    backgroundColor: theme.colors.accentSubtle,
-    borderWidth: 1,
-    borderColor: theme.colors.accentBorder,
+    backgroundColor: '#181C2B',
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: 'rgba(255,255,255,0.16)',
   },
   toggleLabel: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.1,
+    color: luxury.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
   },
   toggleLabelSelected: {
-    color: theme.colors.accent,
+    color: luxury.textPrimary,
   },
   input: {
-    minHeight: 56,
-    borderRadius: 16,
-    paddingHorizontal: Spacing.three,
-    backgroundColor: theme.colors.canvas,
+    height: 52,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    backgroundColor: '#07080D',
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    color: Colors.text,
+    borderColor: luxury.borderSubtle,
+    color: luxury.textPrimary,
     fontSize: 16,
-    letterSpacing: -0.2,
+  },
+  inputFocused: {
+    borderColor: luxury.borderFocus,
   },
   error: {
-    color: theme.colors.danger,
+    color: '#F87171',
     fontSize: 14,
     lineHeight: 20,
   },
   notice: {
-    color: Colors.textSecondary,
+    color: luxury.textSecondary,
     fontSize: 14,
     lineHeight: 20,
   },
-  buttonPress: {
-    marginTop: Spacing.two,
-    borderRadius: 999,
-    shadowColor: theme.colors.accent,
+  ctaShadow: {
+    marginTop: 4,
+    borderRadius: 16,
+    shadowColor: '#8B95FF',
     shadowOpacity: 0.28,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    elevation: 8,
   },
-  buttonBusy: {
-    opacity: 0.7,
+  ctaPressed: {
+    transform: [{ scale: 0.98 }],
   },
-  button: {
-    minHeight: 56,
-    borderRadius: theme.radius.md,
+  ctaBusy: { opacity: 0.72 },
+  cta: {
+    height: 52,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Spacing.four,
-    backgroundColor: theme.colors.accent,
   },
-  buttonLabel: {
-    color: theme.colors.accentText,
-    fontSize: 17,
+  ctaLabel: {
+    color: '#050609',
+    fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.2,
+  },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingTop: 10,
+  },
+  footerText: {
+    fontSize: 11,
+    lineHeight: 14,
+    color: luxury.textMuted,
   },
 });
