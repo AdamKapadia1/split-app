@@ -25,9 +25,10 @@ type AppLockGateProps = {
   active: boolean;
   userId: string | null;
   children: ReactNode;
+  onReady?: () => void;
 };
 
-export function AppLockGate({ active, userId, children }: AppLockGateProps) {
+export function AppLockGate({ active, userId, children, onReady }: AppLockGateProps) {
   const [locked, setLocked] = useState(isSessionLocked);
   const gateKey = active ? (userId ?? 'session') : 'signed-out';
   const [seenKey, setSeenKey] = useState(gateKey);
@@ -39,6 +40,11 @@ export function AppLockGate({ active, userId, children }: AppLockGateProps) {
   }
 
   useEffect(() => subscribeSessionLock(setLocked), []);
+
+  useEffect(() => {
+    if (active && !checked) return;
+    onReady?.();
+  }, [active, checked, onReady]);
 
   useEffect(() => {
     if (!active) return;

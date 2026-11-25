@@ -9,7 +9,6 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "bundleIdentifier": "com.adamkapadia.splitapp",
-      "icon": "./assets/expo.icon",
       "config": {
         "usesNonExemptEncryption": false
       },
@@ -17,9 +16,10 @@
         "LSApplicationQueriesSchemes": [
           "sms"
         ],
-        "NSFaceIDUsageDescription": "Velor uses Face ID to sign you in quickly and protect your bills.",
-        "NSCameraUsageDescription": "Velor uses your camera to scan itemised receipts accurately.",
-        "NSPhotoLibraryUsageDescription": "Velor uses your photo library so you can import itemised receipts.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Velor uses Face ID to unlock your account and protect your split balances.",
+        "NSCameraUsageDescription": "Velor uses your camera to scan itemised receipts for splitting bills.",
+        "NSPhotoLibraryUsageDescription": "Velor accesses your photo library so you can import receipt photos to split.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false
         }
@@ -57,10 +57,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#050609",
+        "foregroundImage": "./assets/images/splash-icon.png"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -73,7 +71,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Velor uses your camera to scan itemised receipts accurately.",
+          "cameraPermission": "Velor uses your camera to scan itemised receipts for splitting bills.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
@@ -81,16 +79,21 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Velor uses your photo library so you can import itemised receipts.",
+          "photosPermission": "Velor accesses your photo library so you can import receipt photos to split.",
           "microphonePermission": false
         }
       ],
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#09090B",
+          "backgroundColor": "#050609",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "dark": {
+            "image": "./assets/images/splash-icon.png",
+            "backgroundColor": "#050609"
+          }
         }
       ],
       "expo-secure-store",

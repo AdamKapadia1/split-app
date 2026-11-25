@@ -1,14 +1,15 @@
 import * as Sentry from '@sentry/react-native';
 import { DarkTheme, Stack, ThemeProvider, useRouter } from 'expo-router';
+import * as Font from 'expo-font';
 import * as Notifications from 'expo-notifications';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { AppLockGate } from '@/components/AppLockGate';
-import { NightScreen } from '@/components/night-screen';
 import { PrivacyShield } from '@/components/PrivacyShield';
 import { Colors } from '@/constants/theme';
 import { theme } from '@/theme/theme';
@@ -17,6 +18,11 @@ import { registerForPushNotificationsAsync } from '@/services/NotificationServic
 import { logger } from '@/utils/logger';
 import { receiptIdFromNotificationData } from '@/utils/notifications';
 import { initSentry, setSentryUser } from '@/utils/sentry';
+
+initSentry();
+
+SplashScreen.setOptions({ duration: 300, fade: true });
+SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 const AppTheme = {
   ...DarkTheme,
@@ -48,6 +54,36 @@ function RootLayout() {
 function RootNavigator() {
   const { session, ready } = useSupabaseSession();
   const userId = session?.user.id ?? null;
+  const [fontsReady, setFontsReady] = useState(false);
+  const [lockReady, setLockReady] = useState(false);
+  const splashHidden = useRef(false);
+  const markLockReady = useCallback(() => {
+    setLockReady(true);
+  }, []);
+  const appReady = fontsReady && ready && lockReady;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFonts() {
+      try {
+        await Font.loadAsync({});
+      } catch {
+        // A failed face must not pin the splash; system fonts remain usable.
+      } finally {
+        if (!cancelled) setFontsReady(true);
+      }
+    }
+    void loadFonts();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!appReady || splashHidden.current) return;
+    splashHidden.current = true;
+    SplashScreen.hideAsync().catch(() => undefined);
+  }, [appReady]);
 
   useEffect(() => {
     setSentryUser(userId);
@@ -59,38 +95,38 @@ function RootNavigator() {
   }, [userId]);
 
   if (!ready) {
-    return (
-      <NightScreen>
-        <View style={styles.loading}>
-          <ActivityIndicator color={theme.colors.accent} />
-        </View>
-      </NightScreen>
-    );
+    return <View style={styles.boot} />;
   }
 
   return (
-    <AppLockGate active={session !== null} userId={userId}>
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        contentStyle: { backgroundColor: Colors.background },
-      }}>
-      <Stack.Protected guard={session !== null}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="receipt/[id]" />
-        <Stack.Screen
-          name="group/[id]"
-          options={{
-            headerShown: false,
-            animation: 'slide_from_right',
-          }}
-        />
-      </Stack.Protected>
-      <Stack.Protected guard={session === null}>
-        <Stack.Screen name="sign-in" />
-      </Stack.Protected>
-    </Stack>
-    <SettlementNudgeLinks userId={userId} />
+    <AppLockGate active={session !== null} userId={userId} onReady={markLockReady}>
+      {appReady ? (
+        <>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: Colors.background },
+            }}>
+            <Stack.Protected guard={session !== null}>
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="receipt/[id]" />
+              <Stack.Screen
+                name="group/[id]"
+                options={{
+                  headerShown: false,
+                  animation: 'slide_from_right',
+                }}
+              />
+            </Stack.Protected>
+            <Stack.Protected guard={session === null}>
+              <Stack.Screen name="sign-in" />
+            </Stack.Protected>
+          </Stack>
+          <SettlementNudgeLinks userId={userId} />
+        </>
+      ) : (
+        <View style={styles.boot} />
+      )}
     </AppLockGate>
   );
 }
@@ -134,15 +170,9 @@ function SettlementNudgeLinks({ userId }: { userId: string | null }) {
   return null;
 }
 
-initSentry();
-
 export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.canvas },
-  loading: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  boot: { flex: 1, backgroundColor: '#050609' },
 });
