@@ -5,7 +5,7 @@ import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
@@ -95,7 +95,11 @@ function RootNavigator() {
   }, [userId]);
 
   if (!ready) {
-    return <View style={styles.boot} />;
+    return (
+      <View style={styles.boot}>
+        <ActivityIndicator color="#8B95FF" />
+      </View>
+    );
   }
 
   return (
@@ -125,7 +129,9 @@ function RootNavigator() {
           <SettlementNudgeLinks userId={userId} />
         </>
       ) : (
-        <View style={styles.boot} />
+        <View style={styles.boot}>
+          <ActivityIndicator color="#8B95FF" />
+        </View>
       )}
     </AppLockGate>
   );
@@ -174,5 +180,10 @@ export default Sentry.wrap(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.canvas },
-  boot: { flex: 1, backgroundColor: '#050609' },
+  boot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#050609',
+  },
 });
