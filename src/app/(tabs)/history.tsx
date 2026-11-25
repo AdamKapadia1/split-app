@@ -13,6 +13,7 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
 import { VelorBrand } from '@/components/VelorBrand';
 import { luxury } from '@/constants/theme';
+import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup } from '@/services/GroupService';
@@ -61,16 +62,6 @@ function receiptTitle(item: Pick<ReceiptHistoryItem, 'merchant_name' | 'restaura
   const day = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   return `Receipt • ${day}, ${time}`;
-}
-
-function sessionDisplayName(metadata: unknown, email: string | null | undefined) {
-  const record = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null;
-  const fullName = typeof record?.full_name === 'string' ? record.full_name.trim() : '';
-  const name = typeof record?.name === 'string' ? record.name.trim() : '';
-  if (fullName) return fullName;
-  if (name) return name;
-  const local = email?.split('@')[0]?.trim();
-  return local || 'Account';
 }
 
 function flattenHistorySections(sections: readonly HistorySection<ReceiptHistoryItem>[]): HistoryListRow[] {
@@ -440,12 +431,12 @@ export default function HistoryScreen() {
     ? 'Personal'
     : groupOptions.find((group) => group.id === groupFilter)?.name ?? null;
   const heroLabel = !isFiltered
-    ? (hasMore ? 'Recent spend' : 'Total tracked')
+    ? (hasMore ? 'Settled & active splits' : 'Total split')
     : queryActive
-      ? 'Matching spend'
-      : `${selectedGroupTitle ?? 'Group'} spend`;
+      ? 'Matching splits'
+      : `${selectedGroupTitle ?? 'Group'} splits`;
   const visibleCount = ledger.filteredCount;
-  const countLabel = `${visibleCount}${hasMore ? '+' : ''} ${visibleCount === 1 && !hasMore ? 'receipt' : 'receipts'}`;
+  const countLabel = `${visibleCount}${hasMore ? '+' : ''} ${visibleCount === 1 && !hasMore ? 'bill split' : 'bills split'}`;
   const settledVisible = items.reduce((count, item) => count + (item.balance_settled ? 1 : 0), 0);
   const unsettledVisible = items.length - settledVisible;
 
@@ -496,7 +487,12 @@ export default function HistoryScreen() {
     setGroupFilter('all');
   }
 
-  const displayName = profile?.displayName || sessionDisplayName(session?.user.user_metadata, session?.user.email);
+  const identity = resolveMemberIdentity({
+    metadata: session?.user.user_metadata,
+    profileFullName: profile?.fullName,
+    email: profile?.email || session?.user.email,
+  });
+  const displayName = identity.fullName ?? 'Account';
   const subtitle = profile?.phone || profile?.email || session?.user.phone || session?.user.email || '';
   const showSkeleton = isInitialLoading && items.length === 0;
   const showInitialError = !showSkeleton && Boolean(initialError) && items.length === 0;
@@ -533,9 +529,9 @@ export default function HistoryScreen() {
       <View style={[styles.search, isSearchFocused && styles.searchFocused]}>
         <Ionicons name="search" size={16} color={isSearchFocused ? luxury.accentPrimary : luxury.textMuted} />
         <TextInput
-          accessibilityLabel="Search merchants"
+          accessibilityLabel="Search bills or venues"
           autoCorrect={false}
-          placeholder="Search merchants"
+          placeholder="Search bills or venues"
           placeholderTextColor={theme.colors.textMuted}
           returnKeyType="search"
           selectionColor={theme.colors.accent}
@@ -617,7 +613,7 @@ export default function HistoryScreen() {
             }}
             style={styles.avatarRing}
           >
-            <AvatarBadge name={displayName} userId={userId ?? undefined} size={36} />
+            <AvatarBadge name={identity.avatarName} userId={userId ?? undefined} size={36} />
           </Pressable>
         </View>
         <Text accessibilityRole="header" style={styles.title}>History</Text>
@@ -805,8 +801,8 @@ function HistoryEmpty({ onScan }: { onScan: () => void }) {
         <View style={styles.emptyBadge}>
           <Ionicons name="receipt-outline" size={22} color={theme.colors.accent} />
         </View>
-        <Text style={styles.emptyTitle}>No receipts yet</Text>
-        <Text style={styles.emptySubtitle}>Scan a receipt to itemise the bill and settle the total.</Text>
+        <Text style={styles.emptyTitle}>No bills split yet</Text>
+        <Text style={styles.emptySubtitle}>Scan a bill to itemise it and settle the split.</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Scan your first bill"
@@ -830,19 +826,19 @@ function HistoryNoMatch({
   onReset: () => void;
 }) {
   const detail = query.length > 0 && groupLabel
-    ? `No receipts match “${query}” in ${groupLabel}.`
+    ? `No bills match “${query}” in ${groupLabel}.`
     : query.length > 0
-      ? `No receipts match “${query}”.`
+      ? `No bills match “${query}”.`
       : groupLabel
-        ? `No receipts in ${groupLabel}.`
-        : 'Try a different merchant.';
+        ? `No bills in ${groupLabel}.`
+        : 'Try a different venue.';
 
   return (
     <View style={styles.noMatchCard}>
       <View style={styles.noMatchBadge}>
         <Ionicons name="search" size={18} color={theme.colors.textMuted} />
       </View>
-      <Text style={styles.noMatchTitle}>No matching receipts found.</Text>
+      <Text style={styles.noMatchTitle}>No matching bills found.</Text>
       <Text style={styles.noMatchSubtitle}>{detail}</Text>
       <Pressable
         accessibilityRole="button"

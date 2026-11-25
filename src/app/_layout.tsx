@@ -7,6 +7,7 @@ import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
+import { AppLockGate } from '@/components/AppLockGate';
 import { NightScreen } from '@/components/night-screen';
 import { PrivacyShield } from '@/components/PrivacyShield';
 import { Colors } from '@/constants/theme';
@@ -70,7 +71,7 @@ function RootNavigator() {
   }
 
   return (
-    <>
+    <AppLockGate active={session !== null} userId={userId}>
     <Stack
       screenOptions={{
         headerShown: false,
@@ -92,7 +93,7 @@ function RootNavigator() {
       </Stack.Protected>
     </Stack>
     <SettlementNudgeLinks userId={userId} />
-    </>
+    </AppLockGate>
   );
 }
 

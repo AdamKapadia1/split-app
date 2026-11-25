@@ -42,6 +42,8 @@ export type GroupBalanceSummary = {
 export type AccountProfile = {
   id: string;
   displayName: string;
+  /** Profile full name with no email-prefix fallback. */
+  fullName: string | null;
   email: string | null;
   phone: string | null;
   paymentLink: string | null;
@@ -185,10 +187,12 @@ class GroupService {
 
       const row = data as ProfileRow;
       const email = text(row.email) || null;
-      const fullName = text(row.full_name, row.fullName) || (email ? email.split('@')[0] : '') || 'Account';
+      const storedName = text(row.full_name, row.fullName);
+      const fullName = storedName || (email ? email.split('@')[0] : '') || 'Account';
       return {
         id: userId,
         displayName: fullName,
+        fullName: storedName || null,
         email,
         phone: text(row.phone) || null,
         paymentLink: text(row.payment_link, row.paymentLink) || null,

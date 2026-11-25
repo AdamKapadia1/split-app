@@ -8,12 +8,11 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { APP_COPYRIGHT, APP_NAME } from '@/constants/brand';
 import { PayoutSetup } from '@/components/payout-setup';
 import {
-  clearBiometricSession,
-  getBiometricPreference,
-  hasBiometricSession,
+  clearBiometricAuth,
   isBiometricAvailable,
-  saveBiometricSession,
-  setBiometricPreference,
+  isBiometricLockEnabled,
+  lockSessionInMemory,
+  setBiometricLockEnabled,
   type BiometricLabel,
 } from '@/lib/biometricAuth';
 import { purgeLocalAppData, supabase } from '@/lib/supabase';
@@ -69,14 +68,13 @@ export function AccountSettingsSheet({
   const [bioBusy, setBioBusy] = useState(false);
   const [seenKey, setSeenKey] = useState<string | null>(null);
   const watchKey = visible && userId ? userId : null;
-
-  useEffect(() => {
-    if (!visible) {
-      setPayoutOpen(false);
-      return;
-    }
-    if (openPayout) setPayoutOpen(true);
-  }, [openPayout, visible]);
+  const payoutGate = !visible ? 'closed' : openPayout ? 'open' : 'sheet';
+  const [seenPayoutGate, setSeenPayoutGate] = useState(payoutGate);
+  if (seenPayoutGate !== payoutGate) {
+    setSeenPayoutGate(payoutGate);
+    if (!visible) setPayoutOpen(false);
+    else if (openPayout) setPayoutOpen(true);
+  }
   if (seenKey !== watchKey) {
     setSeenKey(watchKey);
     setPayoutLoading(watchKey !== null);
@@ -114,8 +112,8 @@ export function AccountSettingsSheet({
         if (cancelled) return;
         setBioAvailable(hardware.available);
         setBioLabel(hardware.label);
-        const [preference, stored] = await Promise.all([getBiometricPreference(), hasBiometricSession()]);
-        if (!cancelled) setBioEnabled(preference === 'on' && stored);
+        const enabled = await isBiometricLockEnabled();
+        if (!cancelled) setBioEnabled(enabled);
       })
       .catch(() => {
         if (!cancelled) setBioAvailable(false);
@@ -153,9 +151,9 @@ export function AccountSettingsSheet({
   function confirmLogout() {
     if (isDeleting) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    Alert.alert('Log out?', "You'll need to sign back in to view your groups and receipts.", [
+    Alert.alert('Sign out?', 'This ends your session on this device. Lock Velor keeps you signed in and only asks for Face ID.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log Out', style: 'destructive', onPress: onLogout },
+      { text: 'Sign Out', style: 'destructive', onPress: () => { void signOut(); } },
     ]);
   }
 
@@ -197,8 +195,7 @@ export function AccountSettingsSheet({
         }
       }
       try {
-        await clearBiometricSession();
-        await setBiometricPreference('off');
+        await clearBiometricAuth();
       } catch {
         logger.warn('delete account', { code: 'BIOMETRIC_CLEAR_FAILED' });
       }
@@ -217,46 +214,57 @@ export function AccountSettingsSheet({
     }
   }
 
+  function lockVelor() {
+    if (isDeleting || !bioEnabled) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    lockSessionInMemory();
+    onClose();
+  }
+
+  async function signOut() {
+    if (isDeleting) return;
+    try {
+      await clearBiometricAuth();
+    } catch {
+      logger.warn('sign out', { code: 'BIOMETRIC_CLEAR_FAILED' });
+    }
+    onLogout();
+  }
+
   async function toggleBiometric(enabled: boolean) {
     if (bioBusy || isDeleting || !bioAvailable) return;
     setBioBusy(true);
     hapticSelection();
     try {
       if (!enabled) {
-        await clearBiometricSession();
-        await setBiometricPreference('off');
+        await clearBiometricAuth();
         setBioEnabled(false);
         return;
       }
       const session = supabase ? (await supabase.auth.getSession()).data.session : null;
-      const email = session?.user.email;
-      if (!supabase || !email) {
+      if (!session) {
         Alert.alert('Could not turn on Face ID', 'Sign in again, then enable it from account settings.');
         setBioEnabled(false);
         return;
       }
-      const password = await confirmPassword(email);
-      if (!password) {
-        setBioEnabled(false);
-        return;
-      }
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
-        Alert.alert('Password did not match', 'Face ID was not turned on.');
-        setBioEnabled(false);
-        return;
-      }
-      await saveBiometricSession(email, password);
+      await setBiometricLockEnabled(true);
       setBioEnabled(true);
-    } catch {
-      Alert.alert('Could not update Face ID', 'Please try again.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      setBioEnabled(false);
+      if (/cancel/i.test(message)) return;
+      Alert.alert('Could not update Face ID', message || 'Please try again.');
     } finally {
       setBioBusy(false);
     }
   }
 
   const payoutLabel = payoutStatus(payout);
-  const biometricTitle = bioLabel === 'Touch ID' ? 'Touch ID Sign-In' : bioLabel === 'Passcode' ? 'Passcode Sign-In' : 'Face ID Sign-In';
+  const biometricTitle = bioLabel === 'Touch ID'
+    ? 'Touch ID Sign-In / App Lock'
+    : bioLabel === 'Passcode'
+      ? 'Passcode Sign-In / App Lock'
+      : 'Face ID Sign-In / App Lock';
 
   return (
     <Modal visible={visible} animationType="fade" transparent statusBarTranslucent onRequestClose={close}>
@@ -359,7 +367,7 @@ export function AccountSettingsSheet({
               <View style={styles.rowCopy}>
                 <Text style={styles.rowLabel}>{biometricTitle}</Text>
                 <Text style={styles.rowStatus}>
-                  {bioAvailable ? `Unlock ${APP_NAME} on this device` : 'Not available on this device'}
+                  {bioAvailable ? `Lock ${APP_NAME} on this device. Your password is never saved.` : 'Not available on this device'}
                 </Text>
               </View>
               <Switch
@@ -412,15 +420,27 @@ export function AccountSettingsSheet({
 
           {info ? null : (
             <>
+          {bioEnabled ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Lock Velor"
+              disabled={isDeleting}
+              onPress={lockVelor}
+              style={({ pressed }) => [styles.lock, pressed && styles.logoutPressed]}
+            >
+              <Ionicons name="lock-closed-outline" size={16} color={theme.colors.textPrimary} />
+              <Text style={styles.lockText}>Lock Velor</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Log Out"
+            accessibilityLabel="Sign Out"
             disabled={isDeleting}
             onPress={confirmLogout}
-            style={({ pressed }) => [styles.logout, (pressed || isDeleting) && styles.logoutPressed]}
+            style={({ pressed }) => [styles.logout, (pressed || isDeleting) && styles.logoutPressed, !bioEnabled && styles.logoutFirst]}
           >
             <Ionicons name="log-out-outline" size={16} color={theme.colors.danger} />
-            <Text style={styles.logoutText}>Log Out</Text>
+            <Text style={styles.logoutText}>Sign Out</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
@@ -451,25 +471,6 @@ export function AccountSettingsSheet({
       />
     </Modal>
   );
-}
-
-function confirmPassword(email: string) {
-  return new Promise<string | null>((resolve) => {
-    if (Platform.OS !== 'ios' || typeof Alert.prompt !== 'function') {
-      Alert.alert('Confirm your password', 'Sign out, then sign in with your password to turn Face ID on.');
-      resolve(null);
-      return;
-    }
-    Alert.prompt(
-      'Confirm your password',
-      `This stays in the Keychain for ${email}.`,
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
-        { text: 'Enable', onPress: (value?: string) => resolve(value && value.length > 0 ? value : null) },
-      ],
-      'secure-text',
-    );
-  });
 }
 
 function payoutStatus(method: PayoutMethod | null) {
@@ -566,8 +567,21 @@ const styles = StyleSheet.create({
   saveText: { fontSize: 15, fontWeight: '700', color: theme.colors.accentText },
   cancelButton: { height: 36, alignItems: 'center', justifyContent: 'center' },
   cancelText: { fontSize: 14, fontWeight: '600', color: theme.colors.textSecondary },
-  logout: {
+  lock: {
     marginTop: 20,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.borderStrong,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  lockText: { fontSize: 15, fontWeight: '600', color: theme.colors.textPrimary },
+  logout: {
+    marginTop: 8,
     height: 48,
     borderRadius: 14,
     backgroundColor: theme.colors.dangerSubtle,
@@ -578,6 +592,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
+  logoutFirst: { marginTop: 20 },
   logoutPressed: { opacity: 0.75 },
   logoutText: { fontSize: 15, fontWeight: '600', color: theme.colors.danger },
   deleteAccount: {

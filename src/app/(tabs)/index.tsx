@@ -10,6 +10,7 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { Skeleton } from '@/components/skeleton';
 import { VelorBrand } from '@/components/VelorBrand';
 import { luxury } from '@/constants/theme';
+import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService } from '@/services/GroupService';
@@ -47,22 +48,6 @@ function greetingFor(date: Date) {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
-}
-
-function firstName(name: string | null | undefined) {
-  const token = name?.trim().split(/\s+/).filter(Boolean)[0] ?? '';
-  if (!token || token === 'Account') return 'Home';
-  return token;
-}
-
-function sessionName(metadata: unknown, email: string | null | undefined) {
-  const record = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null;
-  const fullName = typeof record?.full_name === 'string' ? record.full_name.trim() : '';
-  const name = typeof record?.name === 'string' ? record.name.trim() : '';
-  if (fullName) return fullName;
-  if (name) return name;
-  const local = email?.split('@')[0]?.trim();
-  return local || '';
 }
 
 function poundsLabel(pence: number) {
@@ -110,7 +95,7 @@ export default function HomeScreen() {
   const { session } = useSupabaseSession();
   const userId = session?.user.id ?? null;
   const [feed, setFeed] = useState<HomeFeedReceipt[] | null>(null);
-  const [displayName, setDisplayName] = useState('');
+  const [profileFullName, setProfileFullName] = useState<string | null>(null);
   const [hasHandle, setHasHandle] = useState(true);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -139,7 +124,7 @@ export default function HomeScreen() {
       ]);
       setFeed(receipts);
       hasLoadedRef.current = true;
-      setDisplayName(profile?.displayName || sessionName(session?.user.user_metadata, session?.user.email));
+      setProfileFullName(profile?.fullName ?? null);
       setHasHandle(payoutResult.ok ? hasPayoutHandle(payoutResult.method) : true);
       setError(null);
     } catch (caught) {
@@ -148,7 +133,7 @@ export default function HomeScreen() {
       setIsInitialLoading(false);
       setIsRefreshing(false);
     }
-  }, [session?.user.email, session?.user.user_metadata, userId]);
+  }, [userId]);
 
   useFocusEffect(useCallback(() => {
     void load(hasLoadedRef.current ? 'silent' : 'load');
@@ -158,7 +143,13 @@ export default function HomeScreen() {
     ? computeHomeBalances(feed.map(toBalanceReceipt), userId)
     : EMPTY_BALANCES;
   const recent = feed?.slice(0, 3) ?? [];
-  const name = firstName(displayName);
+  const identity = resolveMemberIdentity({
+    metadata: session?.user.user_metadata,
+    profileFullName,
+    email: session?.user.email,
+  });
+  const greetingTitle = identity.greetingName ?? 'Welcome back';
+  const settingsName = identity.fullName ?? 'Account';
   const showBanner = feed !== null && !hasHandle && !bannerDismissed;
 
   const openAccount = (payout: boolean) => {
@@ -206,11 +197,11 @@ export default function HomeScreen() {
             onPress={() => openAccount(false)}
             style={styles.avatarRing}
           >
-            <AvatarBadge name={displayName || name} userId={userId ?? undefined} size={40} />
+            <AvatarBadge name={identity.avatarName} userId={userId ?? undefined} size={40} />
           </Pressable>
         </View>
         <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
-        <Text accessibilityRole="header" style={styles.title} numberOfLines={1}>{name}</Text>
+        <Text accessibilityRole="header" style={styles.title} numberOfLines={1}>{greetingTitle}</Text>
       </View>
 
       {isInitialLoading && feed === null ? (
@@ -248,6 +239,78 @@ export default function HomeScreen() {
           {feed !== null ? (
             <>
               <HeroCard balances={balances} />
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionLabel}>Recent splits</Text>
+                  {recent.length > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="See all splits"
+                      onPress={() => {
+                        hapticSelection();
+                        router.push('/history');
+                      }}
+                      style={styles.seeAll}
+                    >
+                      <Text style={styles.seeAllText}>See all →</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {recent.length === 0 ? (
+                  <View style={styles.emptyCard}>
+                    <View style={styles.emptyIcon}>
+                      <Ionicons name="receipt-outline" size={22} color={theme.colors.textSecondary} />
+                    </View>
+                    <Text style={styles.emptyTitle}>No splits yet</Text>
+                    <Text style={styles.emptyBody}>Scan a bill to itemise it with the people you were with. Settled and open splits will show up here.</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Scan a bill"
+                      onPress={() => {
+                        hapticImpactLight();
+                        router.push('/scan');
+                      }}
+                      style={styles.primaryButton}
+                    >
+                      <Text style={styles.primaryButtonText}>Scan a bill</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  recent.map((receipt) => {
+                    const settled = isReceiptBalanceSettled(toBalanceReceipt(receipt));
+                    return (
+                      <Pressable
+                        key={receipt.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={merchantLabel(receipt)}
+                        onPress={() => {
+                          hapticImpactLight();
+                          router.push({ pathname: '/receipt/[id]', params: { id: receipt.id } });
+                        }}
+                        style={({ pressed }) => [styles.activityCard, pressed && styles.cardPressed]}
+                      >
+                        <View style={styles.activityIcon}>
+                          <Ionicons name="receipt-outline" size={18} color={luxury.textPrimary} />
+                        </View>
+                        <View style={styles.activityCopy}>
+                          <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
+                          <View style={styles.activityMetaRow}>
+                            <Text style={styles.activityMeta} numberOfLines={1}>
+                              {formatSmartDate(receipt.createdAt)}
+                              {' · '}
+                              {receipt.groupName?.trim() || 'Shared split'}
+                            </Text>
+                            <BalanceStatusPill settled={settled} />
+                          </View>
+                        </View>
+                        <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
+                        <Ionicons name="chevron-forward" size={16} color={luxury.textMuted} />
+                      </Pressable>
+                    );
+                  })
+                )}
+              </View>
+
               {showBanner ? (
                 <View style={styles.banner}>
                   <Pressable
@@ -280,27 +343,6 @@ export default function HomeScreen() {
                 </View>
               ) : null}
 
-              <View style={styles.actions}>
-                <QuickAction
-                  label="Scan Bill"
-                  icon="scan-outline"
-                  tint={theme.colors.accent}
-                  onPress={() => router.push('/scan')}
-                />
-                <QuickAction
-                  label="New Group"
-                  icon="people-outline"
-                  tint={theme.colors.textPrimary}
-                  onPress={() => router.push({ pathname: '/groups', params: { create: '1' } })}
-                />
-                <QuickAction
-                  label="History"
-                  icon="receipt-outline"
-                  tint={theme.colors.textPrimary}
-                  onPress={() => router.push('/history')}
-                />
-              </View>
-
               {balances.needsAttention.length > 0 ? (
                 <View style={styles.section}>
                   <View style={styles.sectionHeader}>
@@ -328,77 +370,6 @@ export default function HomeScreen() {
                 </View>
               ) : null}
 
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionLabel}>Recent activity</Text>
-                  {recent.length > 0 ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="See all history"
-                      onPress={() => {
-                        hapticSelection();
-                        router.push('/history');
-                      }}
-                      style={styles.seeAll}
-                    >
-                      <Text style={styles.seeAllText}>See all →</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-                {recent.length === 0 ? (
-                  <View style={styles.emptyCard}>
-                    <View style={styles.emptyIcon}>
-                      <Ionicons name="receipt-outline" size={22} color={theme.colors.textSecondary} />
-                    </View>
-                    <Text style={styles.emptyTitle}>No bills yet</Text>
-                    <Text style={styles.emptyBody}>Scan a receipt to itemise the bill and settle the total.</Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Scan your first bill"
-                      onPress={() => {
-                        hapticImpactLight();
-                        router.push('/scan');
-                      }}
-                      style={styles.primaryButton}
-                    >
-                      <Text style={styles.primaryButtonText}>Scan your first bill</Text>
-                    </Pressable>
-                  </View>
-                ) : (
-                  recent.map((receipt) => {
-                    const settled = isReceiptBalanceSettled(toBalanceReceipt(receipt));
-                    return (
-                      <Pressable
-                        key={receipt.id}
-                        accessibilityRole="button"
-                        accessibilityLabel={merchantLabel(receipt)}
-                        onPress={() => {
-                          hapticImpactLight();
-                          router.push({ pathname: '/receipt/[id]', params: { id: receipt.id } });
-                        }}
-                        style={({ pressed }) => [styles.activityCard, pressed && styles.cardPressed]}
-                      >
-                        <View style={styles.activityIcon}>
-                          <Ionicons name="receipt-outline" size={18} color={luxury.textPrimary} />
-                        </View>
-                        <View style={styles.activityCopy}>
-                          <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
-                          <View style={styles.activityMetaRow}>
-                            <Text style={styles.activityMeta} numberOfLines={1}>
-                              {formatSmartDate(receipt.createdAt)}
-                              {' · '}
-                              {receipt.groupName?.trim() || 'Personal'}
-                            </Text>
-                            <BalanceStatusPill settled={settled} />
-                          </View>
-                        </View>
-                        <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
-                        <Ionicons name="chevron-forward" size={16} color={luxury.textMuted} />
-                      </Pressable>
-                    );
-                  })
-                )}
-              </View>
             </>
           ) : null}
         </ScrollView>
@@ -408,7 +379,7 @@ export default function HomeScreen() {
         visible={accountOpen}
         openPayout={openPayout}
         userId={userId}
-        displayName={displayName || name}
+        displayName={settingsName}
         subtitle={session?.user.email ?? ''}
         onClose={() => {
           setAccountOpen(false);
@@ -468,40 +439,6 @@ function HeroCard({ balances }: { balances: HomeBalances }) {
         </View>
       </View>
     </LinearGradient>
-  );
-}
-
-function QuickAction({
-  label,
-  icon,
-  tint,
-  onPress,
-}: {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  tint: string;
-  onPress: () => void;
-}) {
-  const primary = label === 'Scan Bill';
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={() => {
-        hapticImpactLight();
-        onPress();
-      }}
-      style={styles.action}
-    >
-      {({ pressed }) => (
-        <>
-          <View style={[styles.actionCircle, primary && styles.actionCirclePrimary, pressed && styles.actionPressed]}>
-            <Ionicons name={icon} size={22} color={primary ? luxury.accentPrimary : tint} />
-          </View>
-          <Text style={styles.actionLabel}>{label}</Text>
-        </>
-      )}
-    </Pressable>
   );
 }
 
@@ -580,11 +517,6 @@ function HomeSkeleton() {
       <Skeleton style={styles.skelGreeting} />
       <Skeleton style={styles.skelTitle} />
       <Skeleton style={styles.skelHero} />
-      <View style={styles.actions}>
-        <Skeleton style={styles.skelCircle} />
-        <Skeleton style={styles.skelCircle} />
-        <Skeleton style={styles.skelCircle} />
-      </View>
       <Skeleton style={styles.skelRow} />
       <Skeleton style={styles.skelRow} />
     </View>
@@ -735,42 +667,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actions: {
-    marginTop: 22,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  action: { flex: 1, alignItems: 'center' },
-  actionCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#10121A',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.09)',
-  },
-  actionCirclePrimary: {
-    backgroundColor: '#151828',
-    borderColor: 'rgba(139,149,255,0.45)',
-    shadowColor: '#8B95FF',
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  actionPressed: { transform: [{ scale: 0.95 }] },
-  actionLabel: {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '500',
-    color: luxury.textSecondary,
-    textAlign: 'center',
-  },
-  section: { marginTop: 28, paddingHorizontal: 16 },
+  section: { marginTop: 36, paddingHorizontal: 16 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -924,7 +821,6 @@ const styles = StyleSheet.create({
   skeleton: { paddingHorizontal: 16, paddingTop: 8 },
   skelGreeting: { width: 120, height: 12, marginBottom: 10, backgroundColor: '#1C1C21' },
   skelTitle: { width: 160, height: 28, marginBottom: 18, backgroundColor: '#1C1C21' },
-  skelHero: { height: 168, borderRadius: 22, marginBottom: 22, backgroundColor: '#1C1C21' },
-  skelCircle: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#1C1C21' },
+  skelHero: { height: 168, borderRadius: 22, marginBottom: 28, backgroundColor: '#1C1C21' },
   skelRow: { height: 72, borderRadius: 16, marginTop: 10, backgroundColor: '#1C1C21' },
 });

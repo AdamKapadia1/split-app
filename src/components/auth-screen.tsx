@@ -20,25 +20,26 @@ import { VelorBrand } from '@/components/VelorBrand';
 import { APP_NAME } from '@/constants/brand';
 import { luxury } from '@/constants/theme';
 import {
-  authenticateWithBiometrics,
-  clearBiometricSession,
-  getBiometricPreference,
-  hasBiometricSession,
+  clearBiometricAuth,
   isBiometricAvailable,
-  readBiometricSession,
-  saveBiometricSession,
-  setBiometricPreference,
+  isBiometricLockEnabled,
+  setBiometricLockEnabled,
+  unlockBiometricSession,
   type BiometricLabel,
 } from '@/lib/biometricAuth';
 import { mediumHaptic, pulseHaptic, tickHaptic } from '@/lib/haptics';
 import { supabase } from '@/lib/supabase';
+import { updateNotificationPreferences } from '@/services/NotificationService';
 
 type Mode = 'sign-in' | 'create';
-type Field = 'email' | 'password' | null;
+type Field = 'email' | 'password' | 'firstName' | null;
+
+const BIOMETRIC_UNAVAILABLE = 'Biometric session unavailable. Sign in with your password to continue.';
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode>('sign-in');
+  const [firstName, setFirstName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -52,7 +53,7 @@ export function AuthScreen() {
     void (async () => {
       const hardware = await isBiometricAvailable();
       if (!hardware.available || cancelled) return;
-      const ready = await hasBiometricSession();
+      const ready = await isBiometricLockEnabled();
       if (!cancelled && ready) setBiometricLabel(hardware.label);
     })();
     return () => {
@@ -74,6 +75,12 @@ export function AuthScreen() {
   async function submit() {
     mediumHaptic();
     const trimmedEmail = email.trim();
+    const trimmedFirstName = firstName.trim();
+    if (mode === 'create' && trimmedFirstName.length < 2) {
+      setError('Enter your first name.');
+      setNotice(null);
+      return;
+    }
     if (!trimmedEmail || !password) {
       setError('Enter your email and password.');
       setNotice(null);
@@ -100,18 +107,26 @@ export function AuthScreen() {
           setError(signInError.message);
           return;
         }
-        const signedInEmail = data.session?.user.email ?? trimmedEmail;
-        if (data.session) void rememberBiometricSession(signedInEmail, password);
+        if (data.session) void rememberBiometricLock();
         return;
       }
 
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: trimmedEmail,
         password,
+        options: {
+          data: {
+            first_name: trimmedFirstName,
+            full_name: trimmedFirstName,
+          },
+        },
       });
       if (signUpError) {
         setError(signUpError.message);
         return;
+      }
+      if (data.session?.user.id) {
+        await syncNewMember(data.session.user.id, trimmedEmail, trimmedFirstName);
       }
       if (!data.session) {
         setNotice('Check your email to confirm your account.');
@@ -128,26 +143,18 @@ export function AuthScreen() {
     setError(null);
     setNotice(null);
     try {
-      const unlocked = await authenticateWithBiometrics();
-      if (!unlocked) return;
-      const stored = await readBiometricSession();
-      if (!stored) {
+      const unlocked = await unlockBiometricSession();
+      if (unlocked === 'cancelled') return;
+      const { data } = await supabase.auth.getSession();
+      if (unlocked !== 'unlocked' || !data.session) {
+        await clearBiometricAuth();
         setBiometricLabel(null);
-        setNotice('Sign in with your password once to turn Face ID back on.');
-        return;
-      }
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: stored.email,
-        password: stored.password,
-      });
-      if (signInError) {
-        await clearBiometricSession();
-        setBiometricLabel(null);
-        setNotice('Sign in with your password once to turn Face ID back on.');
-        return;
+        setNotice(BIOMETRIC_UNAVAILABLE);
       }
     } catch {
-      setNotice('Sign in with your password once to turn Face ID back on.');
+      await clearBiometricAuth().catch(() => undefined);
+      setBiometricLabel(null);
+      setNotice(BIOMETRIC_UNAVAILABLE);
     } finally {
       setBusy(false);
     }
@@ -190,6 +197,23 @@ export function AuthScreen() {
               <Toggle label="Create Account" selected={mode === 'create'} onPress={() => choose('create')} />
             </View>
 
+            {mode === 'create' ? (
+              <TextInput
+                accessibilityLabel="First name"
+                autoCapitalize="words"
+                autoComplete="given-name"
+                autoCorrect={false}
+                placeholder="First name"
+                placeholderTextColor={luxury.textMuted}
+                selectionColor={luxury.accentPrimary}
+                textContentType="givenName"
+                value={firstName}
+                onChangeText={setFirstName}
+                onFocus={() => setFocused('firstName')}
+                onBlur={() => setFocused((current) => (current === 'firstName' ? null : current))}
+                style={[styles.input, focused === 'firstName' && styles.inputFocused]}
+              />
+            ) : null}
             <TextInput
               accessibilityLabel="Email"
               autoCapitalize="none"
@@ -275,21 +299,43 @@ export function AuthScreen() {
   );
 }
 
-async function rememberBiometricSession(email: string, password: string) {
+async function syncNewMember(userId: string, email: string, name: string) {
+  if (!supabase) return;
+  const named = await supabase.from('profiles').update({ full_name: name, first_name: name }).eq('id', userId).select('id');
+  if (named.error) {
+    const fallback = await supabase.from('profiles').update({ full_name: name }).eq('id', userId).select('id');
+    if (!fallback.error && (fallback.data?.length ?? 0) === 0) {
+      await supabase.from('profiles').upsert({ id: userId, email, full_name: name }, { onConflict: 'id' });
+    }
+  } else if ((named.data?.length ?? 0) === 0) {
+    const created = await supabase.from('profiles').upsert(
+      { id: userId, email, full_name: name, first_name: name },
+      { onConflict: 'id' },
+    );
+    if (created.error) {
+      await supabase.from('profiles').upsert({ id: userId, email, full_name: name }, { onConflict: 'id' });
+    }
+  }
+  await updateNotificationPreferences(userId, {
+    settlementNudgesEnabled: true,
+    hideAmountsInNotifications: false,
+  }).catch(() => undefined);
+}
+
+async function rememberBiometricLock() {
   const hardware = await isBiometricAvailable();
   if (!hardware.available) return;
-  const preference = await getBiometricPreference();
-  if (preference === 'off') return;
-  if (preference === 'on') {
-    await saveBiometricSession(email, password);
+  const enabled = await isBiometricLockEnabled();
+  if (enabled) {
+    await setBiometricLockEnabled(true).catch(() => undefined);
     return;
   }
   Alert.alert(
-    `Sign in with ${hardware.label}?`,
-    `${APP_NAME} can unlock on this device with ${hardware.label}. You can turn this off in account settings.`,
+    `Lock ${APP_NAME} with ${hardware.label}?`,
+    `${APP_NAME} can lock on this device with ${hardware.label}. Your password is never saved. You can turn this off in account settings.`,
     [
-      { text: 'Not now', style: 'cancel', onPress: () => { void setBiometricPreference('off'); } },
-      { text: 'Enable', onPress: () => { void saveBiometricSession(email, password); } },
+      { text: 'Not now', style: 'cancel' },
+      { text: 'Enable', onPress: () => { void setBiometricLockEnabled(true).catch(() => undefined); } },
     ],
   );
 }
