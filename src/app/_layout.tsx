@@ -18,8 +18,6 @@ import { logger } from '@/utils/logger';
 import { receiptIdFromNotificationData } from '@/utils/notifications';
 import { initSentry, setSentryUser } from '@/utils/sentry';
 
-initSentry();
-
 const AppTheme = {
   ...DarkTheme,
   colors: {
@@ -135,6 +133,8 @@ function SettlementNudgeLinks({ userId }: { userId: string | null }) {
 
   return null;
 }
+
+initSentry();
 
 export default Sentry.wrap(RootLayout);
 

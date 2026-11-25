@@ -169,16 +169,17 @@ export function scrubSentryBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb {
 
 export function initSentry() {
   if (started) return;
-  started = true;
-
-  const dsn = readDsn();
-  if (!dsn) return;
 
   const Sentry = loadSentry();
   if (!Sentry) return;
 
+  // Bind a client even when the DSN is absent or reporting is off. Sentry.wrap
+  // finishes the App Start span from the root mount, and that fails closed if
+  // init has not run yet.
+  const dsn = readDsn();
+  started = true;
   Sentry.init({
-    dsn,
+    dsn: dsn || undefined,
     enabled: !__DEV__ && Boolean(dsn),
     environment: __DEV__ ? 'development' : (process.env.EXPO_PUBLIC_APP_ENV ?? 'production'),
     sendDefaultPii: false,
@@ -201,7 +202,7 @@ export function initSentry() {
       }
     },
   });
-  active = true;
+  active = !__DEV__ && Boolean(dsn);
 }
 
 export function setSentryUser(userId: string | null) {

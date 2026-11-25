@@ -177,15 +177,9 @@ class GroupService {
   async getAccountProfile(userId: string): Promise<AccountProfile | null> {
     try {
       const client = requireClient();
-      const { data, error } = await client
-        .from('profiles')
-        .select('id, email, phone, full_name, payment_link')
-        .eq('id', userId)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return null;
+      const row = await readAccountProfileRow(client, userId);
+      if (!row) return null;
 
-      const row = data as ProfileRow;
       const email = text(row.email) || null;
       const storedName = text(row.full_name, row.fullName);
       const fullName = storedName || (email ? email.split('@')[0] : '') || 'Account';
@@ -198,6 +192,10 @@ class GroupService {
         paymentLink: text(row.payment_link, row.paymentLink) || null,
       };
     } catch (error) {
+      if (error instanceof GroupServiceError) throw error;
+      if (postgresCode(error) === '42501') {
+        throw new GroupServiceError('PERMISSION_DENIED', 'You do not have permission to view this profile.');
+      }
       throw asGroupError(error);
     }
   }
@@ -333,11 +331,54 @@ function notifyGroupList() {
   });
 }
 
+const PROFILE_COLUMNS = 'id, email, phone, full_name, payment_link';
+
 function requireClient() {
   if (!supabase) {
     throw new GroupServiceError('NETWORK_ERROR', 'Supabase is not configured.');
   }
   return supabase;
+}
+
+async function readAccountProfileRow(
+  client: NonNullable<typeof supabase>,
+  userId: string,
+): Promise<ProfileRow | null> {
+  const loaded = await client.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle();
+  if (loaded.error) throw loaded.error;
+  if (loaded.data) return loaded.data as ProfileRow;
+
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  const sessionUser = sessionData.session?.user;
+  if (!sessionUser || sessionUser.id !== userId) return null;
+
+  const email = text(sessionUser.email) || null;
+  const metadata = sessionUser.user_metadata;
+  const fullName = text(
+    metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>).full_name : null,
+    metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>).name : null,
+  ) || null;
+  const payload: { id: string; email?: string; full_name?: string } = { id: userId };
+  if (email) payload.email = email;
+  if (fullName) payload.full_name = fullName;
+
+  const inserted = await client.from('profiles').upsert(payload, { onConflict: 'id' });
+  if (inserted.error && isMissingColumn(inserted.error)) {
+    const minimal = await client.from('profiles').upsert({ id: userId }, { onConflict: 'id' });
+    if (minimal.error) throw minimal.error;
+  } else if (inserted.error) {
+    throw inserted.error;
+  }
+
+  const created = await client.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle();
+  if (created.error) throw created.error;
+  return (created.data as ProfileRow | null) ?? null;
+}
+
+function isMissingColumn(error: unknown) {
+  const code = postgresCode(error);
+  return code === '42703' || code === 'PGRST204';
 }
 
 function asGroupError(error: unknown): GroupServiceError {
