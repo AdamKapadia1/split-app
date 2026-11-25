@@ -15,8 +15,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { VelorBrand } from '@/components/VelorBrand';
+import { APP_NAME, APP_TAGLINE } from '@/constants/brand';
+import { luxury } from '@/constants/theme';
+import { getWebBaseUrl } from '@/lib/url';
 import {
   billShareService,
+  shareBillUrl,
   type SharedBill,
   BillShareServiceError,
 } from '@/services/BillShareService';
@@ -274,11 +278,14 @@ export default function SharedSplitScreen() {
   return (
     <View style={styles.page}>
       <Head>
-        <title>Velor — Split Bill</title>
-        <meta name="theme-color" content="#050609" />
-        <meta name="description" content="Tap what you had and pay your share. No account needed." />
-        <meta property="og:title" content="Velor — Split Bill" />
-        <meta property="og:description" content="Tap what you had and pay your share. No account needed." />
+        <title>{APP_NAME}</title>
+        <meta name="theme-color" content={luxury.bgCanvas} />
+        <meta name="description" content={APP_TAGLINE} />
+        <meta property="og:title" content={APP_NAME} />
+        <meta property="og:description" content={APP_TAGLINE} />
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content={APP_NAME} />
+        <meta property="og:url" content={usableToken ? shareBillUrl(token) : getWebBaseUrl()} />
       </Head>
       <View style={[styles.column, { paddingTop: Math.max(insets.top, 12), paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={styles.brandRow}>

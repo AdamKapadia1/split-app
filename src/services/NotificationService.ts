@@ -2,9 +2,11 @@ import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@s
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
+import { AndroidImportance } from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
+import { unregisterPushToken } from '@/services/PushNotificationService';
 import { mapSettlementNudgeError } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import {
@@ -55,7 +57,7 @@ export async function configureAndroidNotificationChannel() {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
     name: 'Settlement nudges',
-    importance: Notifications.AndroidImportance.HIGH,
+    importance: AndroidImportance.HIGH,
     sound: 'default',
     vibrationPattern: [0, 250, 250, 250],
   });
@@ -115,6 +117,7 @@ export async function registerForPushNotificationsAsync(userId: string) {
 }
 
 export async function unregisterPushTokenAsync(userId: string) {
+  await unregisterPushToken();
   const unavailable = pushUnavailableReason();
   if (unavailable === 'web') return;
 

@@ -15,6 +15,7 @@ import { Colors } from '@/constants/theme';
 import { theme } from '@/theme/theme';
 import { useSupabaseSession } from '@/lib/use-session';
 import { registerForPushNotificationsAsync } from '@/services/NotificationService';
+import { registerPushToken, startPaymentNotificationRouting } from '@/services/PushNotificationService';
 import { logger } from '@/utils/logger';
 import { receiptIdFromNotificationData } from '@/utils/notifications';
 import { initSentry, setSentryUser } from '@/utils/sentry';
@@ -91,7 +92,16 @@ function RootNavigator() {
 
   useEffect(() => {
     if (!userId) return;
-    void registerForPushNotificationsAsync(userId);
+    let cancelled = false;
+    const stopRouting = startPaymentNotificationRouting();
+    void (async () => {
+      await registerForPushNotificationsAsync(userId);
+      if (!cancelled) await registerPushToken(userId);
+    })();
+    return () => {
+      cancelled = true;
+      stopRouting();
+    };
   }, [userId]);
 
   if (!ready) {

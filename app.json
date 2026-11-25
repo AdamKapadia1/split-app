@@ -9,6 +9,10 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "bundleIdentifier": "com.adamkapadia.splitapp",
+      "associatedDomains": [
+        "applinks:velor.app",
+        "applinks:www.velor.app"
+      ],
       "config": {
         "usesNonExemptEncryption": false
       },

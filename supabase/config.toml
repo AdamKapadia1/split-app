@@ -9,3 +9,11 @@ verify_jwt = false
 # The function verifies the user JWT itself via auth.getUser.
 [functions.send-settlement-nudge]
 verify_jwt = false
+
+# Database webhook authenticates with x-webhook-secret, not a user JWT.
+[functions.notify-host-paid]
+verify_jwt = false
+
+# Cron authenticates with x-cron-secret or the service role bearer.
+[functions.check-push-receipts]
+verify_jwt = false

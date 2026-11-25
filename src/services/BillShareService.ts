@@ -1,3 +1,4 @@
+import { getWebBaseUrl } from '@/lib/url';
 import { supabase } from '@/lib/supabase';
 import { mapErrorToUserMessage, readSafeErrorCode } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
@@ -170,9 +171,7 @@ class BillShareService {
 export const billShareService = new BillShareService();
 
 export function shareBillUrl(token: string): string {
-  const configured = process.env.EXPO_PUBLIC_WEB_URL || process.env.EXPO_PUBLIC_WEB_BASE_URL || 'https://velor.app';
-  const base = configured.trim().replace(/\/$/, '');
-  return `${base}/s/${token}`;
+  return `${getWebBaseUrl()}/s/${token}`;
 }
 
 function requireClient() {

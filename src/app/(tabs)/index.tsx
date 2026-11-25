@@ -339,8 +339,10 @@ export default function HomeScreen() {
         onLogout={() => {
           setAccountOpen(false);
           if (!supabase) return;
-          if (userId) void unregisterPushTokenAsync(userId);
-          void supabase.auth.signOut();
+          void (async () => {
+            if (userId) await unregisterPushTokenAsync(userId);
+            await supabase.auth.signOut();
+          })();
         }}
       />
     </SafeAreaView>

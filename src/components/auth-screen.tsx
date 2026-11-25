@@ -28,6 +28,7 @@ import {
   type BiometricLabel,
 } from '@/lib/biometricAuth';
 import { mediumHaptic, pulseHaptic, tickHaptic } from '@/lib/haptics';
+import { getWebBaseUrl } from '@/lib/url';
 import { supabase } from '@/lib/supabase';
 import { updateNotificationPreferences } from '@/services/NotificationService';
 
@@ -115,6 +116,7 @@ export function AuthScreen() {
         email: trimmedEmail,
         password,
         options: {
+          emailRedirectTo: `${getWebBaseUrl()}/sign-in`,
           data: {
             first_name: trimmedFirstName,
             full_name: trimmedFirstName,

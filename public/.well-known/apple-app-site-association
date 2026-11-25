@@ -1,0 +1,22 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "REPLACE_WITH_APPLE_TEAM_ID.com.adamkapadia.splitapp"
+        ],
+        "components": [
+          { "/": "/s/*.js", "exclude": true },
+          { "/": "/s/*.css", "exclude": true },
+          { "/": "/s/*.png", "exclude": true },
+          { "/": "/s/*.ico", "exclude": true },
+          { "/": "/*.js", "exclude": true },
+          { "/": "/*.css", "exclude": true },
+          { "/": "/*.png", "exclude": true },
+          { "/": "/*.ico", "exclude": true },
+          { "/": "/s/*", "comment": "Guest bill share links open in Velor" }
+        ]
+      }
+    ]
+  }
+}
