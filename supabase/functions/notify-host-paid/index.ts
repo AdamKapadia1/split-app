@@ -6,7 +6,7 @@ import {
   isSharePaidTransition,
   lockScreenMerchantName,
   type SharePaidSnapshot,
-} from '../../../src/utils/hostPaidNotification.ts';
+} from '../_shared/hostPaidNotification.ts';
 import { chunk, EXPO_PUSH_CHUNK, EXPO_PUSH_SEND_URL, postExpo, safeErrorMessage, tokenKeyPrefix, type ExpoTicket } from '../_shared/expoPush.ts';
 import { secretsMatch } from '../_shared/timingSafeEqual.ts';
 
