@@ -135,9 +135,12 @@ export function reconcileSharedBill(input: {
   }
 
   const totalPence = Math.max(0, Math.round(input.totalPence));
-  const extras = Math.max(0, totalPence - linesPence);
-  const servicePool = Math.max(0, Math.round(input.serviceChargePence));
-  const extrasShare = allocateLargestRemainder(extras, itemsSubtotal);
+  const gap = Math.max(0, totalPence - linesPence);
+  // Fee is service and tip already inside the printed total. Capping it at the
+  // gap keeps VAT-inclusive item prices from being taxed a second time.
+  const declaredFee = Math.max(0, Math.round(input.serviceChargePence));
+  const servicePool = Math.min(declaredFee, gap);
+  const extrasShare = allocateLargestRemainder(gap, itemsSubtotal);
   const serviceCharge = allocateLargestRemainder(servicePool, itemsSubtotal);
 
   const amountOwed: Record<string, number> = {};

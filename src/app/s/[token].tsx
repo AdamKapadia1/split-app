@@ -18,19 +18,18 @@ import { VelorBrand } from '@/components/VelorBrand';
 import {
   billShareService,
   type SharedBill,
-  type SharePayoutDetails,
   BillShareServiceError,
 } from '@/services/BillShareService';
 import { formatPence } from '@/utils/money';
-import {
-  buildPaymentUrl,
-  formatSortCode,
-  maskAccountNumber,
-  type PaymentLinkProvider,
-} from '@/utils/paymentLinks';
 import { reconcileSharedBill, splitEquallyDeterministic } from '@/utils/sharedSplitMath';
+import {
+  copyPlainText,
+  isHttpsUrl,
+  resolveUkPaymentRails,
+  type UkPaymentRails,
+} from '@/utils/ukPaymentRails';
 
-const INVALID_COPY = 'This split link is expired or has been turned off by the host.';
+const INVALID_COPY = 'This link is inactive or has been revoked.';
 
 export default function SharedSplitScreen() {
   const params = useLocalSearchParams<{ token?: string | string[] }>();
@@ -47,6 +46,7 @@ export default function SharedSplitScreen() {
   const [paying, setPaying] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const busy = useRef(false);
   const revision = useRef(0);
 
@@ -115,7 +115,10 @@ export default function SharedSplitScreen() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 1600);
+    const timer = setTimeout(() => {
+      setToast(null);
+      setCopiedKey(null);
+    }, 1600);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -219,15 +222,54 @@ export default function SharedSplitScreen() {
     }
   }
 
-  async function copyText(value: string) {
-    await Clipboard.setStringAsync(value);
+  async function copyText(value: string, key: string) {
+    let copied = await copyPlainText(value);
+    if (!copied) {
+      try {
+        await Clipboard.setStringAsync(value);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+    if (!copied) {
+      setNotice('Could not copy that. Try again.');
+      return;
+    }
+    setNotice(null);
+    setCopiedKey(key);
     setToast('Copied');
+  }
+
+  async function openHttps(url: string) {
+    if (!isHttpsUrl(url)) {
+      setNotice('That payment link could not be opened.');
+      return;
+    }
+    try {
+      await Linking.openURL(url);
+    } catch {
+      setNotice('That payment link could not be opened.');
+    }
   }
 
   const claimedCount = bill?.items.filter((item) => item.claimedBy.length > 0).length ?? 0;
   const owed = bill?.participants.reduce((sum, entry) => sum + entry.amountOwedPence, 0) ?? 0;
   const unclaimed = bill ? Math.max(0, bill.bill.totalPence - owed) : 0;
-  const payment = person ? payTarget(bill?.owner.payoutDetails ?? null, person.amountOwedPence, bill?.bill.merchantName ?? 'Velor') : null;
+  const rails = person && bill
+    ? resolveUkPaymentRails({
+        monzoHandle: bill.owner.payoutDetails?.monzoHandle ?? null,
+        revolutHandle: bill.owner.payoutDetails?.revolutHandle ?? null,
+        paymentLink: bill.owner.payoutDetails?.paymentLink ?? null,
+        bankAccountName: bill.owner.payoutDetails?.bankAccountName ?? null,
+        bankSortCode: bill.owner.payoutDetails?.bankSortCode ?? null,
+        bankAccountNumber: bill.owner.payoutDetails?.bankAccountNumber ?? null,
+        amountPence: person.amountOwedPence,
+        amountLabel: formatPence(person.amountOwedPence),
+        referenceSource: token,
+      })
+    : null;
+  const mutating = busyItemId !== null || paying || joining;
 
   return (
     <View style={styles.page}>
@@ -339,9 +381,10 @@ export default function SharedSplitScreen() {
                   <Pressable
                     key={item.id}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: mine, busy: busyItemId === item.id }}
+                    accessibilityState={{ selected: mine, busy: busyItemId === item.id, disabled: mutating }}
+                    disabled={mutating}
                     onPress={() => { void toggleItem(item.id); }}
-                    style={[styles.item, mine && styles.itemMine]}
+                    style={[styles.item, mine && styles.itemMine, mutating && busyItemId !== item.id && styles.itemLocked]}
                   >
                     <View style={styles.itemTop}>
                       <View style={styles.itemNameRow}>
@@ -376,22 +419,27 @@ export default function SharedSplitScreen() {
               {person ? (
                 <>
                   <Row label="Claimed items" value={formatPence(person.itemsSubtotalPence)} />
-                  {person.serviceChargePence > 0 ? (
-                    <Row label="Service charge" value={formatPence(person.serviceChargePence)} />
+                  {bill.bill.serviceChargePence > 0 ? (
+                    <Row
+                      label={serviceLabel(bill.bill.serviceChargeRate, bill.bill.serviceChargePence)}
+                      value={formatPence(shownService(person.itemsSubtotalPence, person.serviceChargePence, person.amountOwedPence))}
+                    />
                   ) : null}
-                  {person.amountOwedPence - person.itemsSubtotalPence - person.serviceChargePence > 0 ? (
+                  {shareRemainder(person.itemsSubtotalPence, person.serviceChargePence, person.amountOwedPence, bill.bill.serviceChargePence) > 0 ? (
                     <Row
                       label="Tip and rounding"
-                      value={formatPence(person.amountOwedPence - person.itemsSubtotalPence - person.serviceChargePence)}
+                      value={formatPence(shareRemainder(person.itemsSubtotalPence, person.serviceChargePence, person.amountOwedPence, bill.bill.serviceChargePence))}
                     />
                   ) : null}
                   <Row label="Your total to pay" value={formatPence(person.amountOwedPence)} strong />
+                  {bill.bill.vatPence > 0 ? <Text style={styles.meta}>UK VAT included in item prices</Text> : null}
                   <PayoutBlock
-                    details={bill.owner.payoutDetails}
+                    rails={rails}
                     ownerName={bill.owner.displayName}
-                    payment={payment}
-                    onOpen={(url) => { void Linking.openURL(url); }}
-                    onCopy={(value) => { void copyText(value); }}
+                    amountLabel={formatPence(person.amountOwedPence)}
+                    copiedKey={copiedKey}
+                    onOpen={(url) => { void openHttps(url); }}
+                    onCopy={(value, key) => { void copyText(value, key); }}
                   />
                   {person.isPaid ? (
                     <View style={styles.paidCard}>
@@ -442,45 +490,69 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
 }
 
 function PayoutBlock({
-  details,
+  rails,
   ownerName,
-  payment,
+  amountLabel,
+  copiedKey,
   onOpen,
   onCopy,
 }: {
-  details: SharePayoutDetails | null;
+  rails: UkPaymentRails | null;
   ownerName: string;
-  payment: { url: string; label: string; handle: string; amountLabel: string } | null;
+  amountLabel: string;
+  copiedKey: string | null;
   onOpen: (url: string) => void;
-  onCopy: (value: string) => void;
+  onCopy: (value: string, key: string) => void;
 }) {
-  if (!details) {
+  if (!rails || (!rails.monzo && !rails.revolut && !rails.bank)) {
     return <Text style={styles.meta}>Pay {ownerName} however you already settle with them.</Text>;
   }
-  const bank = details.bankSortCode && details.bankAccountNumber && details.bankAccountName
-    ? bankCopy(details)
-    : null;
   return (
     <View style={styles.payout}>
-      {payment ? (
-        <Pressable accessibilityRole="link" onPress={() => onOpen(payment.url)} style={styles.primaryButton}>
-          <Text style={styles.primaryButtonText}>Pay {payment.amountLabel} via {payment.label}</Text>
+      <Text style={styles.railLabel}>Pay {ownerName}</Text>
+      {rails.monzo ? (
+        <Pressable accessibilityRole="link" onPress={() => onOpen(rails.monzo!.url)} style={styles.primaryButton}>
+          <Text style={styles.primaryButtonText}>Pay {amountLabel} with Monzo</Text>
         </Pressable>
       ) : null}
-      {payment ? (
-        <Pressable accessibilityRole="button" onPress={() => onCopy(payment.handle)} style={styles.secondaryButton}>
-          <Text style={styles.secondaryButtonText}>Copy handle</Text>
-        </Pressable>
-      ) : null}
-      {bank ? (
+      {rails.revolut ? (
         <>
-          <Text style={styles.bankLine}>{details.bankAccountName}</Text>
-          <Text style={styles.bankLine}>{bank.shown}</Text>
-          <Pressable accessibilityRole="button" onPress={() => onCopy(bank.copied)} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Copy bank details</Text>
+          <Pressable accessibilityRole="link" onPress={() => onOpen(rails.revolut!.url)} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>Open Revolut</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={() => onCopy(rails.revolut!.copyText, 'revolut')} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{copiedKey === 'revolut' ? 'Copied' : 'Copy handle & amount'}</Text>
           </Pressable>
         </>
       ) : null}
+      {rails.bank ? (
+        <View style={styles.bankCard}>
+          <Text style={styles.railLabel}>UK Faster Payments</Text>
+          <Text style={styles.meta}>Any UK bank app. Barclays, HSBC, Lloyds, NatWest, Santander, Starling, Halifax.</Text>
+          <CopyRow label="Recipient" value={rails.bank.recipient} copied={copiedKey === 'name'} onPress={() => onCopy(rails.bank!.recipient, 'name')} />
+          <CopyRow label="Sort code" value={rails.bank.sortCodeDisplay} copied={copiedKey === 'sort'} onPress={() => onCopy(rails.bank!.sortCodeDigits, 'sort')} />
+          <CopyRow label="Account number" value={rails.bank.accountNumber} copied={copiedKey === 'account'} onPress={() => onCopy(rails.bank!.accountNumber, 'account')} />
+          <CopyRow label="Reference" value={rails.bank.reference} copied={copiedKey === 'ref'} onPress={() => onCopy(rails.bank!.reference, 'ref')} />
+          <Text style={styles.bankLine}>Amount {amountLabel}</Text>
+          <Pressable accessibilityRole="button" onPress={() => onCopy(rails.bank!.summary, 'all')} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>{copiedKey === 'all' ? 'Copied' : 'Copy all bank details'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function CopyRow({ label, value, copied, onPress }: { label: string; value: string; copied: boolean; onPress: () => void }) {
+  return (
+    <View style={styles.copyRow}>
+      <View style={styles.copyText}>
+        <Text style={styles.copyLabel}>{label}</Text>
+        <Text style={styles.copyValue}>{value}</Text>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Copy ${label}`} onPress={onPress} style={styles.copyChip}>
+        <Text style={styles.copyChipText}>{copied ? 'Copied' : 'Copy'}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -527,56 +599,23 @@ function optimisticClaim(bill: SharedBill, participantId: string, itemId: string
   };
 }
 
-function payTarget(details: SharePayoutDetails | null, amountPence: number, merchant: string) {
-  if (!details || amountPence <= 0) return null;
-  const order: PaymentLinkProvider[] = [];
-  if (details.preferredMethod === 'revolut' || details.preferredMethod === 'monzo' || details.preferredMethod === 'paypal') {
-    order.push(details.preferredMethod);
-  }
-  for (const provider of ['revolut', 'monzo', 'paypal'] as const) {
-    if (!order.includes(provider)) order.push(provider);
-  }
-  const handles: Record<PaymentLinkProvider, string | null> = {
-    revolut: details.revolutHandle,
-    monzo: details.monzoHandle,
-    paypal: details.paypalHandle,
-  };
-  for (const provider of order) {
-    const handle = handles[provider];
-    if (!handle) continue;
-    try {
-      return {
-        provider,
-        handle: provider === 'paypal' ? handle : `@${handle}`,
-        url: buildPaymentUrl(provider, handle, amountPence, merchant),
-        label: provider === 'monzo' ? 'Monzo' : provider === 'revolut' ? 'Revolut' : 'PayPal',
-        amountLabel: formatPence(amountPence),
-      };
-    } catch {
-      continue;
-    }
-  }
-  return null;
+function serviceLabel(rate: number | null, servicePence: number): string {
+  if (servicePence <= 0) return 'Service charge';
+  if (rate == null || !(rate > 0)) return 'Discretionary service';
+  const percent = rate <= 1 ? rate * 100 : rate;
+  const rounded = Math.round(percent * 10) / 10;
+  if (!(rounded > 0) || rounded > 100) return 'Discretionary service';
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return `Discretionary service (${text}%)`;
 }
 
-function bankCopy(details: SharePayoutDetails) {
-  let sort = details.bankSortCode ?? '';
-  let account = details.bankAccountNumber ?? '';
-  try {
-    sort = formatSortCode(sort);
-  } catch {
-    sort = details.bankSortCode ?? '';
-  }
-  let masked = account;
-  try {
-    masked = maskAccountNumber(account);
-  } catch {
-    masked = account;
-  }
-  return {
-    shown: `${sort} · ${masked}`,
-    copied: `${details.bankAccountName}\n${sort}\n${account}`,
-  };
+function shownService(itemsPence: number, servicePence: number, owedPence: number): number {
+  return Math.min(Math.max(0, servicePence), Math.max(0, owedPence - itemsPence));
+}
+
+function shareRemainder(itemsPence: number, servicePence: number, owedPence: number, billServicePence: number): number {
+  if (billServicePence <= 0) return Math.max(0, owedPence - itemsPence);
+  return Math.max(0, owedPence - itemsPence - shownService(itemsPence, servicePence, owedPence));
 }
 
 function initials(name: string) {
@@ -744,7 +783,31 @@ const styles = StyleSheet.create({
   rowValue: { color: '#FAFAFA', fontSize: 14, fontVariant: ['tabular-nums'] },
   rowStrong: { color: '#FAFAFA', fontSize: 18, fontWeight: '700' },
   payout: { gap: 8 },
+  railLabel: { color: '#FAFAFA', fontSize: 13, fontWeight: '700' },
+  bankCard: {
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#1E2230',
+    backgroundColor: '#090B10',
+    padding: 12,
+    gap: 8,
+  },
   bankLine: { color: '#FAFAFA', fontSize: 14, fontVariant: ['tabular-nums'] },
+  copyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  copyText: { flex: 1, gap: 2 },
+  copyLabel: { color: '#A1A1AA', fontSize: 12 },
+  copyValue: { color: '#FAFAFA', fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  copyChip: {
+    minHeight: 36,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#1E2230',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  copyChipText: { color: '#FAFAFA', fontSize: 13, fontWeight: '700' },
+  itemLocked: { opacity: 0.72 },
   primaryButton: {
     minHeight: 52,
     borderRadius: 14,

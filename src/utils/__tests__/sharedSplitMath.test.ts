@@ -58,6 +58,49 @@ it('does not give a zero-weight person the service pennies', () => {
   assertEqual(allocateLargestRemainder(10, { a: 100, b: 0 }), { a: 10, b: 0 });
 });
 
+it('splits an odd number of pence one penny at a time in participant id order', () => {
+  assertEqual(splitEquallyDeterministic(1, ['b', 'a']), { a: 1, b: 0 });
+  assertEqual(splitEquallyDeterministic(5, ['c', 'a', 'b']), { a: 2, b: 2, c: 1 });
+});
+
+it('gives leftover service pennies to the largest fractional remainder', () => {
+  assertEqual(allocateLargestRemainder(10, { b: 200, a: 100 }), { a: 3, b: 7 });
+  assertEqual(allocateLargestRemainder(1, { b: 1, a: 1 }), { a: 1, b: 0 });
+});
+
+it('keeps proportional service inside the printed total and does not add VAT again', () => {
+  const result = reconcileSharedBill({
+    items: [
+      { id: 'starter', pricePence: 100 },
+      { id: 'main', pricePence: 200 },
+    ],
+    claims: [
+      { itemId: 'starter', participantId: 'p1' },
+      { itemId: 'main', participantId: 'p2' },
+    ],
+    participantIds: ['p2', 'p1'],
+    totalPence: 330,
+    serviceChargePence: 30,
+  });
+
+  assertEqual(result.itemsSubtotal, { p1: 100, p2: 200 });
+  assertEqual(result.serviceCharge, { p1: 10, p2: 20 });
+  assertEqual(result.amountOwed, { p1: 110, p2: 220 });
+  assertEqual(result.amountOwed.p1 + result.amountOwed.p2, 330);
+  assertEqual(result.unclaimedPence, 0);
+
+  const vatInclusive = reconcileSharedBill({
+    items: [{ id: 'meal', pricePence: 1000 }],
+    claims: [{ itemId: 'meal', participantId: 'p1' }],
+    participantIds: ['p1'],
+    totalPence: 1000,
+    serviceChargePence: 0,
+  });
+  assertEqual(vatInclusive.amountOwed, { p1: 1000 });
+  assertEqual(vatInclusive.serviceCharge, { p1: 0 });
+  assertEqual(vatInclusive.unclaimedPence, 0);
+});
+
 let failed = 0;
 for (const test of tests) {
   try {

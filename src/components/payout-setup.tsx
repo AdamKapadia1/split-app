@@ -11,7 +11,6 @@ import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import {
   buildProfilePreviewUrl,
   formatSortCode,
-  maskAccountNumber,
   normalizeAccountNumber,
   normalizeSortCode,
   parsePastedPaymentLink,
@@ -47,7 +46,7 @@ const HINTS: Record<PayoutMethodKind, string> = {
   monzo: 'Find yours in Monzo: Payments → Request → Share Monzo.me link',
   revolut: 'Find yours in Revolut: Profile → @Revtag',
   paypal: 'Letters and numbers only — find yours in PayPal Settings → PayPal.Me',
-  bank: 'Used for one-tap copy in UK banking apps. Account number is masked by default.',
+  bank: 'Sort code and account number for UK Faster Payments from any bank app. Guests on a share link see the full account number.',
 };
 
 const EMPTY_BASELINE: Baseline = {
@@ -462,7 +461,7 @@ export function PayoutSetup({ visible, userId, onClose, onSaved }: PayoutSetupPr
                     <Text style={styles.friendTitle}>Friend preview</Text>
                     <Text style={styles.friendLine}>{name}</Text>
                     <Text style={styles.friendLine}>{formatSortCode(sortDigits)}</Text>
-                    <Text style={styles.friendLine}>{maskAccountNumber(accountDigits)}</Text>
+                    <Text style={styles.friendLine}>{accountDigits}</Text>
                   </View>
                 ) : null}
               </View>
