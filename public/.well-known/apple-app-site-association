@@ -3,7 +3,7 @@
     "details": [
       {
         "appIDs": [
-          "REPLACE_WITH_APPLE_TEAM_ID.com.adamkapadia.splitapp"
+          "WZS663T3Q5.com.adamkapadia.splitapp"
         ],
         "components": [
           { "/": "/s/*.js", "exclude": true },
