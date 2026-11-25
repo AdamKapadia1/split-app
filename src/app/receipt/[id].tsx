@@ -13,6 +13,7 @@ import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { listRecentNudgedRecipients, sendSettlementNudge } from '@/services/NotificationService';
 import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
 import { billShareService, shareBillUrl, type SharedBill, BillShareServiceError } from '@/services/BillShareService';
+import { payoutService } from '@/services/PayoutService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
@@ -128,6 +129,7 @@ export default function ReceiptLedgerScreen() {
   const [sharing, setSharing] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
+  const [payoutHint, setPayoutHint] = useState(false);
   const [sharedOverlay, setSharedOverlay] = useState<SharedBill | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const viewerGeneration = useRef(0);
@@ -409,6 +411,11 @@ export default function ReceiptLedgerScreen() {
       await Share.share({
         message: `Split for ${merchant} (£${pounds}) — tap what you had and pay here: ${shareUrl}`,
       });
+      const method = await payoutService.getMyPayoutMethod().catch(() => null);
+      const hasPayout = Boolean(
+        method?.monzoHandle || method?.revolutHandle || method?.paypalHandle || method?.bankAccountNumber,
+      );
+      if (!hasPayout) setPayoutHint(true);
     } catch (error) {
       const message = error instanceof BillShareServiceError
         ? error.message
@@ -703,6 +710,20 @@ export default function ReceiptLedgerScreen() {
           </Pressable>
         ) : null}
         {shareError ? <Text style={styles.errorText}>{shareError}</Text> : null}
+        {payoutHint ? (
+          <View style={styles.payoutHint}>
+            <Text style={styles.payoutHintText}>Payout details are optional. Add a Monzo, Revolut, or bank account in Settings whenever you want friends to pay you in one tap.</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss payout reminder"
+              hitSlop={8}
+              onPress={() => setPayoutHint(false)}
+              style={styles.payoutHintDismiss}
+            >
+              <Ionicons name="close" size={14} color={theme.colors.textSecondary} />
+            </Pressable>
+          </View>
+        ) : null}
         {sharedOverlay && sharedOverlay.participants.length > 0 ? (
           <View style={styles.liveShare}>
             {sharedOverlay.participants.map((person) => (
@@ -1213,6 +1234,20 @@ const styles = StyleSheet.create({
   shareButtonText: { color: theme.colors.accentText, fontSize: 15, fontWeight: '700' },
   shareStatus: { marginHorizontal: 16, marginBottom: 8, minHeight: 32, alignItems: 'center', justifyContent: 'center' },
   shareStatusText: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  payoutHint: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingVertical: 10,
+    paddingLeft: 12,
+    paddingRight: 8,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  payoutHintText: { flex: 1, color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18 },
+  payoutHintDismiss: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   liveShare: {
     marginHorizontal: 16,
     marginBottom: 12,

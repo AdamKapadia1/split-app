@@ -88,7 +88,7 @@ export function AuthScreen() {
     }
 
     if (!supabase) {
-      setError('Add your Supabase URL and anon key, then restart Expo.');
+      setError('Unable to connect to Velor right now. Please check your internet connection and try again.');
       setNotice(null);
       return;
     }

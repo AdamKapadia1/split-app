@@ -170,7 +170,8 @@ class BillShareService {
 export const billShareService = new BillShareService();
 
 export function shareBillUrl(token: string): string {
-  const base = (process.env.EXPO_PUBLIC_WEB_BASE_URL || 'https://velor.app').replace(/\/$/, '');
+  const configured = process.env.EXPO_PUBLIC_WEB_URL || process.env.EXPO_PUBLIC_WEB_BASE_URL || 'https://velor.app';
+  const base = configured.trim().replace(/\/$/, '');
   return `${base}/s/${token}`;
 }
 

@@ -16,7 +16,6 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { groupService } from '@/services/GroupService';
 import { fetchHomeFeed, type HomeFeedReceipt } from '@/services/HomeFeedService';
 import { sendSettlementNudge, unregisterPushTokenAsync } from '@/services/NotificationService';
-import { payoutService, type PayoutMethod } from '@/services/PayoutService';
 import { theme } from '@/theme/theme';
 import { mapErrorToUserMessage, mapSettlementNudgeError } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
@@ -86,20 +85,13 @@ function toBalanceReceipt(receipt: HomeFeedReceipt): HomeBalanceReceipt {
   };
 }
 
-function hasPayoutHandle(method: PayoutMethod | null) {
-  return Boolean(method?.monzoHandle || method?.revolutHandle);
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const { session } = useSupabaseSession();
   const userId = session?.user.id ?? null;
   const [feed, setFeed] = useState<HomeFeedReceipt[] | null>(null);
   const [profileFullName, setProfileFullName] = useState<string | null>(null);
-  const [hasHandle, setHasHandle] = useState(true);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [openPayout, setOpenPayout] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,16 +108,10 @@ export default function HomeScreen() {
     if (kind === 'refresh') setIsRefreshing(true);
     try {
       const receipts = await fetchHomeFeed();
-      const [profile, payoutResult] = await Promise.all([
-        groupService.getAccountProfile(userId).catch(() => null),
-        payoutService.getMyPayoutMethod()
-          .then((method) => ({ ok: true as const, method }))
-          .catch(() => ({ ok: false as const, method: null })),
-      ]);
+      const profile = await groupService.getAccountProfile(userId).catch(() => null);
       setFeed(receipts);
       hasLoadedRef.current = true;
       setProfileFullName(profile?.fullName ?? null);
-      setHasHandle(payoutResult.ok ? hasPayoutHandle(payoutResult.method) : true);
       setError(null);
     } catch (caught) {
       setError(mapErrorToUserMessage(caught, 'Could not load your balances.'));
@@ -150,11 +136,9 @@ export default function HomeScreen() {
   });
   const greetingTitle = identity.greetingName ?? 'Welcome back';
   const settingsName = identity.fullName ?? 'Account';
-  const showBanner = feed !== null && !hasHandle && !bannerDismissed;
 
-  const openAccount = (payout: boolean) => {
+  const openAccount = () => {
     hapticImpactLight();
-    setOpenPayout(payout);
     setAccountOpen(true);
   };
 
@@ -194,7 +178,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Open account settings"
             hitSlop={10}
-            onPress={() => openAccount(false)}
+            onPress={openAccount}
             style={styles.avatarRing}
           >
             <AvatarBadge name={identity.avatarName} userId={userId ?? undefined} size={40} />
@@ -311,38 +295,6 @@ export default function HomeScreen() {
                 )}
               </View>
 
-              {showBanner ? (
-                <View style={styles.banner}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Set up payout details"
-                    onPress={() => openAccount(true)}
-                    style={styles.bannerMain}
-                  >
-                    <View style={styles.bannerIcon}>
-                      <Ionicons name="card-outline" size={18} color={theme.colors.accent} />
-                    </View>
-                    <View style={styles.bannerCopy}>
-                      <Text style={styles.bannerTitle}>Set up payout details</Text>
-                      <Text style={styles.bannerBody}>Add your Monzo or Revolut handle so friends can pay you in one tap</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} />
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Dismiss payout setup"
-                    hitSlop={8}
-                    onPress={() => {
-                      hapticSelection();
-                      setBannerDismissed(true);
-                    }}
-                    style={styles.bannerDismiss}
-                  >
-                    <Ionicons name="close" size={14} color={theme.colors.textSecondary} />
-                  </Pressable>
-                </View>
-              ) : null}
-
               {balances.needsAttention.length > 0 ? (
                 <View style={styles.section}>
                   <View style={styles.sectionHeader}>
@@ -377,13 +329,11 @@ export default function HomeScreen() {
 
       <AccountSettingsSheet
         visible={accountOpen}
-        openPayout={openPayout}
         userId={userId}
         displayName={settingsName}
         subtitle={session?.user.email ?? ''}
         onClose={() => {
           setAccountOpen(false);
-          setOpenPayout(false);
           void load('silent');
         }}
         onLogout={() => {
@@ -628,45 +578,6 @@ const styles = StyleSheet.create({
   heroPillAmount: { fontSize: 17, lineHeight: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
   amountOwed: { color: luxury.positive },
   amountOwe: { color: luxury.warning },
-  banner: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    backgroundColor: CARD,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BORDER,
-    paddingLeft: 12,
-    paddingRight: 4,
-    paddingVertical: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  bannerMain: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 8,
-  },
-  bannerIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accentSubtle,
-  },
-  bannerCopy: { flex: 1, minWidth: 0 },
-  bannerTitle: { fontSize: 14, lineHeight: 18, fontWeight: '600', color: theme.colors.textPrimary },
-  bannerBody: { marginTop: 2, fontSize: 12, lineHeight: 16, color: theme.colors.textSecondary },
-  bannerDismiss: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   section: { marginTop: 36, paddingHorizontal: 16 },
   sectionHeader: {
     flexDirection: 'row',
