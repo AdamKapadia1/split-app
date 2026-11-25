@@ -111,6 +111,7 @@ function RootNavigator() {
               headerShown: false,
               contentStyle: { backgroundColor: Colors.background },
             }}>
+            <Stack.Screen name="s/[token]" />
             <Stack.Protected guard={session !== null}>
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="receipt/[id]" />

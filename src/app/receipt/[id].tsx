@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AvatarBadge } from '@/components/AvatarBadge';
@@ -12,6 +12,7 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { listRecentNudgedRecipients, sendSettlementNudge } from '@/services/NotificationService';
 import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
+import { billShareService, shareBillUrl, type SharedBill, BillShareServiceError } from '@/services/BillShareService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
 import type { Item, Receipt, Split } from '@/types/database.types';
@@ -122,7 +123,15 @@ export default function ReceiptLedgerScreen() {
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [adjustError, setAdjustError] = useState<string | null>(null);
   const [adjusting, setAdjusting] = useState(false);
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareEnabled, setShareEnabled] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [sharedOverlay, setSharedOverlay] = useState<SharedBill | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const viewerGeneration = useRef(0);
+  const ledgerAlive = useRef(true);
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
@@ -132,83 +141,113 @@ export default function ReceiptLedgerScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!receiptId) return;
-    const id = receiptId;
-    let cancelled = false;
-
-    async function loadLedger() {
+  const loadLedger = useCallback(async (id: string, isCurrent: () => boolean) => {
+    async function loadShare() {
       try {
-        const data = await receiptService.getReceiptWithItems(id);
-        if (cancelled) return;
-        if (!data) {
-          setReceiptData(null);
-          setNotFound(true);
+        const status = await billShareService.getShareStatus(id);
+        if (!isCurrent()) return;
+        setShareToken(status.shareToken);
+        setShareEnabled(status.shareEnabled);
+        if (!status.shareEnabled || !status.shareToken) {
+          setSharedOverlay(null);
           return;
         }
-        setReceiptData(data);
-        setNotFound(false);
-
-        if (!data.receipt.group_id) {
-          setMembers([]);
-          setClaims({});
-          setSavedShares({});
-          setPaidById(null);
-          setActiveMemberId(null);
-          setGroupError(null);
-          return;
+        const shared = await billShareService.fetchSharedBill(status.shareToken);
+        if (!isCurrent()) return;
+        setSharedOverlay(shared);
+        if (!shared) return;
+        const nextClaims: Record<string, string[]> = {};
+        for (const item of shared.items) {
+          const ids = item.claimedBy.flatMap((person) => (person.userId ? [person.userId] : []));
+          if (ids.length > 0) nextClaims[item.id] = ids;
         }
-
-        try {
-          const [roster, savedSplits] = await Promise.all([
-            groupService.getGroupMembers(data.receipt.group_id),
-            receiptService.getReceiptSplits(data.receipt.id),
-          ]);
-          if (cancelled) return;
-          const memberIds = new Set(roster.map((member) => member.userId));
-          const nextClaims: Record<string, string[]> = {};
-          for (const split of savedSplits) {
-            if (!memberIds.has(split.user_id)) continue;
-            for (const itemId of split.item_ids) {
-              const existing = nextClaims[itemId] ?? [];
-              if (!existing.includes(split.user_id)) existing.push(split.user_id);
-              nextClaims[itemId] = existing;
-            }
-          }
-          const preferred = preferredMemberId(data.receipt, roster);
-          const shareMap: Record<string, number> = {};
-          for (const split of savedSplits) {
-            if (!memberIds.has(split.user_id)) continue;
-            shareMap[split.user_id] = (shareMap[split.user_id] ?? 0) + split.amount_minor;
-          }
-          setMembers(roster);
-          setClaims(nextClaims);
-          setSavedShares(shareMap);
-          setPaidById(preferred);
-          setActiveMemberId(preferred);
-          setGroupError(null);
-        } catch (error) {
-          if (cancelled) return;
-          logger.error('receipt', { code: 'GROUP_FAILED' });
-          setMembers([]);
-          setClaims({});
-          setSavedShares({});
-          setPaidById(null);
-          setActiveMemberId(null);
-          setGroupError('Could not load this group.');
-        }
-      } catch (error) {
-        if (!cancelled) logger.error('receipt', { code: 'LEDGER_FAILED' });
-      } finally {
-        if (!cancelled) setIsLoading(false);
+        setClaims(nextClaims);
+      } catch {
+        if (isCurrent()) logger.error('receipt', { code: 'SHARE_STATUS_FAILED' });
       }
     }
 
-    void loadLedger();
+    try {
+      const data = await receiptService.getReceiptWithItems(id);
+      if (!isCurrent()) return;
+      if (!data) {
+        setReceiptData(null);
+        setNotFound(true);
+        return;
+      }
+      setReceiptData(data);
+      setNotFound(false);
+
+      if (!data.receipt.group_id) {
+        setMembers([]);
+        setClaims({});
+        setSavedShares({});
+        setPaidById(null);
+        setActiveMemberId(null);
+        setGroupError(null);
+        await loadShare();
+        return;
+      }
+
+      try {
+        const [roster, savedSplits] = await Promise.all([
+          groupService.getGroupMembers(data.receipt.group_id),
+          receiptService.getReceiptSplits(data.receipt.id),
+        ]);
+        if (!isCurrent()) return;
+        const memberIds = new Set(roster.map((member) => member.userId));
+        const nextClaims: Record<string, string[]> = {};
+        for (const split of savedSplits) {
+          if (!memberIds.has(split.user_id)) continue;
+          for (const itemId of split.item_ids) {
+            const existing = nextClaims[itemId] ?? [];
+            if (!existing.includes(split.user_id)) existing.push(split.user_id);
+            nextClaims[itemId] = existing;
+          }
+        }
+        const preferred = preferredMemberId(data.receipt, roster);
+        const shareMap: Record<string, number> = {};
+        for (const split of savedSplits) {
+          if (!memberIds.has(split.user_id)) continue;
+          shareMap[split.user_id] = (shareMap[split.user_id] ?? 0) + split.amount_minor;
+        }
+        setMembers(roster);
+        setClaims(nextClaims);
+        setSavedShares(shareMap);
+        setPaidById(preferred);
+        setActiveMemberId(preferred);
+        setGroupError(null);
+      } catch {
+        if (!isCurrent()) return;
+        logger.error('receipt', { code: 'GROUP_FAILED' });
+        setMembers([]);
+        setClaims({});
+        setSavedShares({});
+        setPaidById(null);
+        setActiveMemberId(null);
+        setGroupError('Could not load this group.');
+      }
+      await loadShare();
+    } catch {
+      if (isCurrent()) logger.error('receipt', { code: 'LEDGER_FAILED' });
+    } finally {
+      if (isCurrent()) {
+        setIsLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    if (!receiptId) return;
+    let current = true;
+    ledgerAlive.current = true;
+    void loadLedger(receiptId, () => current);
     return () => {
-      cancelled = true;
+      current = false;
+      ledgerAlive.current = false;
     };
-  }, [receiptId]);
+  }, [loadLedger, receiptId]));
 
   useEffect(() => {
     if (!receiptId || !session?.user.id) return;
@@ -353,6 +392,55 @@ export default function ReceiptLedgerScreen() {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.back();
   };
+
+  async function shareSplit() {
+    if (!receiptData || sharing) return;
+    setSharing(true);
+    setShareError(null);
+    try {
+      const enabled = shareEnabled && shareToken
+        ? { shareToken, shareEnabled: true as const }
+        : await billShareService.enableBillShare(receiptData.receipt.id);
+      setShareToken(enabled.shareToken);
+      setShareEnabled(true);
+      const merchant = receiptData.receipt.restaurant_name || receiptData.receipt.merchant_name || 'your bill';
+      const pounds = (toMinorUnits(Number(receiptData.receipt.total_amount || 0)) / 100).toFixed(2);
+      const shareUrl = shareBillUrl(enabled.shareToken);
+      await Share.share({
+        message: `Split for ${merchant} (£${pounds}) — tap what you had and pay here: ${shareUrl}`,
+      });
+    } catch (error) {
+      const message = error instanceof BillShareServiceError
+        ? error.message
+        : mapErrorToUserMessage(error, 'Could not create the share link.');
+      setShareError(message);
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  function askRevokeShare() {
+    if (!receiptData || revoking) return;
+    Alert.alert('Turn off this link?', 'Friends will no longer be able to open it.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Revoke', style: 'destructive', onPress: () => { void revokeShare(); } },
+    ]);
+  }
+
+  async function revokeShare() {
+    if (!receiptData) return;
+    setRevoking(true);
+    setShareError(null);
+    try {
+      await billShareService.revokeBillShare(receiptData.receipt.id);
+      setShareEnabled(false);
+      setSharedOverlay(null);
+    } catch (error) {
+      setShareError(error instanceof BillShareServiceError ? error.message : 'Could not turn off the share link.');
+    } finally {
+      setRevoking(false);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -577,7 +665,53 @@ export default function ReceiptLedgerScreen() {
         ) : null}
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor={theme.colors.accent}
+            onRefresh={() => {
+              if (!receiptId) return;
+              setRefreshing(true);
+              void loadLedger(receiptId, () => ledgerAlive.current);
+            }}
+          />
+        )}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Share split link"
+          accessibilityState={{ busy: sharing }}
+          disabled={sharing}
+          onPress={() => { void shareSplit(); }}
+          style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}
+        >
+          {sharing ? <ActivityIndicator color={theme.colors.accentText} /> : (
+            <>
+              <Ionicons name="share-outline" size={18} color={theme.colors.accentText} />
+              <Text style={styles.shareButtonText}>Share Split Link</Text>
+            </>
+          )}
+        </Pressable>
+        {shareEnabled ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Revoke share link" disabled={revoking} onPress={askRevokeShare} style={styles.shareStatus}>
+            {revoking ? <ActivityIndicator color={theme.colors.textSecondary} /> : (
+              <Text style={styles.shareStatusText}>Link active · Revoke</Text>
+            )}
+          </Pressable>
+        ) : null}
+        {shareError ? <Text style={styles.errorText}>{shareError}</Text> : null}
+        {sharedOverlay && sharedOverlay.participants.length > 0 ? (
+          <View style={styles.liveShare}>
+            {sharedOverlay.participants.map((person) => (
+              <Text key={person.id} style={styles.liveShareText}>
+                {person.displayName} · {formatPence(person.amountOwedPence)} · {person.isPaid ? 'Paid' : 'Unpaid'}
+              </Text>
+            ))}
+          </View>
+        ) : null}
         {receipt.image_path ? (
           <Pressable
             accessibilityRole="button"
@@ -790,6 +924,9 @@ export default function ReceiptLedgerScreen() {
         <View style={styles.ledger}>
           {items.map((item, index) => {
             const assigned = people.filter((person) => (claims[item.id] ?? []).includes(person.id));
+            const guests = (sharedOverlay?.items.find((row) => row.id === item.id)?.claimedBy ?? [])
+              .filter((person) => !assigned.some((member) => member.id === person.userId || member.id === person.id))
+              .map((person) => ({ id: person.id, name: person.displayName }));
             const highlighted = isGroup
               ? (claims[item.id] ?? []).includes(activeMemberId ?? '')
               : selectedItemIds.has(item.id);
@@ -800,7 +937,7 @@ export default function ReceiptLedgerScreen() {
                   item={item}
                   priceMinor={isGroup ? lineMinor(item) : toMinorUnits(Number(item.price))}
                   highlighted={highlighted && !isGroup}
-                  assignees={isGroup ? assigned : []}
+                  assignees={[...assigned, ...guests]}
                   activeMemberId={activeMemberId}
                   onToggle={isGroup ? toggleAssignment : toggleItem}
                 />
@@ -1061,6 +1198,30 @@ const styles = StyleSheet.create({
   missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
   missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },
   scrollContent: { paddingTop: 16, paddingBottom: 120 },
+  shareButton: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    minHeight: 48,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.accent,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  shareButtonPressed: { backgroundColor: theme.colors.accentPressed },
+  shareButtonText: { color: theme.colors.accentText, fontSize: 15, fontWeight: '700' },
+  shareStatus: { marginHorizontal: 16, marginBottom: 8, minHeight: 32, alignItems: 'center', justifyContent: 'center' },
+  shareStatusText: { color: theme.colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  liveShare: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+    gap: 4,
+  },
+  liveShareText: { color: theme.colors.textSecondary, fontSize: 13, fontVariant: ['tabular-nums'] },
   originalButton: {
     marginHorizontal: 16,
     marginBottom: 16,
