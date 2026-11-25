@@ -10,8 +10,7 @@
     "ios": {
       "bundleIdentifier": "com.adamkapadia.splitapp",
       "associatedDomains": [
-        "applinks:velor.app",
-        "applinks:www.velor.app"
+        "applinks:velor-pay.vercel.app"
       ],
       "config": {
         "usesNonExemptEncryption": false

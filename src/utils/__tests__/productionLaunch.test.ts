@@ -38,23 +38,23 @@ const paidRecord = {
   amount_owed_pence: 1250,
 };
 
-it('strips trailing slashes and falls back to velor.app', () => {
-  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: 'https://velor.app/' }), 'https://velor.app');
-  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: 'https://velor.app/share/' }), 'https://velor.app/share');
-  assertEqual(getWebBaseUrl({}), 'https://velor.app');
-  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: '   ' }), 'https://velor.app');
+it('strips trailing slashes and falls back to velor-pay.vercel.app', () => {
+  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: 'https://velor-pay.vercel.app/' }), 'https://velor-pay.vercel.app');
+  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: 'https://velor-pay.vercel.app/share/' }), 'https://velor-pay.vercel.app/share');
+  assertEqual(getWebBaseUrl({}), 'https://velor-pay.vercel.app');
+  assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: '   ' }), 'https://velor-pay.vercel.app');
   assertEqual(
-    getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: '', EXPO_PUBLIC_WEB_BASE_URL: 'https://preview.velor.app/' }),
-    'https://preview.velor.app',
+    getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: '', EXPO_PUBLIC_WEB_BASE_URL: 'https://preview.velor-pay.vercel.app/' }),
+    'https://preview.velor-pay.vercel.app',
   );
 });
 
 it('rejects non-https origins in production', () => {
   const production = { NODE_ENV: 'production', EXPO_PUBLIC_APP_ENV: 'production' };
-  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'http://localhost:8081' }), 'https://velor.app');
-  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'http://velor.app' }), 'https://velor.app');
-  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'not a url' }), 'https://velor.app');
-  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'https://velor.app/' }), 'https://velor.app');
+  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'http://localhost:8081' }), 'https://velor-pay.vercel.app');
+  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'http://velor-pay.vercel.app' }), 'https://velor-pay.vercel.app');
+  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'not a url' }), 'https://velor-pay.vercel.app');
+  assertEqual(getWebBaseUrl({ ...production, EXPO_PUBLIC_WEB_URL: 'https://velor-pay.vercel.app/' }), 'https://velor-pay.vercel.app');
   assertEqual(getWebBaseUrl({ EXPO_PUBLIC_WEB_URL: 'http://localhost:8081' }), 'http://localhost:8081');
 });
 
@@ -67,7 +67,7 @@ it('allows only the receipt bill route', () => {
   assertEqual(receiptIdFromPaymentData({ route: `/s/${SHARE_ID}` }), null);
   assertEqual(receiptIdFromPaymentData({ route: `/receipt/${RECEIPT_ID}/edit` }), null);
   assertEqual(receiptIdFromPaymentData({ route: `/receipt/${RECEIPT_ID}?next=/` }), null);
-  assertEqual(receiptIdFromPaymentData({ route: 'https://velor.app/receipt/' + RECEIPT_ID }), null);
+  assertEqual(receiptIdFromPaymentData({ route: 'https://velor-pay.vercel.app/receipt/' + RECEIPT_ID }), null);
 });
 
 it('notifies only when a share moves from unpaid to paid', () => {

@@ -1,10 +1,10 @@
-const CANONICAL_ORIGIN = 'https://velor.app';
+const CANONICAL_ORIGIN = 'https://velor-pay.vercel.app';
 
 type Env = Record<string, string | undefined>;
 
 /**
  * Canonical web origin for share links, auth redirects, and link previews.
- * Production rejects any non-https value and uses https://velor.app.
+ * Production rejects any non-https value and uses https://velor-pay.vercel.app.
  */
 export function getWebBaseUrl(env: Env = process.env): string {
   const configured = firstConfigured(env.EXPO_PUBLIC_WEB_URL, env.EXPO_PUBLIC_WEB_BASE_URL);
