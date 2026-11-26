@@ -2,6 +2,9 @@ import { computeHomeBalances } from '../homeBalances';
 import {
   canMarkSharePaid,
   hostClaimProgress,
+  hostConfirmActionLabel,
+  hostConfirmMode,
+  hostDeductedShareCopy,
   hostPayerPillLabel,
   hostSettledShareCopy,
   isHostParticipant,
@@ -66,6 +69,17 @@ it('recognises a legacy Host row and refuses a pay action for the payer', () => 
   assertEqual(hostSettledShareCopy('£4.00'), {
     title: 'Your share: £4.00 · Paid outright',
     subtitle: 'You paid the full bill — your share is already settled.',
+  });
+  assertEqual(hostConfirmMode({ confirmed: false, selectedCount: 2, dirty: true }), 'confirm');
+  assertEqual(hostConfirmMode({ confirmed: false, selectedCount: 0, dirty: false }), 'confirm-none');
+  assertEqual(hostConfirmMode({ confirmed: true, selectedCount: 2, dirty: true }), 'update');
+  assertEqual(hostConfirmMode({ confirmed: true, selectedCount: 2, dirty: false }), 'settled');
+  assertEqual(hostConfirmActionLabel('£3.34', 'confirm'), 'Confirm my items (£3.34)');
+  assertEqual(hostConfirmActionLabel('£0.00', 'confirm-none'), 'Confirm no items (£0.00)');
+  assertEqual(hostConfirmActionLabel('£5.00', 'update'), 'Update my items (£5.00)');
+  assertEqual(hostDeductedShareCopy('£4.00'), {
+    title: 'Your share: £4.00 · Deducted',
+    subtitle: 'Paid outright by you — deducted from the group split.',
   });
 });
 

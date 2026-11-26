@@ -6,6 +6,7 @@ import {
   isAllowedPaymentRoute,
   isSharePaidTransition,
   receiptIdFromPaymentData,
+  shouldIgnoreHostPaidWebhook,
 } from '../hostPaidNotification';
 
 const tests: { name: string; run: () => void }[] = [];
@@ -120,6 +121,35 @@ it('notifies only when a share moves from unpaid to paid', () => {
     }, HOST_ID).action,
     'notify',
   );
+});
+
+it('ignores host confirmation and host item updates', () => {
+  const hostConfirm = {
+    type: 'UPDATE',
+    table: 'receipt_share_participants',
+    record: { ...paidRecord, is_host: true, is_paid: false, host_confirmed_at: '2026-11-26T12:00:00.000Z' },
+    oldRecord: { ...paidRecord, is_host: true, is_paid: false, host_confirmed_at: null },
+  };
+  assertEqual(shouldIgnoreHostPaidWebhook(hostConfirm), true);
+  assertEqual(decideHostPaidNotification(hostConfirm, HOST_ID).action, 'ignore');
+
+  const hostClaims = {
+    type: 'INSERT',
+    table: 'receipt_share_claims',
+    record: { ...paidRecord, is_paid: true },
+    oldRecord: null,
+  };
+  assertEqual(shouldIgnoreHostPaidWebhook(hostClaims), true);
+  assertEqual(decideHostPaidNotification(hostClaims, HOST_ID).action, 'ignore');
+
+  const guestPaid = {
+    type: 'UPDATE',
+    table: 'receipt_share_participants',
+    record: paidRecord,
+    oldRecord: { ...paidRecord, is_paid: false },
+  };
+  assertEqual(shouldIgnoreHostPaidWebhook(guestPaid), false);
+  assertEqual(decideHostPaidNotification(guestPaid, HOST_ID).action, 'notify');
 });
 
 it('formats pence as GBP and builds the receipt deep link', () => {

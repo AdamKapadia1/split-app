@@ -3,6 +3,7 @@ export {
   PAYMENT_ROUTE_PATTERN,
   PAYMENT_RECEIVED_TITLE,
   isSharePaidTransition,
+  shouldIgnoreHostPaidWebhook,
   decideHostPaidNotification,
   isAllowedPaymentRoute,
   paymentRouteForReceipt,

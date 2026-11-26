@@ -15,9 +15,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SplitCountdownCard } from '@/components/SplitCountdownCard';
 import { VelorBrand } from '@/components/VelorBrand';
 import { APP_NAME, APP_TAGLINE } from '@/constants/brand';
 import { luxury } from '@/constants/theme';
+import { useSplitRealtime } from '@/hooks/useSplitRealtime';
 import { getWebBaseUrl } from '@/lib/url';
 import {
   billShareService,
@@ -27,14 +29,17 @@ import {
 } from '@/services/BillShareService';
 import {
   canMarkSharePaid,
+  hostConfirmActionLabel,
+  hostConfirmMode,
+  hostDeductedShareCopy,
   hostPayerPillLabel,
-  hostSettledShareCopy,
-  payerAttributionLine,
   publicHostLabel,
   selectNamePrompt,
   whoAreYouPrompt,
 } from '@/utils/hostAttribution';
 import { formatPence } from '@/utils/money';
+import { computeSplitLedger } from '@/utils/settlements';
+import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, mayApplyRemoteSnapshot } from '@/utils/splitSync';
 import { reconcileSharedBill, splitEquallyDeterministic } from '@/utils/sharedSplitMath';
 import {
   copyPlainText,
@@ -62,7 +67,9 @@ export default function SharedSplitScreen() {
   const [toast, setToast] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const busy = useRef(false);
-  const revision = useRef(0);
+  const syncGate = useRef(createSyncGate());
+  const [hostDraft, setHostDraft] = useState<string[] | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const remember = useCallback((id: string | null) => {
     setParticipantId(id);
@@ -113,19 +120,24 @@ export default function SharedSplitScreen() {
     };
   }, [applyBill, fetchBill, usableToken]);
 
+  const refreshFromSync = useCallback(() => {
+    const seen = captureEpoch(syncGate.current);
+    void fetchBill().then((result) => {
+      if (!mayApplyRemoteSnapshot(syncGate.current, seen)) return;
+      applyBill(result, true);
+    });
+  }, [applyBill, fetchBill]);
+
+  useSplitRealtime(phase === 'ready' && usableToken ? token : null, refreshFromSync);
+
   useEffect(() => {
     if (phase !== 'ready') return;
     const timer = setInterval(() => {
-      if (busy.current) return;
       if (typeof document !== 'undefined' && document.hidden) return;
-      const seen = revision.current;
-      void fetchBill().then((result) => {
-        if (seen !== revision.current || busy.current) return;
-        applyBill(result, true);
-      });
-    }, 5000);
+      refreshFromSync();
+    }, 20000);
     return () => clearInterval(timer);
-  }, [applyBill, fetchBill, phase]);
+  }, [phase, refreshFromSync]);
 
   useEffect(() => {
     if (!toast) return;
@@ -146,7 +158,7 @@ export default function SharedSplitScreen() {
       return;
     }
     busy.current = true;
-    revision.current += 1;
+    beginLocalMutation(syncGate.current);
     setJoining(true);
     setNotice(null);
     try {
@@ -165,6 +177,7 @@ export default function SharedSplitScreen() {
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not add that name.');
     } finally {
       busy.current = false;
+      finishLocalMutation(syncGate.current);
       setJoining(false);
     }
   }
@@ -176,9 +189,21 @@ export default function SharedSplitScreen() {
       setAdding(true);
       return;
     }
+    if (person?.isHost && !bill.bill.viewerIsHost) {
+      setNotice('The host confirms their own items.');
+      return;
+    }
+    if (person?.isHost && bill.bill.viewerIsHost) {
+      const serverIds = hostItemIds(bill);
+      const current = hostDraft ?? serverIds;
+      const next = current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId];
+      setHostDraft(sameIds(next, serverIds) ? null : next);
+      setNotice(null);
+      return;
+    }
     const previous = bill;
     busy.current = true;
-    revision.current += 1;
+    beginLocalMutation(syncGate.current);
     setBusyItemId(itemId);
     setNotice(null);
     setBill(optimisticClaim(bill, participantId, itemId));
@@ -198,7 +223,38 @@ export default function SharedSplitScreen() {
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not update that item.');
     } finally {
       busy.current = false;
+      finishLocalMutation(syncGate.current);
       setBusyItemId(null);
+    }
+  }
+
+  async function confirmHostItems() {
+    if (!bill || !bill.bill.viewerIsHost || confirming) return;
+    const ids = hostDraft ?? hostItemIds(bill);
+    busy.current = true;
+    beginLocalMutation(syncGate.current);
+    setConfirming(true);
+    setNotice(null);
+    try {
+      const state = await billShareService.confirmHostItems(bill.bill.id, ids);
+      if (!state) {
+        setPhase('invalid');
+        return;
+      }
+      const next = await billShareService.fetchSharedBill(token);
+      if (!next) {
+        setPhase('invalid');
+        return;
+      }
+      setHostDraft(null);
+      setBill(next);
+      setPhase('ready');
+    } catch (error) {
+      setNotice(error instanceof BillShareServiceError ? error.message : 'Could not confirm your items.');
+    } finally {
+      busy.current = false;
+      finishLocalMutation(syncGate.current);
+      setConfirming(false);
     }
   }
 
@@ -207,7 +263,7 @@ export default function SharedSplitScreen() {
     if (!canMarkSharePaid(person)) return;
     const previous = bill;
     busy.current = true;
-    revision.current += 1;
+    beginLocalMutation(syncGate.current);
     setPaying(true);
     setNotice(null);
     setBill({
@@ -234,6 +290,7 @@ export default function SharedSplitScreen() {
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not update payment status.');
     } finally {
       busy.current = false;
+      finishLocalMutation(syncGate.current);
       setPaying(false);
     }
   }
@@ -269,9 +326,31 @@ export default function SharedSplitScreen() {
     }
   }
 
-  const claimedCount = bill?.items.filter((item) => item.claimedBy.length > 0).length ?? 0;
-  const owed = bill?.participants.reduce((sum, entry) => sum + entry.amountOwedPence, 0) ?? 0;
-  const unclaimed = bill ? Math.max(0, bill.bill.totalPence - owed) : 0;
+  const serverHostItems = bill ? hostItemIds(bill) : [];
+  const selectedHostItems = hostDraft ?? serverHostItems;
+  const hostDirty = hostDraft !== null && !sameIds(hostDraft, serverHostItems);
+  const hostConfirmed = Boolean(bill?.bill.hostConfirmedAt);
+  const splitLedger = bill ? computeSplitLedger({
+    receiptTotalPence: bill.bill.totalPence,
+    items: bill.items.map((item) => ({ id: item.id, pricePence: item.totalPricePence })),
+    claims: bill.items.flatMap((item) => item.claimedBy.map((entry) => ({ itemId: item.id, participantId: entry.id }))),
+    participants: bill.participants.map((entry) => ({
+      id: entry.id,
+      isHost: entry.isHost,
+      paid: entry.isPaid && !entry.isHost,
+    })),
+    hostConfirmed,
+    hostPreviewItemIds: bill.bill.viewerIsHost && person?.isHost ? selectedHostItems : undefined,
+  }) : null;
+  const hostMode = hostConfirmMode({
+    confirmed: hostConfirmed,
+    selectedCount: selectedHostItems.length,
+    dirty: hostDirty,
+  });
+  const hostActionAmount = splitLedger
+    ? (hostMode === 'update' ? splitLedger.hostPendingPreviewPence : splitLedger.hostConfirmedPence)
+    : 0;
+  const hostActionLabel = hostConfirmActionLabel(formatPence(hostActionAmount), hostMode);
   const rails = person && bill
     ? resolveUkPaymentRails({
         monzoHandle: bill.owner.payoutDetails?.monzoHandle ?? null,
@@ -331,18 +410,14 @@ export default function SharedSplitScreen() {
             <View style={styles.hero}>
               <Text style={styles.merchant}>{bill.bill.merchantName}</Text>
               <Text style={styles.date}>{formatUkDate(bill.bill.createdAt || bill.bill.billDate)}</Text>
-              <Text style={styles.total}>{formatPence(bill.bill.totalPence)}</Text>
-              <View style={[styles.trust, bill.bill.isReconciled ? styles.trustGood : styles.trustCheck]}>
-                <Text style={[styles.trustText, bill.bill.isReconciled ? styles.trustTextGood : styles.trustTextCheck]}>
-                  {bill.bill.isReconciled ? 'UK VAT-inclusive · Totals reconciled' : 'UK VAT-inclusive · Totals need a look'}
-                </Text>
-              </View>
-              <Text style={styles.payerLine}>{payerAttributionLine(hostName)}</Text>
               {bill.bill.vatPence > 0 ? <Text style={styles.meta}>Includes {formatPence(bill.bill.vatPence)} VAT</Text> : null}
               {bill.bill.serviceChargePence > 0 ? (
                 <Text style={styles.meta}>Discretionary service {formatPence(bill.bill.serviceChargePence)}</Text>
               ) : null}
             </View>
+            {splitLedger ? (
+              <SplitCountdownCard ledger={splitLedger} hostName={hostName} reconciled={bill.bill.isReconciled} />
+            ) : null}
 
             <Text style={styles.section}>Who are you?</Text>
             <Text style={styles.prompt}>{whoAreYouPrompt(hostName)}</Text>
@@ -388,14 +463,6 @@ export default function SharedSplitScreen() {
                 </Pressable>
               </View>
             ) : null}
-
-            <View style={styles.progressHeader}>
-              <Text style={styles.progressLabel}>{claimedCount} of {bill.items.length} items claimed</Text>
-              <Text style={styles.progressLabel}>{formatPence(unclaimed)} unclaimed</Text>
-            </View>
-            <View style={styles.track}>
-              <View style={[styles.fill, { width: `${bill.items.length === 0 ? 0 : Math.round((claimedCount / bill.items.length) * 100)}%` }]} />
-            </View>
 
             <View style={styles.list}>
               {bill.items.map((item) => {
@@ -459,10 +526,24 @@ export default function SharedSplitScreen() {
                   <Row label="Your total to pay" value={formatPence(person.amountOwedPence)} strong />
                   {bill.bill.vatPence > 0 ? <Text style={styles.meta}>UK VAT included in item prices</Text> : null}
                   {person.isHost ? (
-                    <View style={styles.paidCard}>
-                      <Text style={styles.paidTitle}>{hostSettledShareCopy(formatPence(person.amountOwedPence)).title}</Text>
-                      <Text style={styles.meta}>{hostSettledShareCopy(formatPence(person.amountOwedPence)).subtitle}</Text>
-                    </View>
+                    hostMode === 'settled' ? (
+                      <View style={styles.paidCard}>
+                        <Text style={styles.paidTitle}>{hostDeductedShareCopy(formatPence(splitLedger?.hostConfirmedPence ?? person.amountOwedPence)).title}</Text>
+                        <Text style={styles.meta}>{hostDeductedShareCopy(formatPence(splitLedger?.hostConfirmedPence ?? person.amountOwedPence)).subtitle}</Text>
+                      </View>
+                    ) : bill.bill.viewerIsHost ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={hostActionLabel}
+                        disabled={confirming}
+                        onPress={() => { void confirmHostItems(); }}
+                        style={[styles.payButton, confirming && styles.payButtonOff]}
+                      >
+                        {confirming ? <ActivityIndicator color="#09090B" /> : <Text style={styles.payButtonText}>{hostActionLabel}</Text>}
+                      </Pressable>
+                    ) : (
+                      <Text style={styles.meta}>The host confirms their items in Velor. That share is already paid.</Text>
+                    )
                   ) : (
                     <>
                       <PayoutBlock
@@ -600,6 +681,17 @@ function Skeleton() {
       <ActivityIndicator color="#818CF8" style={styles.boneSpin} />
     </View>
   );
+}
+
+function hostItemIds(bill: SharedBill): string[] {
+  return bill.items.filter((item) => item.claimedBy.some((entry) => entry.isHost)).map((item) => item.id);
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((id, index) => id === sortedRight[index]);
 }
 
 function optimisticClaim(bill: SharedBill, participantId: string, itemId: string): SharedBill {

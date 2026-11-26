@@ -76,6 +76,29 @@ export function hostSettledShareCopy(amountLabel: string): { title: string; subt
   };
 }
 
+export type HostConfirmMode = 'confirm' | 'confirm-none' | 'update' | 'settled';
+
+/** Primary action for the host's own items. Settled means the button stays hidden. */
+export function hostConfirmMode(input: { confirmed: boolean; selectedCount: number; dirty: boolean }): HostConfirmMode {
+  if (!input.confirmed) return input.selectedCount === 0 ? 'confirm-none' : 'confirm';
+  if (input.dirty) return 'update';
+  return 'settled';
+}
+
+export function hostConfirmActionLabel(amountLabel: string, mode: HostConfirmMode): string {
+  if (mode === 'confirm-none') return 'Confirm no items (£0.00)';
+  if (mode === 'update') return `Update my items (${amountLabel})`;
+  if (mode === 'confirm') return `Confirm my items (${amountLabel})`;
+  return `Your share: ${amountLabel} · Deducted`;
+}
+
+export function hostDeductedShareCopy(amountLabel: string): { title: string; subtitle: string } {
+  return {
+    title: `Your share: ${amountLabel} · Deducted`,
+    subtitle: 'Paid outright by you — deducted from the group split.',
+  };
+}
+
 /**
  * Host row from `is_host`, else the receipt owner id, else a legacy
  * non-guest participant still labelled "Host".

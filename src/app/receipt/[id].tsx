@@ -8,12 +8,14 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
+import { SplitCountdownCard } from '@/components/SplitCountdownCard';
+import { useSplitRealtime } from '@/hooks/useSplitRealtime';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { listRecentNudgedRecipients, sendSettlementNudge } from '@/services/NotificationService';
 import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
 import { billShareService, shareBillUrl, type SharedBill, BillShareServiceError } from '@/services/BillShareService';
-import { publicHostLabel } from '@/utils/hostAttribution';
+import { hostConfirmActionLabel, hostConfirmMode, hostDeductedShareCopy, publicHostLabel } from '@/utils/hostAttribution';
 import { payoutService } from '@/services/PayoutService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
@@ -24,6 +26,8 @@ import { allocateByItems, extrasMinor, formatPence, toMinorUnits } from '@/utils
 import { parseGBPToPence, penceToPounds } from '@/utils/manualBill';
 import { receiptDiscrepancy, splitExtrasMinor } from '@/utils/receiptReconciliation';
 import { createTapId } from '@/utils/notifications';
+import { computeSplitLedger } from '@/utils/settlements';
+import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, mayApplyRemoteSnapshot } from '@/utils/splitSync';
 
 type LedgerReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -102,6 +106,8 @@ export default function ReceiptLedgerScreen() {
   const [isLoading, setIsLoading] = useState(Boolean(receiptId));
   const [notFound, setNotFound] = useState(!receiptId);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [hostConfirmedAt, setHostConfirmedAt] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [members, setMembers] = useState<GroupMemberProfile[]>([]);
   const [claims, setClaims] = useState<Record<string, string[]>>({});
   const [activeMemberId, setActiveMemberId] = useState<string | null>(null);
@@ -132,8 +138,12 @@ export default function ReceiptLedgerScreen() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [payoutHint, setPayoutHint] = useState(false);
   const [sharedOverlay, setSharedOverlay] = useState<SharedBill | null>(null);
-  const [, setHostDisplayName] = useState('Host');
+  const [hostDisplayName, setHostDisplayName] = useState('Host');
   const selectedItemRef = useRef<Set<string>>(new Set());
+  const confirmedItemRef = useRef<Set<string>>(new Set());
+  const suspendSelection = useRef(false);
+  const syncGate = useRef(createSyncGate());
+  const shareTokenRef = useRef<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const viewerGeneration = useRef(0);
   const ledgerAlive = useRef(true);
@@ -151,6 +161,7 @@ export default function ReceiptLedgerScreen() {
       try {
         const status = await billShareService.getShareStatus(id);
         if (!isCurrent()) return;
+        shareTokenRef.current = status.shareToken;
         setShareToken(status.shareToken);
         setShareEnabled(status.shareEnabled);
         if (!status.shareEnabled || !status.shareToken) {
@@ -160,7 +171,7 @@ export default function ReceiptLedgerScreen() {
         const shared = await billShareService.fetchSharedBill(status.shareToken);
         if (!isCurrent()) return;
         setSharedOverlay(shared);
-        if (!shared) return;
+        if (!shared || suspendSelection.current) return;
         const hostItems = new Set<string>();
         setClaims((current) => {
           const next = { ...current };
@@ -201,6 +212,9 @@ export default function ReceiptLedgerScreen() {
         const hostClaims = await billShareService.fetchHostClaims(id);
         if (!isCurrent() || !hostClaims) return;
         setHostDisplayName(hostClaims.hostDisplayName);
+        setHostConfirmedAt(hostClaims.hostConfirmedAt);
+        confirmedItemRef.current = new Set(hostClaims.claimedItemIds);
+        if (suspendSelection.current) return;
         const nextSelected = new Set(hostClaims.claimedItemIds);
         selectedItemRef.current = nextSelected;
         setSelectedItemIds(nextSelected);
@@ -304,6 +318,39 @@ export default function ReceiptLedgerScreen() {
     };
   }, [loadLedger, receiptId]));
 
+  const refreshShared = useCallback(() => {
+    if (!receiptId) return;
+    const token = shareTokenRef.current;
+    if (!token) return;
+    const seen = captureEpoch(syncGate.current);
+    void (async () => {
+      try {
+        const [shared, hostClaims] = await Promise.all([
+          billShareService.fetchSharedBill(token),
+          billShareService.fetchHostClaims(receiptId).catch(() => null),
+        ]);
+        if (!ledgerAlive.current || !mayApplyRemoteSnapshot(syncGate.current, seen)) return;
+        if (shared) setSharedOverlay(shared);
+        if (!hostClaims) return;
+        setHostDisplayName(hostClaims.hostDisplayName);
+        setHostConfirmedAt(hostClaims.hostConfirmedAt);
+        confirmedItemRef.current = new Set(hostClaims.claimedItemIds);
+        if (suspendSelection.current) return;
+        const nextSelected = new Set(hostClaims.claimedItemIds);
+        selectedItemRef.current = nextSelected;
+        setSelectedItemIds(nextSelected);
+      } catch {
+        logger.error('receipt', { code: 'SPLIT_SYNC_FAILED' });
+      }
+    })();
+  }, [receiptId]);
+
+  useSplitRealtime(
+    shareEnabled ? shareToken : null,
+    refreshShared,
+    session?.user.id && receiptData?.receipt.host_id === session.user.id ? receiptId : null,
+  );
+
   useEffect(() => {
     if (!receiptId || !session?.user.id) return;
     let cancelled = false;
@@ -356,16 +403,45 @@ export default function ReceiptLedgerScreen() {
     if (next.has(itemId)) next.delete(itemId);
     else next.add(itemId);
     selectedItemRef.current = next;
+    suspendSelection.current = true;
     setSelectedItemIds(next);
+  }, [receiptData]);
+
+  const confirmHostItems = useCallback(async () => {
+    if (!receiptData || confirming) return;
     if (session?.user.id !== receiptData.receipt.host_id) return;
-    void billShareService.setHostClaims(receiptData.receipt.id, [...next]).then((state) => {
-      if (state) setHostDisplayName(state.hostDisplayName);
-    }).catch(() => {
-      selectedItemRef.current = previous;
-      setSelectedItemIds(previous);
-      logger.error('receipt', { code: 'HOST_CLAIM_FAILED' });
-    });
-  }, [receiptData, session?.user.id]);
+    const ids = receiptData.receipt.group_id
+      ? receiptData.items
+        .filter((item) => (claims[item.id] ?? []).includes(receiptData.receipt.host_id))
+        .map((item) => item.id)
+      : [...selectedItemRef.current];
+    beginLocalMutation(syncGate.current);
+    setConfirming(true);
+    try {
+      const state = await billShareService.confirmHostItems(receiptData.receipt.id, ids);
+      if (!state) return;
+      const next = new Set(state.claimedItemIds);
+      selectedItemRef.current = next;
+      confirmedItemRef.current = next;
+      suspendSelection.current = false;
+      setSelectedItemIds(next);
+      setHostConfirmedAt(state.hostConfirmedAt);
+      setHostDisplayName(state.hostDisplayName);
+      const token = shareTokenRef.current;
+      if (token) {
+        const shared = await billShareService.fetchSharedBill(token);
+        if (shared) setSharedOverlay(shared);
+      }
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      logger.error('receipt', { code: 'HOST_CONFIRM_FAILED' });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Could not confirm your items', error instanceof BillShareServiceError ? error.message : 'Try again.');
+    } finally {
+      finishLocalMutation(syncGate.current);
+      setConfirming(false);
+    }
+  }, [claims, confirming, receiptData, session?.user.id]);
 
   const toggleAssignment = useCallback((itemId: string) => {
     if (!activeMemberId || !receiptData) return;
@@ -378,16 +454,7 @@ export default function ReceiptLedgerScreen() {
         ? existing.filter((id) => id !== activeMemberId)
         : [...existing, activeMemberId];
       const next = { ...current, [itemId]: nextIds };
-      if (activeMemberId === receiptData.receipt.host_id) {
-        const hostItems = receiptData.items
-          .filter((item) => (next[item.id] ?? []).includes(activeMemberId))
-          .map((item) => item.id);
-        void billShareService.setHostClaims(receiptData.receipt.id, hostItems).then((state) => {
-          if (state) setHostDisplayName(state.hostDisplayName);
-        }).catch(() => {
-          logger.error('receipt', { code: 'HOST_CLAIM_FAILED' });
-        });
-      }
+      if (activeMemberId === receiptData.receipt.host_id) suspendSelection.current = true;
       return next;
     });
   }, [activeMemberId, receiptData]);
@@ -476,6 +543,7 @@ export default function ReceiptLedgerScreen() {
       const enabled = shareEnabled && shareToken
         ? { shareToken, shareEnabled: true as const }
         : await billShareService.enableBillShare(receiptData.receipt.id);
+      shareTokenRef.current = enabled.shareToken;
       setShareToken(enabled.shareToken);
       setShareEnabled(true);
       const merchant = receiptData.receipt.restaurant_name || receiptData.receipt.merchant_name || 'your bill';
@@ -513,6 +581,8 @@ export default function ReceiptLedgerScreen() {
     setShareError(null);
     try {
       await billShareService.revokeBillShare(receiptData.receipt.id);
+      shareTokenRef.current = null;
+      setShareToken(null);
       setShareEnabled(false);
       setSharedOverlay(null);
     } catch (error) {
@@ -578,6 +648,39 @@ export default function ReceiptLedgerScreen() {
   const progress = Math.min(100, Math.round((assignedMinor / Math.max(1, lineTotalMinor)) * 100));
   const blocked = isGroup && unassigned > 0;
   const saveDisabled = saving || blocked || !paidById || members.length === 0;
+  const viewerIsHost = session?.user.id === receipt.host_id;
+  const hostPreviewIds = isGroup
+    ? items.filter((item) => (claims[item.id] ?? []).includes(receipt.host_id)).map((item) => item.id)
+    : [...selectedItemIds];
+  const hostParticipantId = sharedOverlay?.participants.find((person) => person.isHost)?.id ?? receipt.host_id;
+  const ledgerClaims = (sharedOverlay?.items ?? []).flatMap((item) => (
+    item.claimedBy.map((person) => ({ itemId: item.id, participantId: person.id }))
+  ));
+  const splitLedger = computeSplitLedger({
+    receiptTotalPence: receiptTotalMinor,
+    items: items.map((item) => ({ id: item.id, pricePence: lineMinor(item) })),
+    claims: ledgerClaims,
+    participants: sharedOverlay
+      ? sharedOverlay.participants.map((person) => ({
+        id: person.id,
+        isHost: person.isHost,
+        paid: person.isPaid && !person.isHost,
+      }))
+      : [{ id: hostParticipantId, isHost: true, paid: false }],
+    hostConfirmed: Boolean(hostConfirmedAt ?? sharedOverlay?.bill.hostConfirmedAt),
+    hostPreviewItemIds: viewerIsHost ? hostPreviewIds : undefined,
+  });
+  const confirmedSelection = isGroup
+    ? (sharedOverlay?.items ?? []).filter((item) => item.claimedBy.some((person) => person.isHost)).map((item) => item.id).sort().join(',')
+    : [...confirmedItemRef.current].sort().join(',');
+  const previewSelection = [...hostPreviewIds].sort().join(',');
+  const hostMode = hostConfirmMode({
+    confirmed: Boolean(hostConfirmedAt ?? sharedOverlay?.bill.hostConfirmedAt),
+    selectedCount: hostPreviewIds.length,
+    dirty: previewSelection !== confirmedSelection,
+  });
+  const hostActionAmount = hostMode === 'update' ? splitLedger.hostPendingPreviewPence : splitLedger.hostConfirmedPence;
+  const hostActionLabel = hostConfirmActionLabel(formatPence(hostActionAmount), hostMode);
 
   async function refreshSubtotal(nextItems: Item[]) {
     const nextMinor = nextItems.reduce((sum, item) => sum + lineMinor(item), 0);
@@ -783,6 +886,17 @@ export default function ReceiptLedgerScreen() {
           </Pressable>
         ) : null}
         {shareError ? <Text style={styles.errorText}>{shareError}</Text> : null}
+        <SplitCountdownCard
+          ledger={splitLedger}
+          hostName={publicHostLabel(hostDisplayName)}
+          reconciled={sharedOverlay ? sharedOverlay.bill.isReconciled : discrepancy.matches}
+        />
+        {viewerIsHost && hostMode === 'settled' ? (
+          <View style={styles.hostSettled}>
+            <Text style={styles.hostSettledTitle}>{hostDeductedShareCopy(formatPence(splitLedger.hostConfirmedPence)).title}</Text>
+            <Text style={styles.hostSettledBody}>{hostDeductedShareCopy(formatPence(splitLedger.hostConfirmedPence)).subtitle}</Text>
+          </View>
+        ) : null}
         {payoutHint ? (
           <View style={styles.payoutHint}>
             <Text style={styles.payoutHintText}>Payout details are optional. Add a Monzo, Revolut, or bank account in Settings whenever you want friends to pay you in one tap.</Text>
@@ -1075,6 +1189,17 @@ export default function ReceiptLedgerScreen() {
 
       <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
         {saveError ? <Text style={styles.barError}>{saveError}</Text> : null}
+        {viewerIsHost && hostMode !== 'settled' ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={hostActionLabel}
+            disabled={confirming}
+            onPress={() => { void confirmHostItems(); }}
+            style={({ pressed }) => [styles.cta, styles.ctaReady, pressed && styles.ctaReadyPressed, confirming && styles.ctaSaving]}
+          >
+            {confirming ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.ctaReadyText}>{hostActionLabel}</Text>}
+          </Pressable>
+        ) : null}
         {isGroup ? (
           <Pressable
             accessibilityRole="button"
@@ -1268,6 +1393,16 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 16, lineHeight: 20, fontWeight: '600', color: theme.colors.textPrimary },
   headerDate: { marginTop: 1, fontSize: 12, lineHeight: 16, color: theme.colors.textMuted },
   headerTrail: { alignItems: 'flex-end', gap: 6 },
+  hostSettled: {
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.positiveSubtle,
+    borderWidth: 1,
+    borderColor: theme.colors.positive,
+    padding: theme.spacing.lg,
+    gap: 4,
+  },
+  hostSettledTitle: { color: theme.colors.textPrimary, fontSize: 16, fontWeight: '700' },
+  hostSettledBody: { color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18 },
   progressTrack: { height: 3, width: '100%', backgroundColor: theme.colors.surfaceElevated },
   progressFill: { height: 3 },
   settlePill: {

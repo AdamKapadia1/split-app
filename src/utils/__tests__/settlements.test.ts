@@ -1,14 +1,5 @@
-import {
-  calculateNetBalances,
-  deriveGroupLedgerStatus,
-  latestZeroBalanceAt,
-  partitionGroupReceipts,
-  simplifyDebts,
-  type GroupLedgerReceiptInput,
-  type SettlementRecordInput,
-  type SettlementSplitInput,
-  type WatermarkSettlementInput,
-} from '../settlements';
+import { allocateCoClaimPence, calculateNetBalances, computeSplitLedger, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type GroupLedgerReceiptInput, type SettlementRecordInput, type SettlementSplitInput, type SplitLedgerParticipant, type WatermarkSettlementInput } from '../settlements';
+import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, mayApplyRemoteSnapshot, splitSyncSignal } from '../splitSync';
 
 const tests: { name: string; run: () => void }[] = [];
 let currentSuite = '';
@@ -379,6 +370,215 @@ describe('deriveGroupLedgerStatus', () => {
     assertEqual(status.transferCount, 1);
   });
 });
+
+describe('split countdown ledger', () => {
+  const items = [
+    { id: 'steak', pricePence: 1000 },
+    { id: 'pasta', pricePence: 1000 },
+    { id: 'salad', pricePence: 1000 },
+  ];
+  const people = (paidGuest2 = false): SplitLedgerParticipant[] => [
+    { id: 'host', isHost: true, paid: false },
+    { id: 'g1', isHost: false, paid: true },
+    { id: 'g2', isHost: false, paid: paidGuest2 },
+  ];
+
+  it('walks the bill down to £0.00 as the host confirms and guests pay', () => {
+    const opened = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [],
+      participants: people(),
+      hostConfirmed: false,
+    });
+    assertEqual(opened.receiptTotalPence, 3000);
+    assertEqual(opened.hostConfirmedPence, 0);
+    assertEqual(opened.remainingToSplitPence, 3000);
+    assertEqual(opened.remainingUnclaimedPence, 3000);
+    assertEqual(opened.isAllSettled, false);
+    assertBalances(opened);
+
+    const hostSelecting = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [],
+      participants: people(),
+      hostConfirmed: false,
+      hostPreviewItemIds: ['steak'],
+    });
+    assertEqual(hostSelecting.hostConfirmedPence, 1000);
+    assertEqual(hostSelecting.hostPendingPreviewPence, 1000);
+    assertEqual(hostSelecting.remainingToSplitPence, 2000);
+    assertEqual(hostSelecting.remainingUnclaimedPence, 2000);
+    assertBalances(hostSelecting);
+
+    const hostConfirmed = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [{ itemId: 'steak', participantId: 'host' }],
+      participants: people(),
+      hostConfirmed: true,
+    });
+    assertEqual(hostConfirmed.hostConfirmedPence, 1000);
+    assertEqual(hostConfirmed.hostPendingPreviewPence, 0);
+    assertEqual(hostConfirmed.remainingToSplitPence, 2000);
+    assertBalances(hostConfirmed);
+
+    const guestPaid = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [
+        { itemId: 'steak', participantId: 'host' },
+        { itemId: 'pasta', participantId: 'g1' },
+      ],
+      participants: people(),
+      hostConfirmed: true,
+    });
+    assertEqual(guestPaid.guestPaidPence, 1000);
+    assertEqual(guestPaid.remainingToSplitPence, 1000);
+    assertEqual(guestPaid.remainingOwedToHostPence, 1000);
+    assertEqual(guestPaid.remainingUnclaimedPence, 1000);
+    assertBalances(guestPaid);
+
+    const settled = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [
+        { itemId: 'steak', participantId: 'host' },
+        { itemId: 'steak', participantId: 'g2' },
+        { itemId: 'pasta', participantId: 'g1' },
+        { itemId: 'salad', participantId: 'g2' },
+      ],
+      participants: people(true),
+      hostConfirmed: true,
+    });
+    assertEqual(settled.hostConfirmedPence, 500);
+    assertEqual(settled.guestPaidPence, 2500);
+    assertEqual(settled.guestClaimedUnpaidPence, 0);
+    assertEqual(settled.remainingUnclaimedPence, 0);
+    assertEqual(settled.remainingToSplitPence, 0);
+    assertEqual(settled.remainingOwedToHostPence, 0);
+    assertEqual(settled.isAllSettled, true);
+    assertEqual(settled.itemsClaimed, 3);
+    assertBalances(settled);
+  });
+
+  it('splits £10.00 three ways with no leftover penny', () => {
+    const shares = allocateCoClaimPence(1000, ['a', 'b', 'host']);
+    assertEqual(shares, { a: 334, b: 333, host: 333 });
+    assertEqual(Object.values(shares).reduce((sum, amount) => sum + amount, 0), 1000);
+
+    const ledger = computeSplitLedger({
+      receiptTotalPence: 1000,
+      items: [{ id: 'dish', pricePence: 1000 }],
+      claims: [
+        { itemId: 'dish', participantId: 'a' },
+        { itemId: 'dish', participantId: 'b' },
+        { itemId: 'dish', participantId: 'host' },
+      ],
+      participants: [
+        { id: 'host', isHost: true, paid: false },
+        { id: 'a', isHost: false, paid: false },
+        { id: 'b', isHost: false, paid: false },
+      ],
+      hostConfirmed: true,
+    });
+    assertEqual(ledger.hostConfirmedPence, 333);
+    assertEqual(ledger.guestClaimedUnpaidPence, 667);
+    assertEqual(ledger.guestPaidPence, 0);
+    assertEqual(ledger.remainingUnclaimedPence, 0);
+    assertBalances(ledger);
+    assertEqual(ledger.isAllSettled, false);
+  });
+
+  it('spreads a service charge across items before claims are split', () => {
+    const ledger = computeSplitLedger({
+      receiptTotalPence: 1100,
+      items: [
+        { id: 'one', pricePence: 500 },
+        { id: 'two', pricePence: 500 },
+      ],
+      claims: [
+        { itemId: 'one', participantId: 'host' },
+        { itemId: 'two', participantId: 'guest' },
+      ],
+      participants: [
+        { id: 'host', isHost: true, paid: false },
+        { id: 'guest', isHost: false, paid: true },
+      ],
+      hostConfirmed: true,
+    });
+    assertEqual(ledger.hostConfirmedPence + ledger.guestPaidPence + ledger.guestClaimedUnpaidPence + ledger.remainingUnclaimedPence, 1100);
+    assertEqual(ledger.remainingUnclaimedPence, 0);
+    assertEqual(ledger.hostConfirmedPence, 550);
+    assertEqual(ledger.guestPaidPence, 550);
+    assertEqual(ledger.isAllSettled, true);
+  });
+
+  it('keeps a guest paid flag when the host edits items afterwards', () => {
+    const guest: SplitLedgerParticipant = { id: 'g1', isHost: false, paid: true };
+    const participants = [{ id: 'host', isHost: true, paid: false }, guest];
+    const before = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [
+        { itemId: 'steak', participantId: 'host' },
+        { itemId: 'pasta', participantId: 'g1' },
+      ],
+      participants,
+      hostConfirmed: true,
+      hostPreviewItemIds: ['steak', 'salad'],
+    });
+    assertEqual(before.guestPaidPence, 1000);
+    assertEqual(before.hostPendingPreviewPence, 2000);
+    assertEqual(guest.paid, true);
+
+    const after = computeSplitLedger({
+      receiptTotalPence: 3000,
+      items,
+      claims: [
+        { itemId: 'steak', participantId: 'host' },
+        { itemId: 'salad', participantId: 'host' },
+        { itemId: 'pasta', participantId: 'g1' },
+      ],
+      participants,
+      hostConfirmed: true,
+    });
+    assertEqual(guest.paid, true);
+    assertEqual(after.guestPaidPence, 1000);
+    assertEqual(after.hostConfirmedPence, 2000);
+    assertEqual(after.remainingUnclaimedPence, 0);
+    assertEqual(after.isAllSettled, true);
+    assertBalances(after);
+  });
+
+  it('drops a stale refetch that overlaps a local mutation', () => {
+    const gate = createSyncGate();
+    const seenBeforeTap = captureEpoch(gate);
+    beginLocalMutation(gate);
+    const seenDuringTap = captureEpoch(gate);
+    assertEqual(mayApplyRemoteSnapshot(gate, seenBeforeTap), false);
+    assertEqual(mayApplyRemoteSnapshot(gate, seenDuringTap), false);
+    finishLocalMutation(gate);
+    assertEqual(mayApplyRemoteSnapshot(gate, seenDuringTap), false);
+    assertEqual(mayApplyRemoteSnapshot(gate, captureEpoch(gate)), true);
+    assertEqual(splitSyncSignal({
+      share_token: 'abcdefghijklmnopqrst',
+      event_type: 'UPDATE',
+      ts: '2026-11-26T12:00:00.000Z',
+      display_name: 'Ada',
+      amount_pence: 500,
+    })?.share_token, 'abcdefghijklmnopqrst');
+    assertEqual(splitSyncSignal({ event_type: 'UPDATE', ts: '2026-11-26T12:00:00.000Z' }), null);
+  });
+});
+
+function assertBalances(state: ReturnType<typeof computeSplitLedger>) {
+  assertEqual(
+    state.hostConfirmedPence + state.guestClaimedUnpaidPence + state.guestPaidPence + state.remainingUnclaimedPence,
+    state.receiptTotalPence,
+  );
+}
 
 function settlement(fromUserId: string, toUserId: string, amountMinor: number): SettlementRecordInput {
   return {

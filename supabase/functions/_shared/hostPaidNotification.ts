@@ -13,6 +13,7 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 export type SharePaidSnapshot = {
   is_paid?: unknown;
   is_host?: unknown;
+  host_confirmed_at?: unknown;
   id?: unknown;
   receipt_id?: unknown;
   user_id?: unknown;
@@ -41,6 +42,22 @@ export function isSharePaidTransition(input: {
   if (input.table !== SHARE_PARTICIPANTS_TABLE) return false;
   if (!input.record || !input.oldRecord) return false;
   return input.oldRecord.is_paid !== true && input.record.is_paid === true;
+}
+
+/**
+ * Host confirmation writes `host_confirmed_at` and item claims.
+ * Those rows must never become a payment push. A guest unpaid-to-paid
+ * update on receipt_share_participants is the only notify path.
+ */
+export function shouldIgnoreHostPaidWebhook(input: {
+  type: unknown;
+  table: unknown;
+  record: SharePaidSnapshot | null;
+  oldRecord: SharePaidSnapshot | null;
+}): boolean {
+  if (input.table !== SHARE_PARTICIPANTS_TABLE) return true;
+  if (input.record?.is_host === true || input.oldRecord?.is_host === true) return true;
+  return !isSharePaidTransition(input);
 }
 
 /**

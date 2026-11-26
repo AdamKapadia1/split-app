@@ -3,8 +3,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.119.0';
 import {
   decideHostPaidNotification,
   formatSharePaidNotification,
-  isSharePaidTransition,
   lockScreenMerchantName,
+  shouldIgnoreHostPaidWebhook,
   type SharePaidSnapshot,
 } from '../_shared/hostPaidNotification.ts';
 import { chunk, EXPO_PUSH_CHUNK, EXPO_PUSH_SEND_URL, postExpo, safeErrorMessage, tokenKeyPrefix, type ExpoTicket } from '../_shared/expoPush.ts';
@@ -61,8 +61,7 @@ Deno.serve(async (req) => {
     record,
     oldRecord,
   };
-  if (!isSharePaidTransition(transition)) return json(200, { ok: true, ignored: true });
-  if (record?.is_host === true || oldRecord?.is_host === true) return json(200, { ok: true, ignored: true });
+  if (shouldIgnoreHostPaidWebhook(transition)) return json(200, { ok: true, ignored: true });
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },

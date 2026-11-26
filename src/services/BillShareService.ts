@@ -51,6 +51,7 @@ export type HostClaimState = {
   unclaimedPence: number;
   itemsClaimed: number;
   itemsTotal: number;
+  hostConfirmedAt: string | null;
 };
 
 export type SharedBill = {
@@ -69,6 +70,8 @@ export type SharedBill = {
     totalPence: number;
     isReconciled: boolean;
     createdAt: string;
+    hostConfirmedAt: string | null;
+    viewerIsHost: boolean;
   };
   owner: {
     displayName: string;
@@ -209,6 +212,23 @@ class BillShareService {
       throw asShareError(error, 'FAILED', 'Could not update your items.');
     }
   }
+
+  async confirmHostItems(receiptId: string, itemIds: readonly string[]): Promise<HostClaimState | null> {
+    const id = requireUuid(receiptId);
+    const claimed = itemIds.map((itemId) => requireUuid(itemId));
+    try {
+      const client = requireClient();
+      const { data, error } = await client.rpc('confirm_host_items', {
+        p_receipt_id: id,
+        p_item_ids: claimed,
+      });
+      if (error) throw error;
+      if (data == null) return null;
+      return parseHostClaimState(data);
+    } catch (error) {
+      throw asShareError(error, 'FAILED', 'Could not confirm your items.');
+    }
+  }
 }
 
 export const billShareService = new BillShareService();
@@ -279,6 +299,8 @@ function parseSharedBill(value: unknown): SharedBill {
       totalPence: pence(bill.total_pence),
       isReconciled: bill.is_reconciled === true,
       createdAt: text(bill.created_at, text(bill.bill_date, '')),
+      hostConfirmedAt: typeof bill.host_confirmed_at === 'string' ? bill.host_confirmed_at : null,
+      viewerIsHost: bill.viewer_is_host === true,
     },
     owner: {
       displayName: publicHostLabel(text(owner.host_display_name, text(owner.display_name, 'Host'))),
@@ -353,6 +375,7 @@ function parseHostClaimState(value: unknown): HostClaimState {
     unclaimedPence: pence(row.unclaimed_pence),
     itemsClaimed: pence(row.items_claimed),
     itemsTotal: pence(row.items_total),
+    hostConfirmedAt: typeof row.host_confirmed_at === 'string' ? row.host_confirmed_at : null,
   };
 }
 
