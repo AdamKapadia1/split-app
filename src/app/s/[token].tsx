@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -277,16 +278,18 @@ export default function SharedSplitScreen() {
 
   return (
     <View style={styles.page}>
-      <Head>
-        <title>{APP_NAME}</title>
-        <meta name="theme-color" content={luxury.bgCanvas} />
-        <meta name="description" content={APP_TAGLINE} />
-        <meta property="og:title" content={APP_NAME} />
-        <meta property="og:description" content={APP_TAGLINE} />
-        <meta property="og:type" content="website" />
-        <meta property="og:site_name" content={APP_NAME} />
-        <meta property="og:url" content={usableToken ? shareBillUrl(token) : getWebBaseUrl()} />
-      </Head>
+      {Platform.OS === 'web' ? (
+        <Head>
+          <title>{APP_NAME}</title>
+          <meta name="theme-color" content={luxury.bgCanvas} />
+          <meta name="description" content={APP_TAGLINE} />
+          <meta property="og:title" content={APP_NAME} />
+          <meta property="og:description" content={APP_TAGLINE} />
+          <meta property="og:type" content="website" />
+          <meta property="og:site_name" content={APP_NAME} />
+          <meta property="og:url" content={usableToken ? shareBillUrl(token) : getWebBaseUrl()} />
+        </Head>
+      ) : null}
       <View style={[styles.column, { paddingTop: Math.max(insets.top, 12), paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={styles.brandRow}>
           <VelorBrand variant="header" />

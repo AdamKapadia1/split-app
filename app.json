@@ -70,7 +70,12 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "origin": "https://velor-pay.vercel.app"
+        }
+      ],
       [
         "expo-camera",
         {
