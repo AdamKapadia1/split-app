@@ -287,6 +287,29 @@ describe('deriveGroupLedgerStatus', () => {
     assertEqual(status.transferCount, 0);
   });
 
+  it('drops a share-ledger split or settled receipt from the to-split count', () => {
+    const split = deriveGroupLedgerStatus({
+      receipts: [{ ...bill('mollie', '2026-11-20T19:00:00.000Z'), status: 'split' }],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+    assertEqual(split.unsplitActiveCount, 0);
+    assertEqual(split.kind, 'settled');
+
+    const settled = deriveGroupLedgerStatus({
+      receipts: [{ ...bill('mollie', '2026-11-20T19:00:00.000Z', '2026-11-21T09:00:00.000Z'), status: 'settled' }],
+      splits: [],
+      settlements: [],
+      memberIds: people,
+      currentUserId: 'alex',
+    });
+    assertEqual(settled.unsplitActiveCount, 0);
+    assertEqual(settled.kind, 'settled');
+    assertEqual(settled.activeReceiptCount, 0);
+  });
+
   it('still needs a split when another receipt was archived by hand', () => {
     const status = deriveGroupLedgerStatus({
       receipts: [

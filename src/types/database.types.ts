@@ -2,7 +2,7 @@
  * Lifecycle of a receipt from capture through settlement.
  * Stored as a Postgres enum and mirrored here as a closed string union.
  */
-export type ReceiptStatus = 'scanning' | 'open' | 'locked' | 'settled';
+export type ReceiptStatus = 'scanning' | 'open' | 'locked' | 'unsplit' | 'split' | 'settled';
 
 /**
  * Lifecycle of a payment collected against a split.

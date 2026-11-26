@@ -11,6 +11,7 @@ import { MoneyText } from '@/components/MoneyText';
 import { Skeleton } from '@/components/skeleton';
 import { VelorBrand } from '@/components/VelorBrand';
 import { luxury } from '@/constants/theme';
+import { useReceiptLedgerRealtime } from '@/hooks/useReceiptLedgerRealtime';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
@@ -105,9 +106,13 @@ export default function GroupsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void fetchGroups();
+      void fetchGroups('refresh');
     }, [fetchGroups])
   );
+
+  useReceiptLedgerRealtime(() => {
+    void fetchGroups('refresh');
+  });
 
   useEffect(() => subscribeGroupList(() => {
     void fetchGroups('refresh');

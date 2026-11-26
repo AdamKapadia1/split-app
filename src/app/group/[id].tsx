@@ -10,6 +10,7 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { MoneyText } from '@/components/MoneyText';
 import { PaymentSheetModal, type MarkPaidResult } from '@/components/PaymentSheetModal';
 import { StatusPill } from '@/components/StatusPill';
+import { useReceiptLedgerRealtime } from '@/hooks/useReceiptLedgerRealtime';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { compareGroupMembers, GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
@@ -57,6 +58,12 @@ function receiptName(receipt: GroupReceipt) {
 
 function receiptWhen(iso: string) {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function receiptProgressLabel(receipt: GroupReceipt, hasSavedSplit: boolean) {
+  if (receipt.settled_at || receipt.status === 'settled') return 'Settled';
+  if (receipt.status === 'split' || hasSavedSplit) return 'Split';
+  return 'Unsplit';
 }
 
 function monogram(name: string) {
@@ -225,6 +232,10 @@ export default function GroupLedgerScreen() {
     }, [groupId, loadLedger]),
   );
 
+  useReceiptLedgerRealtime(() => {
+    void loadLedger('refresh');
+  }, groupId && GROUP_ID.test(groupId) ? groupId : null);
+
   const spent = receipts.reduce((sum, receipt) => sum + Number(receipt.total_amount || 0), 0);
   const totalSpendMinor = toMinorUnits(spent);
   const splitReceiptIds = useMemo(() => new Set(splits.map((split) => split.receipt_id)), [splits]);
@@ -290,6 +301,7 @@ export default function GroupLedgerScreen() {
           created_at: receipt.created_at,
           paid_by: receipt.paid_by ?? null,
           settled_at: receipt.settled_at,
+          status: receipt.status,
         })),
         splits: splits.map((split) => ({
           receipt_id: split.receipt_id,
@@ -628,7 +640,7 @@ export default function GroupLedgerScreen() {
               <Text style={styles.receiptName} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
             </View>
             <Text style={styles.receiptMeta} numberOfLines={1}>
-              {receiptWhen(item.created_at)} · {splitReceiptIds.has(item.id) ? 'Split' : 'Unsplit'}
+              {receiptWhen(item.created_at)} · {receiptProgressLabel(item, splitReceiptIds.has(item.id))}
             </Text>
           </View>
           <MoneyText amountMinor={toMinorUnits(Number(item.total_amount || 0))} size="md" color={theme.colors.textPrimary} />

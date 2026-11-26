@@ -114,6 +114,8 @@ export type GroupLedgerReceiptInput = {
   created_at: string;
   paid_by: string | null;
   settled_at?: string | null;
+  /** Share-ledger status. `split` and `settled` are no longer waiting to be split. */
+  status?: string | null;
 };
 
 /**
@@ -141,7 +143,7 @@ export function deriveGroupLedgerStatus({
 
   const lastSettledAt = latestZeroBalanceAt(receipts, splits, settlements);
   const { activeReceipts, settledReceipts } = partitionGroupReceipts(receipts, splitReceiptIds, lastSettledAt);
-  const unsplitActiveCount = activeReceipts.filter((receipt) => !splitReceiptIds.has(receipt.id)).length;
+  const unsplitActiveCount = activeReceipts.filter((receipt) => receiptStillNeedsSplit(receipt, splitReceiptIds)).length;
   const netBalances = calculateNetBalances(receipts, splits, settlements, memberIds);
   const simplifiedTransfers = simplifyDebts(netBalances);
   const userNetBalanceMinor = currentUserId ? (netBalances[currentUserId] ?? 0) : 0;
@@ -319,6 +321,15 @@ function applyReceiptSplits(
     balances[split.user_id] -= split.amount_minor;
     balances[paidBy] += split.amount_minor;
   }
+}
+
+function receiptStillNeedsSplit(
+  receipt: { id: string; status?: string | null },
+  splitReceiptIds: ReadonlySet<string>,
+): boolean {
+  if (splitReceiptIds.has(receipt.id)) return false;
+  if (receipt.status === 'split' || receipt.status === 'settled') return false;
+  return true;
 }
 
 function ensureBalance(balances: Record<string, number>, userId: string) {

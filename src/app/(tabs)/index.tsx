@@ -10,6 +10,7 @@ import { AvatarBadge } from '@/components/AvatarBadge';
 import { Skeleton } from '@/components/skeleton';
 import { VelorBrand } from '@/components/VelorBrand';
 import { luxury } from '@/constants/theme';
+import { useReceiptLedgerRealtime } from '@/hooks/useReceiptLedgerRealtime';
 import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
@@ -124,6 +125,10 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => {
     void load(hasLoadedRef.current ? 'silent' : 'load');
   }, [load]));
+
+  useReceiptLedgerRealtime(() => {
+    void load('silent');
+  });
 
   const balances = feed
     ? computeHomeBalances(feed.map(toBalanceReceipt), userId)

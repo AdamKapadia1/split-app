@@ -681,6 +681,7 @@ export default function ReceiptLedgerScreen() {
   });
   const hostActionAmount = hostMode === 'update' ? splitLedger.hostPendingPreviewPence : splitLedger.hostConfirmedPence;
   const hostActionLabel = hostConfirmActionLabel(formatPence(hostActionAmount), hostMode);
+  const headerSettled = Boolean(receipt.settled_at) || receipt.status === 'settled' || splitLedger.isAllSettled;
 
   async function refreshSubtotal(nextItems: Item[]) {
     const nextMinor = nextItems.reduce((sum, item) => sum + lineMinor(item), 0);
@@ -806,27 +807,27 @@ export default function ReceiptLedgerScreen() {
             <MoneyText amountMinor={toMinorUnits(Number(receipt.total_amount || 0))} size="sm" color={theme.colors.textPrimary} />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={receipt.settled_at ? 'Settled' : 'Mark Settled'}
+              accessibilityLabel={headerSettled ? 'Settled' : 'Mark Settled'}
               accessibilityState={{ busy: togglingSettled }}
               disabled={togglingSettled}
-              onPress={receipt.settled_at ? askReopen : askMarkSettled}
+              onPress={headerSettled ? (receipt.settled_at ? askReopen : () => { void commitSettled(true); }) : askMarkSettled}
               style={({ pressed }) => [
                 styles.settlePill,
-                receipt.settled_at ? styles.settlePillDone : null,
-                pressed && !receipt.settled_at && styles.settlePillPressed,
+                headerSettled ? styles.settlePillDone : null,
+                pressed && !headerSettled && styles.settlePillPressed,
               ]}
             >
               {togglingSettled ? (
-                <ActivityIndicator size="small" color={receipt.settled_at ? '#FFFFFF' : theme.colors.textPrimary} />
+                <ActivityIndicator size="small" color={headerSettled ? '#FFFFFF' : theme.colors.textPrimary} />
               ) : (
                 <>
                   <Ionicons
-                    name={receipt.settled_at ? 'checkmark-circle' : 'checkmark-circle-outline'}
+                    name={headerSettled ? 'checkmark-circle' : 'checkmark-circle-outline'}
                     size={14}
-                    color={receipt.settled_at ? '#FFFFFF' : theme.colors.positive}
+                    color={headerSettled ? '#FFFFFF' : theme.colors.positive}
                   />
-                  <Text style={[styles.settlePillText, receipt.settled_at && styles.settlePillTextDone]}>
-                    {receipt.settled_at ? 'Settled' : 'Mark Settled'}
+                  <Text style={[styles.settlePillText, headerSettled && styles.settlePillTextDone]}>
+                    {headerSettled ? 'Settled' : 'Mark Settled'}
                   </Text>
                 </>
               )}

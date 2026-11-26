@@ -226,7 +226,7 @@ class GroupService {
           .from('group_members')
           .select('group_id, user_id, role, joined_at, profiles(id, email, full_name)')
           .in('group_id', ids),
-        client.from('receipts').select('id, group_id, paid_by, created_at, settled_at').in('group_id', ids),
+        client.from('receipts').select('id, group_id, paid_by, created_at, settled_at, status').in('group_id', ids),
         client.from('settlements').select('group_id, from_user_id, to_user_id, amount_minor, voided_at, created_at').in('group_id', ids),
         client
           .from('receipt_splits')
@@ -513,7 +513,7 @@ function buildBalanceSummaries(
   const receiptsByGroup = new Map<string, GroupLedgerReceiptInput[]>();
   for (const raw of receiptRows) {
     if (!raw || typeof raw !== 'object') continue;
-    const row = raw as { id?: unknown; group_id?: unknown; paid_by?: unknown; created_at?: unknown; settled_at?: unknown };
+    const row = raw as { id?: unknown; group_id?: unknown; paid_by?: unknown; created_at?: unknown; settled_at?: unknown; status?: unknown };
     const id = text(row.id);
     const groupId = text(row.group_id);
     if (!id || !groupId) continue;
@@ -524,6 +524,7 @@ function buildBalanceSummaries(
       paid_by: text(row.paid_by) || null,
       created_at: text(row.created_at),
       settled_at: text(row.settled_at) || null,
+      status: text(row.status) || null,
     });
     receiptsByGroup.set(groupId, bucket);
   }

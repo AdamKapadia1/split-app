@@ -35,7 +35,7 @@ type ReceiptTotalsUpdate = Partial<
 
 type ScannedItem = Omit<Item, 'id' | 'receipt_id'> & { name?: string };
 
-const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['scanning', 'open', 'locked', 'settled'];
+const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['scanning', 'open', 'locked', 'unsplit', 'split', 'settled'];
 
 export class ReceiptServiceError extends Error {
   readonly code: ReceiptServiceCode;
