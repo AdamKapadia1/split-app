@@ -6,7 +6,10 @@ import { ActivityIndicator, Alert, LayoutAnimation, Modal, Platform, Pressable, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddMemberModal } from '@/components/AddMemberModal';
+import { AmbientScreenBackground } from '@/components/AmbientScreenBackground';
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { BrushedHeroCard } from '@/components/BrushedHeroCard';
+import { CategoryIconTile } from '@/components/CategoryIconTile';
 import { MoneyText } from '@/components/MoneyText';
 import { PaymentSheetModal, type MarkPaidResult } from '@/components/PaymentSheetModal';
 import { StatusPill } from '@/components/StatusPill';
@@ -16,6 +19,7 @@ import { useSupabaseSession } from '@/lib/use-session';
 import { compareGroupMembers, GroupServiceError, groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { createIdempotencyKey, SettlementServiceError, settlementService, type GroupLedgerData } from '@/services/SettlementService';
 import { theme } from '@/theme/theme';
+import type { VelorTone } from '@/theme/velorVisuals';
 import type { Receipt, ReceiptSplit, Settlement } from '@/types/database.types';
 import { formatSmartDate } from '@/utils/formatSmartDate';
 import { computeGroupNetBalance, type GroupNetBalance } from '@/utils/homeBalances';
@@ -69,11 +73,6 @@ function receiptName(receipt: GroupReceipt | null | undefined) {
 
 function receiptWhen(iso: unknown) {
   return formatReceiptDate(iso, { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function monogram(name: unknown) {
-  const letter = (typeof name === 'string' ? name : '').trim().charAt(0).toUpperCase();
-  return letter || '?';
 }
 
 function rowsOf<T>(value: readonly T[] | null | undefined): T[] {
@@ -648,14 +647,12 @@ export default function GroupLedgerScreen() {
           accessibilityRole="button"
           accessibilityLabel={name}
           onPress={() => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
             router.push({ pathname: '/receipt/[id]', params: { id: item.id } });
           }}
           style={({ pressed }) => [styles.receiptRow, pressed && styles.receiptPressed]}
         >
-          <View style={styles.monogram}>
-            <Text style={styles.monogramText}>{monogram(name)}</Text>
-          </View>
+          <CategoryIconTile title={name} />
           <View style={styles.receiptCopy}>
             <View style={styles.nameRow}>
               <Text style={styles.receiptName} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
@@ -673,8 +670,16 @@ export default function GroupLedgerScreen() {
 
   const settleOpen = groupStatus.kind === 'balances_owed';
   const settleDone = groupStatus.kind === 'settled';
+  const heroTone: VelorTone = groupStatus.kind === 'settled'
+    ? 'mint'
+    : groupStatus.kind === 'balances_owed' && groupStatus.userNetBalanceMinor < 0
+      ? 'amber'
+      : groupStatus.kind === 'empty'
+        ? 'none'
+        : 'iris';
 
   return (
+    <AmbientScreenBackground>
     <View style={styles.container}>
       <SafeAreaView edges={['top']} style={styles.navSafe}>
         <View style={styles.navBar}>
@@ -723,7 +728,7 @@ export default function GroupLedgerScreen() {
             />
           }
         >
-          <View style={styles.hero}>
+          <BrushedHeroCard tone={heroTone} style={styles.heroCard} contentStyle={styles.hero}>
             <Text accessibilityRole="header" style={styles.groupName} numberOfLines={2}>{groupName}</Text>
             <Text style={styles.heroLabel}>Total group spend</Text>
             <MoneyText amountMinor={totalSpendMinor} size="hero" splitDecimals />
@@ -731,7 +736,7 @@ export default function GroupLedgerScreen() {
             <View style={styles.heroPill}>
               <GroupHeroPill status={groupStatus} />
             </View>
-          </View>
+          </BrushedHeroCard>
 
           <View style={styles.actions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Scan bill" onPress={scanBill} style={styles.action}>
@@ -1022,9 +1027,7 @@ export default function GroupLedgerScreen() {
                                   }}
                                   style={({ pressed }) => [styles.settledRow, pressed && styles.settledRowPressed]}
                                 >
-                                  <View style={styles.settledMonogram}>
-                                    <Text style={styles.settledMonogramText}>{monogram(name)}</Text>
-                                  </View>
+                                  <CategoryIconTile title={name} size={36} />
                                   <View style={styles.settledCopy}>
                                     <View style={styles.nameRow}>
                                       <Text style={styles.settledName} numberOfLines={1} ellipsizeMode="tail">{name}</Text>
@@ -1155,6 +1158,7 @@ export default function GroupLedgerScreen() {
         </View>
       </Modal>
     </View>
+    </AmbientScreenBackground>
   );
 }
 
@@ -1210,8 +1214,8 @@ function GroupHeroPill({ status }: { status: GroupLedgerStatus }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.canvas },
-  navSafe: { backgroundColor: theme.colors.canvas },
+  container: { flex: 1, backgroundColor: 'transparent' },
+  navSafe: { backgroundColor: 'transparent' },
   navBar: {
     height: 52,
     paddingHorizontal: theme.spacing.lg,
@@ -1238,7 +1242,8 @@ const styles = StyleSheet.create({
   missingTitle: { ...theme.typography.bodyStrong, color: theme.colors.textPrimary, fontSize: 20, lineHeight: 26 },
   missingCopy: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: theme.spacing.sm },
   scrollContent: { paddingBottom: 24 },
-  hero: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20 },
+  heroCard: { marginHorizontal: 16, marginTop: 4 },
+  hero: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 18 },
   groupName: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, marginBottom: 16 },
   heroLabel: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 4 },
   heroPill: { marginTop: 10 },
@@ -1259,8 +1264,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontVariant: ['tabular-nums'],
   },
-  standingOwedText: { color: '#10B981' },
-  standingOweText: { color: '#F59E0B' },
+  standingOwedText: { color: '#2EE59D' },
+  standingOweText: { color: '#FFB547' },
   actions: {
     marginTop: 20,
     paddingHorizontal: 20,
@@ -1287,10 +1292,10 @@ const styles = StyleSheet.create({
   memberCard: {
     marginHorizontal: 16,
     marginTop: 20,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    backgroundColor: '#131624',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     paddingHorizontal: 14,
     paddingVertical: 12,
     flexDirection: 'row',
@@ -1349,10 +1354,10 @@ const styles = StyleSheet.create({
   section: { marginHorizontal: 16, marginTop: 24 },
   sectionHeading: { ...theme.typography.sectionLabel, color: theme.colors.textMuted, marginBottom: 8, marginLeft: 4 },
   card: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
+    backgroundColor: '#131624',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
   },
   transferDivider: { height: StyleSheet.hairlineWidth, marginLeft: 56, backgroundColor: theme.colors.border },

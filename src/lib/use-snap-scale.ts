@@ -46,6 +46,34 @@ export function useSnapScale(signal: boolean | string | number = true, firm = fa
   };
 }
 
+export function usePressSpring(scaleTo: number) {
+  const press = useSharedValue(1);
+  const pop = useSharedValue(1);
+  const seen = useRef(false);
+
+  useEffect(() => {
+    if (!seen.current) {
+      seen.current = true;
+      return;
+    }
+    pop.value = withSpring(1, SNAP);
+  }, [pop, scaleTo]);
+
+  const style = useAnimatedStyle(() => ({
+    transform: [{ scale: press.value * pop.value }],
+  }));
+
+  return {
+    style,
+    onPressIn: () => {
+      press.value = withSpring(scaleTo, { damping: 18, stiffness: 420, mass: 0.4 });
+    },
+    onPressOut: () => {
+      press.value = withSpring(1, { damping: 16, stiffness: 320, mass: 0.45 });
+    },
+  };
+}
+
 export function useHoldScale(held: boolean) {
   const press = useSharedValue(1);
 

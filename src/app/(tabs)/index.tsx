@@ -1,14 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AccountSettingsSheet } from '@/components/AccountSettingsSheet';
+import { AmbientScreenBackground } from '@/components/AmbientScreenBackground';
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { BrushedHeroCard } from '@/components/BrushedHeroCard';
+import { CategoryIconTile } from '@/components/CategoryIconTile';
+import { GlossyButton } from '@/components/GlossyButton';
+import { MoneyText } from '@/components/MoneyText';
 import { Skeleton } from '@/components/skeleton';
-import { VelorBrand } from '@/components/VelorBrand';
+import { SmokedGlassCard } from '@/components/SmokedGlassCard';
+import { VelorHeader } from '@/components/VelorHeader';
 import { luxury } from '@/constants/theme';
 import { useReceiptLedgerRealtime } from '@/hooks/useReceiptLedgerRealtime';
 import { resolveMemberIdentity } from '@/lib/memberName';
@@ -18,6 +23,7 @@ import { groupService } from '@/services/GroupService';
 import { fetchHomeFeed, type HomeFeedReceipt } from '@/services/HomeFeedService';
 import { sendSettlementNudge, unregisterPushTokenAsync } from '@/services/NotificationService';
 import { theme } from '@/theme/theme';
+import { velor, type VelorTone } from '@/theme/velorVisuals';
 import { mapErrorToUserMessage, mapSettlementNudgeError } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { formatSmartDate } from '@/utils/formatSmartDate';
@@ -154,11 +160,10 @@ export default function HomeScreen() {
     profileFullName,
     email: session?.user.email,
   });
-  const greetingTitle = identity.greetingName ?? 'Welcome back';
+  const greetingTitle = identity.greetingName ? `Welcome back, ${identity.greetingName}` : 'Welcome back';
   const settingsName = identity.fullName ?? 'Account';
 
   const openAccount = () => {
-    hapticImpactLight();
     setAccountOpen(true);
   };
 
@@ -190,20 +195,10 @@ export default function HomeScreen() {
   };
 
   return (
+    <AmbientScreenBackground>
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.topRow}>
-          <VelorBrand variant="header" />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open account settings"
-            hitSlop={10}
-            onPress={openAccount}
-            style={styles.avatarRing}
-          >
-            <AvatarBadge name={identity.avatarName} userId={userId ?? undefined} size={40} />
-          </Pressable>
-        </View>
+        <VelorHeader name={identity.avatarName} userId={userId ?? undefined} onPressAvatar={openAccount} />
         <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
         <Text accessibilityRole="header" style={styles.title} numberOfLines={1}>{greetingTitle}</Text>
       </View>
@@ -243,6 +238,28 @@ export default function HomeScreen() {
           {feed !== null ? (
             <>
               <HeroCard balances={balances} />
+              <View style={styles.quickRow}>
+                <GlossyButton
+                  variant="iris"
+                  icon="camera-outline"
+                  label="Scan Bill"
+                  accessibilityLabel="Scan a bill"
+                  style={styles.quickButton}
+                  onPress={() => {
+                    router.push('/scan');
+                  }}
+                />
+                <GlossyButton
+                  variant="glass"
+                  icon="people-outline"
+                  label="New Group"
+                  accessibilityLabel="New group"
+                  style={styles.quickButton}
+                  onPress={() => {
+                    router.push({ pathname: '/groups', params: { create: '1' } });
+                  }}
+                />
+              </View>
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionLabel}>Recent splits</Text>
@@ -283,19 +300,16 @@ export default function HomeScreen() {
                   recent.map((receipt) => {
                     const settled = isReceiptBalanceSettled(toBalanceReceipt(receipt));
                     return (
-                      <Pressable
+                      <SmokedGlassCard
                         key={receipt.id}
-                        accessibilityRole="button"
                         accessibilityLabel={merchantLabel(receipt)}
                         onPress={() => {
-                          hapticImpactLight();
                           router.push({ pathname: '/receipt/[id]', params: { id: receipt.id } });
                         }}
-                        style={({ pressed }) => [styles.activityCard, pressed && styles.cardPressed]}
+                        style={styles.activityWrap}
+                        contentStyle={styles.activityCard}
                       >
-                        <View style={styles.activityIcon}>
-                          <Ionicons name="receipt-outline" size={18} color={luxury.textPrimary} />
-                        </View>
+                        <CategoryIconTile title={merchantLabel(receipt)} />
                         <View style={styles.activityCopy}>
                           <Text style={styles.activityTitle} numberOfLines={1}>{merchantLabel(receipt)}</Text>
                           <View style={styles.activityMetaRow}>
@@ -307,9 +321,9 @@ export default function HomeScreen() {
                             <BalanceStatusPill settled={settled} />
                           </View>
                         </View>
-                        <Text style={styles.activityAmount}>{poundsLabel(receipt.totalMinor)}</Text>
+                        <MoneyText amountMinor={receipt.totalMinor} size="lg" color={velor.ink} />
                         <Ionicons name="chevron-forward" size={16} color={luxury.textMuted} />
-                      </Pressable>
+                      </SmokedGlassCard>
                     );
                   })
                 )}
@@ -366,28 +380,39 @@ export default function HomeScreen() {
         }}
       />
     </SafeAreaView>
+    </AmbientScreenBackground>
   );
+}
+
+function heroTone(balances: HomeBalances): VelorTone {
+  if (balances.status === 'settled') return 'mint';
+  if (balances.status === 'owes') return 'amber';
+  return 'iris';
+}
+
+function subBalanceInk(amount: number, active: string) {
+  return amount > 0 ? active : velor.zero;
 }
 
 function HeroCard({ balances }: { balances: HomeBalances }) {
   const parts = formatPenceParts(Math.abs(balances.netPence));
   const settled = balances.status === 'settled';
   const statusLabel = balances.status === 'owed' ? "YOU'RE OWED" : balances.status === 'owes' ? 'YOU OWE' : 'ALL SETTLED UP';
+  const pill = settled
+    ? { fill: 'rgba(46, 229, 157, 0.12)', border: 'rgba(46, 229, 157, 0.28)', dot: velor.mint, text: velor.mintText }
+    : balances.status === 'owes'
+      ? { fill: 'rgba(255, 181, 71, 0.12)', border: 'rgba(255, 181, 71, 0.28)', dot: velor.amber, text: '#FFD089' }
+      : { fill: 'rgba(124, 140, 255, 0.14)', border: 'rgba(124, 140, 255, 0.34)', dot: velor.iris, text: '#C5CDFF' };
+  const owedInk = subBalanceInk(balances.owedToYouPence, velor.mint);
+  const oweInk = subBalanceInk(balances.youOwePence, velor.amber);
 
   return (
-    <LinearGradient
-      colors={['#171A26', '#0D0F16', '#090A0F']}
-      locations={[0, 0.55, 1]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.hero}
-    >
+    <BrushedHeroCard tone={heroTone(balances)} style={styles.hero} contentStyle={styles.heroContent}>
       <View style={styles.heroTop}>
-        <View style={[styles.heroStatus, settled ? styles.heroStatusSettled : styles.heroStatusOpen]}>
-          <View style={[styles.statusDot, { backgroundColor: settled ? luxury.positive : luxury.warning }]} />
-          <Text style={[styles.heroStatusText, { color: settled ? luxury.positive : luxury.warning }]}>{statusLabel}</Text>
+        <View style={[styles.heroStatus, { backgroundColor: pill.fill, borderColor: pill.border }]}>
+          <View style={[styles.statusDot, { backgroundColor: pill.dot, shadowColor: pill.dot }]} />
+          <Text style={[styles.heroStatusText, { color: pill.text }]}>{statusLabel}</Text>
         </View>
-        <VelorBrand variant="watermark" />
       </View>
       <Text accessibilityLabel={poundsLabel(balances.netPence)} style={styles.heroAmount}>
         <Text style={styles.heroPounds}>{`£${parts.pounds}`}</Text>
@@ -396,21 +421,21 @@ function HeroCard({ balances }: { balances: HomeBalances }) {
       <View style={styles.heroSplit}>
         <View style={styles.heroPill}>
           <View style={styles.heroPillLabel}>
-            <View style={[styles.dot, styles.dotOwed]} />
+            <View style={[styles.dot, { backgroundColor: owedInk }]} />
             <Text style={styles.heroPillCaption}>Owed to you</Text>
           </View>
-          <Text style={[styles.heroPillAmount, styles.amountOwed]}>{poundsLabel(balances.owedToYouPence)}</Text>
+          <Text style={[styles.heroPillAmount, { color: owedInk }]}>{poundsLabel(balances.owedToYouPence)}</Text>
         </View>
         <View style={styles.heroDivider} />
         <View style={styles.heroPill}>
           <View style={styles.heroPillLabel}>
-            <View style={[styles.dot, styles.dotOwe]} />
+            <View style={[styles.dot, { backgroundColor: oweInk }]} />
             <Text style={styles.heroPillCaption}>You owe</Text>
           </View>
-          <Text style={[styles.heroPillAmount, styles.amountOwe]}>{poundsLabel(balances.youOwePence)}</Text>
+          <Text style={[styles.heroPillAmount, { color: oweInk }]}>{poundsLabel(balances.youOwePence)}</Text>
         </View>
       </View>
-    </LinearGradient>
+    </BrushedHeroCard>
   );
 }
 
@@ -496,28 +521,14 @@ function HomeSkeleton() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: luxury.bgCanvas },
+  container: { flex: 1, backgroundColor: 'transparent' },
   header: {
     paddingHorizontal: 20,
     paddingTop: 8,
     paddingBottom: 8,
   },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 18,
-  },
-  avatarRing: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: luxury.borderHighlight,
-  },
   greeting: {
+    marginTop: 16,
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '600',
@@ -530,14 +541,19 @@ const styles = StyleSheet.create({
   scroll: { paddingBottom: 28 },
   hero: {
     marginHorizontal: 16,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
+  },
+  heroContent: {
     paddingHorizontal: 18,
     paddingTop: 16,
     paddingBottom: 4,
-    overflow: 'hidden',
   },
+  quickRow: {
+    marginTop: 16,
+    marginHorizontal: 16,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  quickButton: { flex: 1 },
   heroTop: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -549,6 +565,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
+    borderWidth: 1,
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
@@ -572,7 +589,7 @@ const styles = StyleSheet.create({
     lineHeight: 50,
     fontWeight: '700',
     letterSpacing: -1,
-    color: '#FFFFFF',
+    color: '#F5F7FF',
     fontVariant: ['tabular-nums'],
   },
   heroPence: {
@@ -580,7 +597,7 @@ const styles = StyleSheet.create({
     lineHeight: 50,
     fontWeight: '500',
     letterSpacing: -1,
-    color: 'rgba(255,255,255,0.38)',
+    color: '#8A93AB',
     fontVariant: ['tabular-nums'],
   },
   heroSplit: {
@@ -600,7 +617,7 @@ const styles = StyleSheet.create({
   heroPillAmount: { fontSize: 17, lineHeight: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
   amountOwed: { color: luxury.positive },
   amountOwe: { color: luxury.warning },
-  section: { marginTop: 36, paddingHorizontal: 16 },
+  section: { marginTop: 28, paddingHorizontal: 16 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -659,14 +676,10 @@ const styles = StyleSheet.create({
   actionPillDone: { backgroundColor: '#1C1C21', borderWidth: 1, borderColor: BORDER },
   actionPillText: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: theme.colors.accentText },
   actionPillTextDone: { color: theme.colors.textMuted },
+  activityWrap: { marginBottom: 8 },
   activityCard: {
-    backgroundColor: luxury.bgElevated,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: luxury.borderSubtle,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -694,7 +707,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    shadowOpacity: 0.85,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+  },
   statusSettled: { backgroundColor: luxury.positiveSoft },
   statusOpen: { backgroundColor: luxury.warningSoft },
   statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },

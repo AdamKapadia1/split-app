@@ -210,6 +210,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#050609',
+    backgroundColor: '#05060B',
   },
 });

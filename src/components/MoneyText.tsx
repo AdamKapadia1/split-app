@@ -30,6 +30,7 @@ export function MoneyText({ amountMinor, size = 'md', color, splitDecimals = fal
     const dot = formatted.lastIndexOf('.');
     const whole = dot === -1 ? formatted : formatted.slice(0, dot);
     const fraction = dot === -1 ? '' : formatted.slice(dot);
+    const fractionInk = color ? ink : '#8A93AB';
 
     return (
       <Text
@@ -40,12 +41,12 @@ export function MoneyText({ amountMinor, size = 'md', color, splitDecimals = fal
         style={[
           styles.heroWhole,
           figureSize != null ? { fontSize: figureSize, lineHeight: figureSize + 6 } : null,
-          { color: ink },
+          { color: color ? ink : '#F5F7FF' },
         ]}
       >
         {whole}
         {fraction ? (
-          <Text style={[styles.heroFraction, figureSize != null ? { fontSize: figureSize, lineHeight: figureSize + 6 } : null]}>
+          <Text style={[styles.heroFraction, figureSize != null ? { fontSize: figureSize, lineHeight: figureSize + 6 } : null, { color: fractionInk }]}>
             {fraction}
           </Text>
         ) : null}
@@ -66,14 +67,14 @@ const styles = StyleSheet.create({
     ...theme.typography.hero,
     fontWeight: '700',
     letterSpacing: -1.2,
-    color: '#FFFFFF',
+    color: '#F5F7FF',
     fontVariant: ['tabular-nums'],
   },
   heroFraction: {
     fontSize: 30,
     fontWeight: '600',
     letterSpacing: -1.2,
-    color: 'rgba(255, 255, 255, 0.36)',
+    color: '#8A93AB',
     fontVariant: ['tabular-nums'],
   },
 });

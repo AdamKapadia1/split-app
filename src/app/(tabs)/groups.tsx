@@ -1,22 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AccountSettingsSheet } from '@/components/AccountSettingsSheet';
+import { AmbientScreenBackground } from '@/components/AmbientScreenBackground';
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { GlossyButton } from '@/components/GlossyButton';
+import { GroupIconTile } from '@/components/CategoryIconTile';
 import { MoneyText } from '@/components/MoneyText';
 import { Skeleton } from '@/components/skeleton';
+import { SmokedGlassCard } from '@/components/SmokedGlassCard';
 import { VelorBrand } from '@/components/VelorBrand';
+import { VelorHeader } from '@/components/VelorHeader';
 import { luxury } from '@/constants/theme';
 import { useReceiptLedgerRealtime } from '@/hooks/useReceiptLedgerRealtime';
+import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService, subscribeGroupList, type GroupBalanceSummary } from '@/services/GroupService';
+import { unregisterPushTokenAsync } from '@/services/NotificationService';
 import { theme } from '@/theme/theme';
-import { hapticImpactLight } from '@/utils/haptics';
+import { velor } from '@/theme/velorVisuals';
 import { logger } from '@/utils/logger';
 import { formatPence } from '@/utils/money';
 import type { GroupLedgerStatus } from '@/utils/settlements';
@@ -44,6 +51,7 @@ export default function GroupsScreen() {
   const [newGroupName, setNewGroupName] = useState('');
   const [nameFocused, setNameFocused] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const hydrateRequest = useRef(0);
   const nameReady = newGroupName.trim().length > 0;
 
@@ -144,12 +152,11 @@ export default function GroupsScreen() {
   const handleCreateGroup = async () => {
     const trimmedName = newGroupName.trim();
     if (!trimmedName) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
       Alert.alert('Hold up', 'Please enter a group name.');
       return;
     }
 
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setIsCreating(true);
 
     try {
@@ -191,10 +198,10 @@ export default function GroupsScreen() {
         return nextGroups;
       });
       void hydrateBalances(nextGroups, viewerId);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } catch {
       logger.error('groups', { code: 'CREATE_FAILED' });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       Alert.alert('Transaction Failed', 'Could not create the group securely.');
       void fetchGroups();
     } finally {
@@ -203,12 +210,11 @@ export default function GroupsScreen() {
   };
 
   const openModal = () => {
-    hapticImpactLight();
     setModalVisible(true);
   };
 
   const closeModal = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setModalVisible(false);
     setNewGroupName('');
     setNameFocused(false);
@@ -222,23 +228,23 @@ export default function GroupsScreen() {
   const overallNetMinor = loadedSummaries.reduce((sum, summary) => sum + summary.status.userNetBalanceMinor, 0);
   const totalUnsplit = loadedSummaries.reduce((sum, summary) => sum + summary.status.unsplitActiveCount, 0);
   const hasAnyOpenBalances = loadedSummaries.some((summary) => summary.status.kind === 'balances_owed');
+  const identity = resolveMemberIdentity({
+    metadata: session?.user.user_metadata,
+    email: session?.user.email,
+  });
 
   return (
+    <AmbientScreenBackground>
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <VelorBrand variant="header" />
+        <VelorHeader
+          name={identity.avatarName}
+          userId={userId ?? undefined}
+          onPressAvatar={() => setAccountOpen(true)}
+        />
         <View style={styles.titleRow}>
           <Text accessibilityRole="header" style={styles.title}>Groups</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="New group"
-            onPress={openModal}
-            style={({ pressed }) => [styles.newShadow, pressed && styles.pressedTight]}
-          >
-            <LinearGradient colors={['#9AA3FF', '#7C86FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.newPill}>
-              <Text style={styles.newPillText}>+ New</Text>
-            </LinearGradient>
-          </Pressable>
+          <GlossyButton compact label="+ New" accessibilityLabel="New group" onPress={openModal} />
         </View>
       </View>
 
@@ -276,14 +282,7 @@ export default function GroupsScreen() {
               <VelorBrand variant="watermark" />
               <Text style={styles.emptyTitle}>No groups yet</Text>
               <Text style={styles.emptySubtitle}>Create a group to split itemised bills with friends.</Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="New group"
-                onPress={openModal}
-                style={({ pressed }) => [styles.emptyCta, pressed && styles.pressed]}
-              >
-                <Text style={styles.emptyCtaText}>+ New</Text>
-              </Pressable>
+              <GlossyButton compact label="+ New" accessibilityLabel="New group" onPress={openModal} style={styles.emptyCta} />
             </View>
           ) : (
             <View style={styles.list}>
@@ -293,23 +292,20 @@ export default function GroupsScreen() {
                 const memberCount = summary?.memberCount ?? 0;
                 const previews = summary?.memberPreviews ?? [];
                 return (
-                  <Pressable
+                  <SmokedGlassCard
                     key={item.id}
-                    accessibilityRole="button"
                     accessibilityLabel={item.name}
                     onPress={() => {
                       if (isSyncing) {
-                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
                         return;
                       }
-                      hapticImpactLight();
                       router.push({ pathname: '/group/[id]', params: { id: item.id } });
                     }}
-                    style={({ pressed }) => [styles.groupCard, pressed && styles.pressed, isSyncing && styles.rowSyncing]}
+                    style={isSyncing ? styles.rowSyncing : undefined}
+                    contentStyle={styles.groupCard}
                   >
-                    <View style={styles.iconBadge}>
-                      <Ionicons name="people" size={18} color={luxury.accentPrimary} />
-                    </View>
+                    <GroupIconTile id={item.id} name={item.name} />
                     <View style={styles.copy}>
                       <Text style={styles.groupName} numberOfLines={1} ellipsizeMode="tail">{item.name}</Text>
                       {isSyncing ? (
@@ -341,7 +337,7 @@ export default function GroupsScreen() {
                       )}
                       <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.28)" />
                     </View>
-                  </Pressable>
+                  </SmokedGlassCard>
                 );
               })}
             </View>
@@ -376,29 +372,37 @@ export default function GroupsScreen() {
               autoFocus
               selectionColor={theme.colors.accent}
             />
-            <Pressable
-              accessibilityRole="button"
+            <GlossyButton
+              label="Create Group"
               accessibilityLabel="Create Group"
+              variant={nameReady ? 'iris' : 'glass'}
+              loading={isCreating}
               disabled={!nameReady || isCreating}
               onPress={() => {
                 void handleCreateGroup();
               }}
-              style={({ pressed }) => [
-                styles.createButton,
-                !nameReady && !isCreating && styles.createButtonDisabled,
-                nameReady && !isCreating && pressed && styles.createButtonPressed,
-              ]}
-            >
-              {isCreating ? (
-                <ActivityIndicator color={theme.colors.accentText} />
-              ) : (
-                <Text style={[styles.createButtonText, !nameReady && styles.createButtonTextDisabled]}>Create Group</Text>
-              )}
-            </Pressable>
+              style={styles.createButton}
+            />
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      <AccountSettingsSheet
+        visible={accountOpen}
+        userId={userId}
+        displayName={identity.fullName ?? 'Account'}
+        subtitle={session?.user.email ?? ''}
+        onClose={() => setAccountOpen(false)}
+        onLogout={() => {
+          setAccountOpen(false);
+          if (!supabase) return;
+          void (async () => {
+            if (userId) await unregisterPushTokenAsync(userId);
+            await supabase.auth.signOut();
+          })();
+        }}
+      />
     </SafeAreaView>
+    </AmbientScreenBackground>
   );
 }
 
@@ -411,6 +415,14 @@ const EMPTY_GROUP_STATUS: GroupLedgerStatus = {
   transferCount: 0,
   userNetBalanceMinor: 0,
 };
+
+function BannerShell({ children, waiting = false }: { children: ReactNode; waiting?: boolean }) {
+  return (
+    <SmokedGlassCard style={[styles.banner, waiting ? styles.bannerWaiting : null]} contentStyle={styles.bannerInner}>
+      {children}
+    </SmokedGlassCard>
+  );
+}
 
 function NetBanner({
   activeCount,
@@ -425,36 +437,36 @@ function NetBanner({
 }) {
   if (activeCount === 0) {
     return (
-      <View style={styles.banner}>
+      <BannerShell>
         <View style={styles.bannerLeft}>
           <View style={styles.neutralDot} />
           <Text style={styles.bannerCopy} numberOfLines={1}>No bills tracked yet</Text>
         </View>
-      </View>
+      </BannerShell>
     );
   }
 
   if (overallNetMinor > 0) {
     return (
-      <View style={styles.banner}>
+      <BannerShell>
         <Text style={styles.bannerCopy} numberOfLines={1}>Overall, you are owed</Text>
-        <MoneyText amountMinor={overallNetMinor} size="md" color={theme.colors.positive} />
-      </View>
+        <MoneyText amountMinor={overallNetMinor} size="md" color={velor.mint} />
+      </BannerShell>
     );
   }
 
   if (overallNetMinor < 0) {
     return (
-      <View style={styles.banner}>
+      <BannerShell>
         <Text style={styles.bannerCopy} numberOfLines={1}>Overall, you owe</Text>
-        <MoneyText amountMinor={Math.abs(overallNetMinor)} size="md" color={theme.colors.warning} />
-      </View>
+        <MoneyText amountMinor={Math.abs(overallNetMinor)} size="md" color={velor.amber} />
+      </BannerShell>
     );
   }
 
   if (totalUnsplit > 0) {
     return (
-      <View style={[styles.banner, styles.bannerWaiting]}>
+      <BannerShell waiting>
         <View style={styles.bannerLeft}>
           <View style={styles.warningHalo}>
             <View style={styles.warningDot} />
@@ -463,31 +475,31 @@ function NetBanner({
             {`${totalUnsplit} ${totalUnsplit === 1 ? 'bill' : 'bills'} waiting to be split`}
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={16} color="#F59E0B" />
-      </View>
+        <Ionicons name="chevron-forward" size={16} color={velor.amber} />
+      </BannerShell>
     );
   }
 
   if (hasAnyOpenBalances) {
     return (
-      <View style={styles.banner}>
+      <BannerShell>
         <View style={styles.bannerLeft}>
-          <View style={styles.clearDot} />
+          <View style={[styles.settledDot, styles.dotGlow]} />
           <Text style={styles.bannerCopy} numberOfLines={1}>Your balances are clear</Text>
         </View>
-      </View>
+      </BannerShell>
     );
   }
 
   return (
-    <View style={styles.banner}>
+    <BannerShell>
       <View style={styles.bannerLeft}>
-        <View style={styles.settledDot} />
+        <View style={[styles.settledDot, styles.dotGlow]} />
         <Text style={styles.bannerCopy} numberOfLines={1}>
           {`All settled across ${activeCount} active ${activeCount === 1 ? 'group' : 'groups'}`}
         </Text>
       </View>
-    </View>
+    </BannerShell>
   );
 }
 
@@ -541,7 +553,7 @@ function BalancePill({ status }: { status: GroupLedgerStatus }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: luxury.bgCanvas },
+  container: { flex: 1, backgroundColor: 'transparent' },
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 8 },
   titleRow: {
     marginTop: 16,
@@ -573,22 +585,17 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 8,
     marginBottom: 20,
+  },
+  bannerInner: {
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 16,
-    backgroundColor: luxury.bgElevated,
-    borderWidth: 1,
-    borderColor: luxury.borderSubtle,
-    borderTopColor: luxury.borderHighlight,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
   },
   bannerWaiting: {
-    backgroundColor: 'rgba(245, 158, 11, 0.08)',
-    borderColor: 'rgba(245, 158, 11, 0.24)',
-    borderTopColor: 'rgba(245, 158, 11, 0.24)',
+    borderColor: 'rgba(255, 181, 71, 0.34)',
   },
   bannerWaitingText: { color: '#FDE68A', fontWeight: '600' },
   warningHalo: {
@@ -607,8 +614,14 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceElevated,
   },
   bannerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
-  settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.positive },
-  warningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#F59E0B' },
+  settledDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: velor.mint },
+  dotGlow: {
+    shadowColor: velor.mint,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  warningDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: velor.amber },
   clearDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textSecondary },
   neutralDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.textMuted },
   bannerCopy: { flex: 1, fontSize: 13, lineHeight: 18, fontWeight: '500', color: theme.colors.textSecondary },
@@ -627,11 +640,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
-    borderRadius: 20,
-    backgroundColor: luxury.bgElevated,
-    borderWidth: 1,
-    borderColor: luxury.borderSubtle,
-    borderTopColor: luxury.borderHighlight,
   },
   rowSyncing: { opacity: 0.6 },
   iconBadge: {
@@ -662,35 +670,34 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
   },
-  pillPositive: { backgroundColor: theme.colors.positiveSubtle },
-  pillWarning: {
-    backgroundColor: 'rgba(245,158,11,0.12)',
+  pillPositive: {
+    backgroundColor: 'rgba(46, 229, 157, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(245,158,11,0.28)',
+    borderColor: 'rgba(46, 229, 157, 0.28)',
+  },
+  pillWarning: {
+    backgroundColor: 'rgba(255, 181, 71, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 181, 71, 0.28)',
   },
   pillText: { fontSize: 11, lineHeight: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
   pillTextNeutral: { color: theme.colors.textMuted },
   pillTextClear: { color: theme.colors.textSecondary },
-  pillTextPositive: { color: theme.colors.positive },
-  pillTextWarning: { color: '#F59E0B' },
+  pillTextPositive: { color: velor.mintText },
+  pillTextWarning: { color: velor.amber },
   emptyCard: {
     marginHorizontal: 16,
     marginTop: 8,
     paddingVertical: 32,
     paddingHorizontal: 24,
     borderRadius: 20,
-    backgroundColor: luxury.bgElevated,
+    backgroundColor: '#131624',
     borderWidth: 1,
-    borderColor: luxury.borderSubtle,
-    borderTopColor: luxury.borderHighlight,
+    borderColor: velor.rim,
     alignItems: 'center',
   },
   emptyCta: {
     marginTop: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: luxury.accentPrimary,
   },
   emptyCtaText: { fontSize: 14, fontWeight: '700', color: '#050609' },
   emptyState: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center' },
@@ -742,12 +749,7 @@ const styles = StyleSheet.create({
   },
   inputFocused: { borderColor: luxury.borderFocus },
   createButton: {
-    height: 52,
-    borderRadius: theme.radius.md,
     marginTop: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
   },
   createButtonPressed: { backgroundColor: theme.colors.accentPressed },
   createButtonDisabled: {

@@ -6,8 +6,12 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, RefreshControl, ScrollView, Share, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AmbientScreenBackground } from '@/components/AmbientScreenBackground';
 import { AvatarBadge } from '@/components/AvatarBadge';
+import { BrushedHeroCard } from '@/components/BrushedHeroCard';
+import { GlossyButton } from '@/components/GlossyButton';
 import { MoneyText } from '@/components/MoneyText';
+import { SmokedGlassCard } from '@/components/SmokedGlassCard';
 import { SplitCountdownCard } from '@/components/SplitCountdownCard';
 import { useSplitRealtime } from '@/hooks/useSplitRealtime';
 import { useSupabaseSession } from '@/lib/use-session';
@@ -602,6 +606,7 @@ export default function ReceiptLedgerScreen() {
 
   if (isLoading) {
     return (
+      <AmbientScreenBackground>
       <View style={styles.container}>
         <SafeAreaView edges={['top']} style={styles.headerSafe}>
           <View style={styles.headerRow}>
@@ -614,11 +619,13 @@ export default function ReceiptLedgerScreen() {
           <ActivityIndicator size="large" color={theme.colors.accent} />
         </View>
       </View>
+      </AmbientScreenBackground>
     );
   }
 
   if (notFound || !receiptData) {
     return (
+      <AmbientScreenBackground>
       <View style={styles.container}>
         <SafeAreaView edges={['top']} style={styles.headerSafe}>
           <View style={styles.headerRow}>
@@ -633,6 +640,7 @@ export default function ReceiptLedgerScreen() {
           <Text style={styles.missingSubtitle}>This receipt was deleted or is no longer available.</Text>
         </View>
       </View>
+      </AmbientScreenBackground>
     );
   }
 
@@ -657,6 +665,11 @@ export default function ReceiptLedgerScreen() {
   const assignedMinor = Math.max(0, lineTotalMinor - unassigned);
   const progress = Math.min(100, Math.round((assignedMinor / Math.max(1, lineTotalMinor)) * 100));
   const blocked = isGroup && unassigned > 0;
+  const saveLabel = blocked
+    ? `${formatPence(unassigned)} left to assign`
+    : saved
+      ? 'Split Saved ✓'
+      : 'Save Split';
   const saveDisabled = saving || blocked || !paidById || members.length === 0;
   const viewerIsHost = session?.user.id === receipt.host_id;
   const hostPreviewIds = isGroup
@@ -801,6 +814,7 @@ export default function ReceiptLedgerScreen() {
   }
 
   return (
+    <AmbientScreenBackground>
     <View style={styles.container}>
       <Stack.Screen options={{ headerShown: false, title: merchantName }} />
 
@@ -874,21 +888,16 @@ export default function ReceiptLedgerScreen() {
           />
         )}
       >
-        <Pressable
-          accessibilityRole="button"
+        <GlossyButton
+          variant="iris"
+          icon="share-outline"
+          label="Share Split Link"
           accessibilityLabel="Share split link"
-          accessibilityState={{ busy: sharing }}
+          loading={sharing}
           disabled={sharing}
           onPress={() => { void shareSplit(); }}
-          style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}
-        >
-          {sharing ? <ActivityIndicator color={theme.colors.accentText} /> : (
-            <>
-              <Ionicons name="share-outline" size={18} color={theme.colors.accentText} />
-              <Text style={styles.shareButtonText}>Share Split Link</Text>
-            </>
-          )}
-        </Pressable>
+          style={styles.shareButton}
+        />
         {shareEnabled ? (
           <Pressable accessibilityRole="button" accessibilityLabel="Revoke share link" disabled={revoking} onPress={askRevokeShare} style={styles.shareStatus}>
             {revoking ? <ActivityIndicator color={theme.colors.textSecondary} /> : (
@@ -1140,7 +1149,7 @@ export default function ReceiptLedgerScreen() {
           </View>
         ) : null}
 
-        <View style={styles.ledger}>
+        <SmokedGlassCard style={styles.ledger}>
           {items.map((item, index) => {
             const assigned = people.filter((person) => (claims[item.id] ?? []).includes(person.id));
             const guests = (sharedOverlay?.items.find((row) => row.id === item.id)?.claimedBy ?? [])
@@ -1164,8 +1173,8 @@ export default function ReceiptLedgerScreen() {
             );
           })}
 
-          <View style={styles.footerDivider} />
-          <View style={styles.footer}>
+          </SmokedGlassCard>
+        <BrushedHeroCard tone="iris" style={styles.totalCard} contentStyle={styles.footer}>
             <View style={styles.totalRow}>
               <Text style={styles.metaLabel}>Subtotal</Text>
               <MoneyText amountMinor={toMinorUnits(Number(receipt.subtotal || 0))} size="sm" color={theme.colors.textSecondary} />
@@ -1194,59 +1203,43 @@ export default function ReceiptLedgerScreen() {
                 <MoneyText amountMinor={unassigned} size="sm" color={theme.colors.warning} />
               </View>
             ) : null}
-          </View>
-        </View>
+        </BrushedHeroCard>
       </ScrollView>
 
       <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
         {saveError ? <Text style={styles.barError}>{saveError}</Text> : null}
         {viewerIsHost && hostMode !== 'settled' ? (
-          <Pressable
-            accessibilityRole="button"
+          <GlossyButton
+            variant="iris"
+            label={hostActionLabel}
             accessibilityLabel={hostActionLabel}
+            loading={confirming}
             disabled={confirming}
             onPress={() => { void confirmHostItems(); }}
-            style={({ pressed }) => [styles.cta, styles.ctaReady, pressed && styles.ctaReadyPressed, confirming && styles.ctaSaving]}
-          >
-            {confirming ? <ActivityIndicator color={theme.colors.accentText} /> : <Text style={styles.ctaReadyText}>{hostActionLabel}</Text>}
-          </Pressable>
+            style={styles.cta}
+          />
         ) : null}
         {isGroup ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ disabled: saveDisabled, busy: saving }}
+          <GlossyButton
+            variant={!blocked && !saved ? 'iris' : 'glass'}
+            label={saveLabel}
+            labelColor={blocked ? theme.colors.warning : saved ? theme.colors.positive : undefined}
+            loading={saving}
             disabled={saveDisabled}
+            dimWhenDisabled={!blocked}
+            accessibilityLabel={saveLabel}
             onPress={() => {
               void saveSplit();
             }}
-            style={({ pressed }) => [
-              styles.cta,
-              saving && styles.ctaSaving,
-              !saving && blocked && styles.ctaBlocked,
-              !saving && !blocked && saved && styles.ctaSaved,
-              !saving && !blocked && !saved && styles.ctaReady,
-              !saving && !blocked && !saved && pressed && styles.ctaReadyPressed,
-              saveDisabled && !saving && !blocked && !saved && styles.ctaUnavailable,
-            ]}
-          >
-            {saving ? (
-              <ActivityIndicator color={theme.colors.accentText} />
-            ) : blocked ? (
-              <Text style={styles.ctaBlockedText}>{formatPence(unassigned)} left to assign</Text>
-            ) : saved ? (
-              <Text style={styles.ctaSavedText}>Split Saved ✓</Text>
-            ) : (
-              <Text style={styles.ctaReadyText}>Save Split</Text>
-            )}
-          </Pressable>
+            style={styles.cta}
+          />
         ) : (
-          <Pressable
-            accessibilityRole="button"
+          <GlossyButton
+            variant="iris"
+            label="Continue to Split"
             onPress={() => router.push({ pathname: '/split', params: { id: receiptId } })}
-            style={({ pressed }) => [styles.cta, styles.ctaReady, pressed && styles.ctaReadyPressed]}
-          >
-            <Text style={styles.ctaReadyText}>Continue to Split</Text>
-          </Pressable>
+            style={styles.cta}
+          />
         )}
         {isGroup ? (
           <Pressable
@@ -1339,6 +1332,7 @@ export default function ReceiptLedgerScreen() {
         </View>
       </Modal>
     </View>
+    </AmbientScreenBackground>
   );
 }
 
@@ -1388,7 +1382,7 @@ function unassignedMinor(items: Item[], claims: Record<string, string[]>) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.canvas },
+  container: { flex: 1, backgroundColor: 'transparent' },
   headerSafe: { backgroundColor: theme.colors.canvas },
   headerRow: {
     minHeight: 52,
@@ -1428,12 +1422,12 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   settlePillDone: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
+    backgroundColor: 'rgba(46, 229, 157, 0.12)',
+    borderColor: 'rgba(46, 229, 157, 0.28)',
   },
   settlePillPressed: { backgroundColor: theme.colors.surfacePressed },
   settlePillText: { fontSize: 12, fontWeight: '700', color: theme.colors.textPrimary },
-  settlePillTextDone: { color: '#FFFFFF' },
+  settlePillTextDone: { color: '#45F0AE' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   missingTitle: { ...theme.typography.screenTitle, color: theme.colors.textPrimary, fontSize: 24, lineHeight: 30, textAlign: 'center' },
   missingSubtitle: { ...theme.typography.body, color: theme.colors.textSecondary, marginTop: 8, textAlign: 'center' },
@@ -1441,13 +1435,6 @@ const styles = StyleSheet.create({
   shareButton: {
     marginHorizontal: 16,
     marginBottom: 8,
-    minHeight: 48,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.accent,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
   },
   shareButtonPressed: { backgroundColor: theme.colors.accentPressed },
   shareButtonText: { color: theme.colors.accentText, fontSize: 15, fontWeight: '700' },
@@ -1645,11 +1632,10 @@ const styles = StyleSheet.create({
   reconcileError: { fontSize: 13, lineHeight: 18, color: theme.colors.danger },
   ledger: {
     marginHorizontal: 16,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    overflow: 'hidden',
+  },
+  totalCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
   },
   itemDivider: { height: StyleSheet.hairlineWidth, marginLeft: 14, backgroundColor: theme.colors.border },
   itemRow: { paddingHorizontal: 14, paddingVertical: 14 },
@@ -1682,7 +1668,7 @@ const styles = StyleSheet.create({
   grandLabel: { fontSize: 15, lineHeight: 20, fontWeight: '700', color: theme.colors.textPrimary },
   unassignedLabel: { fontSize: 13, lineHeight: 18, fontWeight: '600', color: theme.colors.warning },
   bottomBar: {
-    backgroundColor: theme.colors.canvas,
+    backgroundColor: 'rgba(5, 6, 11, 0.92)',
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border,
     paddingHorizontal: 16,
@@ -1690,7 +1676,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   barError: { color: theme.colors.danger, fontSize: 13, lineHeight: 18, marginBottom: 8 },
-  cta: { height: 52, borderRadius: theme.radius.md, alignItems: 'center', justifyContent: 'center' },
+  cta: { marginTop: 0 },
   ctaReady: { backgroundColor: theme.colors.accent },
   ctaReadyPressed: { backgroundColor: theme.colors.accentPressed },
   ctaUnavailable: { opacity: 0.45 },

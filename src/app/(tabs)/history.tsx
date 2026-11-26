@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -9,9 +8,12 @@ import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AccountSettingsSheet } from '@/components/AccountSettingsSheet';
-import { AvatarBadge } from '@/components/AvatarBadge';
+import { AmbientScreenBackground } from '@/components/AmbientScreenBackground';
+import { BrushedHeroCard } from '@/components/BrushedHeroCard';
+import { CategoryIconTile } from '@/components/CategoryIconTile';
 import { MoneyText } from '@/components/MoneyText';
-import { VelorBrand } from '@/components/VelorBrand';
+import { SmokedGlassCard } from '@/components/SmokedGlassCard';
+import { VelorHeader } from '@/components/VelorHeader';
 import { luxury } from '@/constants/theme';
 import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
@@ -20,6 +22,7 @@ import { groupService, subscribeGroupList, type AccountProfile, type MemberGroup
 import { unregisterPushTokenAsync } from '@/services/NotificationService';
 import { isAbortError, receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
+import { velor } from '@/theme/velorVisuals';
 import { hapticImpactLight, hapticSelection } from '@/utils/haptics';
 import { logger } from '@/utils/logger';
 import { formatSmartDate } from '@/utils/formatSmartDate';
@@ -335,19 +338,18 @@ export default function HistoryScreen() {
   }
 
   const openReceipt = useCallback((id: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push({ pathname: '/receipt/[id]', params: { id } });
   }, [router]);
 
   const openGroup = useCallback((id: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     router.push({ pathname: '/group/[id]', params: { id } });
   }, [router]);
 
   const confirmDelete = useCallback(async (id: string) => {
     if (!supabase) {
       logger.error('receipt delete', { code: 'NOT_CONFIGURED' });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       Alert.alert('Error', 'Could not delete receipt from the database.');
       return;
     }
@@ -359,23 +361,23 @@ export default function HistoryScreen() {
       const { data, error } = await supabase.from('receipts').delete().eq('id', id).select();
       if (error || !data || data.length === 0) {
         logger.error('receipt delete', { code: 'DELETE_BLOCKED' });
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
         Alert.alert('Error', 'Could not delete receipt from the database.');
         void loadFirstPage('refresh');
         return;
       }
 
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } catch {
       logger.error('receipt delete', { code: 'DELETE_FAILED' });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       Alert.alert('Error', 'Could not delete receipt from the database.');
       void loadFirstPage('refresh');
     }
   }, [commitPage, loadFirstPage, mode]);
 
   const deleteReceipt = useCallback((id: string, name: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
     Alert.alert('Delete Receipt', `Are you sure you want to delete "${name}"? This cannot be undone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -389,19 +391,19 @@ export default function HistoryScreen() {
   }, [confirmDelete]);
 
   const viewMore = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setMode('expanded');
     endReachedArmed.current = false;
     void loadMore();
   }, [loadMore]);
 
   const continueHistory = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     void loadMore();
   }, [loadMore]);
 
   const showLess = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     requestGenRef.current += 1;
     moreTokenRef.current += 1;
     inFlightMoreRef.current = false;
@@ -418,7 +420,7 @@ export default function HistoryScreen() {
   }, [commitPage]);
 
   const retryLoadMore = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     void loadMore();
   }, [loadMore]);
 
@@ -493,7 +495,7 @@ export default function HistoryScreen() {
 
   function selectGroup(key: ReceiptHistoryGroupFilter) {
     if (key !== 'all' && key !== 'ungrouped' && !isValidGroupUuid(key)) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     commitSearch(rawSearchText);
     if (filterRef.current.groupFilter === key) return;
     filterRef.current = { ...filterRef.current, groupFilter: key };
@@ -502,13 +504,13 @@ export default function HistoryScreen() {
   }
 
   function clearSearch() {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setRawSearchText('');
     commitSearch('');
   }
 
   function resetFilters() {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setRawSearchText('');
     commitSearch('');
     if (filterRef.current.groupFilter === 'all') return;
@@ -529,16 +531,10 @@ export default function HistoryScreen() {
 
   const listHeader = (
     <View>
-      <LinearGradient
-        colors={['#171A26', '#0E1018', '#090A0F']}
-        locations={[0, 0.52, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.hero}
-      >
+      <BrushedHeroCard tone="iris" style={styles.hero} contentStyle={styles.heroContent}>
         <View style={styles.heroTop}>
           <Text style={styles.heroLabel}>{heroLabel}</Text>
-          <VelorBrand variant="watermark" opacity={0.28} />
+          {!isFiltered ? <Text style={styles.allTime}>ALL TIME</Text> : null}
         </View>
         <MoneyText amountMinor={ledger.filteredTotalMinor} size="hero" splitDecimals figureSize={40} />
         <View style={styles.metricStrip}>
@@ -554,9 +550,9 @@ export default function HistoryScreen() {
             <Text style={styles.metricText}>{`${unsettledVisible} unsettled`}</Text>
           </View>
         </View>
-      </LinearGradient>
+      </BrushedHeroCard>
 
-      <View style={[styles.search, isSearchFocused && styles.searchFocused]}>
+      <SmokedGlassCard highlighted={isSearchFocused} style={styles.search} contentStyle={styles.searchInner}>
         <Ionicons name="search" size={16} color={isSearchFocused ? luxury.accentPrimary : luxury.textMuted} />
         <TextInput
           accessibilityLabel="Search bills or venues"
@@ -590,7 +586,7 @@ export default function HistoryScreen() {
             <Ionicons name="close" size={12} color={theme.colors.textSecondary} />
           </Pressable>
         ) : null}
-      </View>
+      </SmokedGlassCard>
 
       <ScrollView
         horizontal
@@ -629,23 +625,14 @@ export default function HistoryScreen() {
   );
 
   return (
+    <AmbientScreenBackground>
     <SafeAreaView edges={['top']} style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.brandRow}>
-          <VelorBrand variant="header" />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open account settings"
-            hitSlop={10}
-            onPress={() => {
-              hapticImpactLight();
-              setAccountOpen(true);
-            }}
-            style={styles.avatarRing}
-          >
-            <AvatarBadge name={identity.avatarName} userId={userId ?? undefined} size={36} />
-          </Pressable>
-        </View>
+        <VelorHeader
+          name={identity.avatarName}
+          userId={userId ?? undefined}
+          onPressAvatar={() => setAccountOpen(true)}
+        />
         <Text accessibilityRole="header" style={styles.title}>History</Text>
       </View>
 
@@ -713,6 +700,7 @@ export default function HistoryScreen() {
         }}
       />
     </SafeAreaView>
+    </AmbientScreenBackground>
   );
 }
 
@@ -953,15 +941,12 @@ const HistoryRow = memo(function HistoryRow({
           </Pressable>
         )}
       >
-        <Pressable
-          accessibilityRole="button"
+        <SmokedGlassCard
           accessibilityLabel={title}
           onPress={() => onOpen(item.id)}
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+          contentStyle={styles.row}
         >
-          <View style={styles.monogram}>
-            <Text style={styles.monogramText}>{title.trim().charAt(0).toUpperCase() || '?'}</Text>
-          </View>
+          <CategoryIconTile title={title} />
           <View style={styles.copy}>
             <View style={styles.nameRow}>
               <Text style={styles.merchant} numberOfLines={1} ellipsizeMode="tail">{title}</Text>
@@ -977,10 +962,10 @@ const HistoryRow = memo(function HistoryRow({
             </View>
           </View>
           <View style={styles.trail}>
-            <MoneyText amountMinor={item.total_minor} size="lg" color="#FFFFFF" />
+            <MoneyText amountMinor={item.total_minor} size="lg" color={velor.ink} />
             <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.28)" />
           </View>
-        </Pressable>
+        </SmokedGlassCard>
       </Swipeable>
     </View>
   );
@@ -996,7 +981,7 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
         hapticSelection();
         onPress();
       }}
-      style={({ pressed }) => [styles.chip, active ? styles.chipActive : styles.chipInactive, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.chip, active ? styles.chipActive : styles.chipInactive, pressed && styles.chipPressed]}
     >
       <Text style={[styles.chipText, active ? styles.chipTextActive : styles.chipTextInactive]} numberOfLines={1}>
         {label}
@@ -1006,35 +991,24 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: luxury.bgCanvas },
+  container: { flex: 1, backgroundColor: 'transparent' },
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  avatarRing: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    backgroundColor: 'rgba(16,185,129,0.16)',
-  },
-  title: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6, color: luxury.textPrimary },
+  title: { marginTop: 16, fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.6, color: luxury.textPrimary },
   scrollContent: { paddingBottom: 32, flexGrow: 1 },
   hero: {
     marginHorizontal: 16,
     marginBottom: 16,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    borderTopColor: 'rgba(255,255,255,0.16)',
+  },
+  heroContent: {
     padding: 20,
-    overflow: 'hidden',
+  },
+  allTime: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    color: '#7B849B',
   },
   heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   heroLabel: {
@@ -1069,23 +1043,20 @@ const styles = StyleSheet.create({
   countText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: luxury.textPrimary, fontVariant: ['tabular-nums'] },
   metricItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   metricDot: { width: 6, height: 6, borderRadius: 3 },
-  metricSettled: { backgroundColor: '#10B981' },
-  metricOpen: { backgroundColor: '#F59E0B' },
+  metricSettled: { backgroundColor: velor.mint },
+  metricOpen: { backgroundColor: velor.amber },
   metricText: { fontSize: 12, lineHeight: 16, fontWeight: '600', color: 'rgba(247,248,250,0.62)', fontVariant: ['tabular-nums'] },
   search: {
     marginHorizontal: 16,
     marginBottom: 12,
+  },
+  searchInner: {
     height: 48,
-    borderRadius: 14,
-    backgroundColor: '#07080D',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
     gap: 8,
   },
-  searchFocused: { borderColor: luxury.borderFocus },
   listDimmed: { opacity: 0.55 },
   searchInput: {
     flex: 1,
@@ -1111,19 +1082,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chipActive: {
-    backgroundColor: '#161A2B',
+    backgroundColor: 'rgba(124, 140, 255, 0.16)',
     borderWidth: 1,
-    borderColor: 'rgba(139,149,255,0.55)',
-    shadowColor: '#8B95FF',
-    shadowOpacity: 0.28,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 0 },
+    borderColor: '#7C8CFF',
   },
   chipInactive: {
-    backgroundColor: luxury.bgElevated,
+    backgroundColor: '#131624',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
+  chipPressed: { transform: [{ scale: 0.98 }] },
   chipText: { fontSize: 13 },
   chipTextActive: { fontWeight: '600', color: '#FFFFFF' },
   chipTextInactive: { fontWeight: '500', color: 'rgba(247,248,250,0.58)' },
@@ -1158,12 +1126,6 @@ const styles = StyleSheet.create({
   },
   cardPiece: {
     marginBottom: 8,
-    backgroundColor: luxury.bgElevated,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: luxury.borderSubtle,
-    borderTopColor: luxury.borderHighlight,
-    overflow: 'hidden',
   },
   cardPieceStart: {},
   cardPieceEnd: {},
@@ -1172,7 +1134,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 14,
-    backgroundColor: luxury.bgElevated,
   },
   monogram: {
     width: 42,
@@ -1195,8 +1156,8 @@ const styles = StyleSheet.create({
   statusSettled: { backgroundColor: luxury.positiveSoft },
   statusOpen: { backgroundColor: luxury.warningSoft },
   statusText: { fontSize: 10, lineHeight: 14, fontWeight: '700', letterSpacing: 0.2 },
-  statusSettledText: { color: '#10B981' },
-  statusOpenText: { color: '#F59E0B' },
+  statusSettledText: { color: velor.mintText },
+  statusOpenText: { color: velor.amber },
   trail: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   deleteAction: {
     width: 76,
