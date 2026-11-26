@@ -12,6 +12,7 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 
 export type SharePaidSnapshot = {
   is_paid?: unknown;
+  is_host?: unknown;
   id?: unknown;
   receipt_id?: unknown;
   user_id?: unknown;
@@ -43,8 +44,9 @@ export function isSharePaidTransition(input: {
 }
 
 /**
- * Paid transition on a guest share. A host marking their own row paid does not
- * notify themselves. Amounts are integer pence on amount_owed_pence.
+ * Paid transition on a guest share. A host row never notifies the host.
+ * `is_host` wins even when the user id is missing or points at someone else.
+ * Amounts are integer pence on amount_owed_pence.
  */
 export function decideHostPaidNotification(
   input: {
@@ -56,13 +58,15 @@ export function decideHostPaidNotification(
   hostUserId: string | null,
 ): HostPaidDecision {
   if (!isSharePaidTransition(input) || !input.record) return { action: 'ignore' };
+  if (input.record.is_host === true || input.oldRecord?.is_host === true) return { action: 'ignore' };
 
   const shareId = readUuid(input.record.id);
   const receiptId = readUuid(input.record.receipt_id);
   if (!shareId || !receiptId) return { action: 'ignore' };
 
   const payerUserId = readUuid(input.record.user_id);
-  if (hostUserId && payerUserId && payerUserId === hostUserId) return { action: 'ignore' };
+  const previousUserId = readUuid(input.oldRecord?.user_id);
+  if (hostUserId && (payerUserId === hostUserId || previousUserId === hostUserId)) return { action: 'ignore' };
 
   return {
     action: 'notify',

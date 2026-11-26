@@ -69,6 +69,8 @@ export function calculateNetBalances(
   for (const split of splits) {
     const payerId = receiptPayerMap.get(split.receipt_id);
     if (!payerId || split.amount_minor <= 0) continue;
+    // The payer already settled their own claimed share. It is not a debt.
+    if (split.user_id === payerId) continue;
 
     ensureBalance(balances, payerId);
     ensureBalance(balances, split.user_id);

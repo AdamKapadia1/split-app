@@ -1,5 +1,6 @@
 import { getWebBaseUrl } from '@/lib/url';
 import { supabase } from '@/lib/supabase';
+import { isHostParticipant, publicHostLabel } from '@/utils/hostAttribution';
 import { mapErrorToUserMessage, readSafeErrorCode } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 
@@ -18,6 +19,7 @@ export type SharedClaimant = {
   id: string;
   displayName: string;
   userId: string | null;
+  isHost: boolean;
 };
 
 export type SharedBillItem = {
@@ -39,6 +41,16 @@ export type SharedParticipant = {
   isPaid: boolean;
   paidAt: string | null;
   isGuest: boolean;
+  isHost: boolean;
+};
+
+export type HostClaimState = {
+  hostDisplayName: string;
+  claimedItemIds: string[];
+  amountOwedPence: number;
+  unclaimedPence: number;
+  itemsClaimed: number;
+  itemsTotal: number;
 };
 
 export type SharedBill = {
@@ -86,6 +98,7 @@ export class BillShareServiceError extends Error {
 }
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class BillShareService {
   async enableBillShare(billId: string): Promise<{ shareToken: string; shareEnabled: true }> {
@@ -166,6 +179,36 @@ class BillShareService {
       throw asShareError(error, 'FAILED', 'Could not update this split.');
     }
   }
+
+  async fetchHostClaims(receiptId: string): Promise<HostClaimState | null> {
+    const id = requireUuid(receiptId);
+    try {
+      const client = requireClient();
+      const { data, error } = await client.rpc('get_host_claim_state', { p_receipt_id: id });
+      if (error) throw error;
+      if (data == null) return null;
+      return parseHostClaimState(data);
+    } catch (error) {
+      throw asShareError(error, 'FAILED', 'Could not load your items.');
+    }
+  }
+
+  async setHostClaims(receiptId: string, itemIds: readonly string[]): Promise<HostClaimState | null> {
+    const id = requireUuid(receiptId);
+    const claimed = itemIds.map((itemId) => requireUuid(itemId));
+    try {
+      const client = requireClient();
+      const { data, error } = await client.rpc('set_host_item_claims', {
+        p_receipt_id: id,
+        p_item_ids: claimed,
+      });
+      if (error) throw error;
+      if (data == null) return null;
+      return parseHostClaimState(data);
+    } catch (error) {
+      throw asShareError(error, 'FAILED', 'Could not update your items.');
+    }
+  }
 }
 
 export const billShareService = new BillShareService();
@@ -184,6 +227,12 @@ function requireId(value: string): string {
     throw new BillShareServiceError('INVALID', 'That bill could not be found.');
   }
   return value.trim();
+}
+
+function requireUuid(value: string): string {
+  const id = requireId(value);
+  if (!UUID_PATTERN.test(id)) throw new BillShareServiceError('INVALID', 'That bill could not be found.');
+  return id;
 }
 
 function requireToken(value: string): string {
@@ -232,7 +281,7 @@ function parseSharedBill(value: unknown): SharedBill {
       createdAt: text(bill.created_at, text(bill.bill_date, '')),
     },
     owner: {
-      displayName: text(owner.display_name, 'Host'),
+      displayName: publicHostLabel(text(owner.host_display_name, text(owner.display_name, 'Host'))),
       payoutDetails: parsePayout(owner.payout_details),
     },
     items: Array.isArray(row?.items) ? row.items.map(parseItem) : [],
@@ -261,10 +310,12 @@ function parseClaimant(value: unknown): SharedClaimant {
   if (!row || typeof row.id !== 'string') {
     throw new BillShareServiceError('FAILED', 'Could not load this split.');
   }
+  const displayName = text(row.display_name, 'Guest');
   return {
     id: row.id,
-    displayName: text(row.display_name, 'Guest'),
+    displayName,
     userId: typeof row.user_id === 'string' ? row.user_id : null,
+    isHost: parseIsHost(row, displayName),
   };
 }
 
@@ -273,17 +324,45 @@ function parseParticipant(value: unknown): SharedParticipant {
   if (!row || typeof row.id !== 'string') {
     throw new BillShareServiceError('FAILED', 'Could not load this split.');
   }
+  const displayName = text(row.display_name, 'Guest');
+  const isHost = parseIsHost(row, displayName);
   return {
     id: row.id,
-    displayName: text(row.display_name, 'Guest'),
+    displayName: isHost ? publicHostLabel(displayName) : displayName,
     userId: typeof row.user_id === 'string' ? row.user_id : null,
     amountOwedPence: pence(row.amount_owed_pence),
     itemsSubtotalPence: pence(row.items_subtotal_pence),
     serviceChargePence: pence(row.service_charge_pence),
-    isPaid: row.is_paid === true,
+    isPaid: isHost || row.is_paid === true,
     paidAt: typeof row.paid_at === 'string' ? row.paid_at : null,
     isGuest: row.is_guest === true,
+    isHost,
   };
+}
+
+function parseHostClaimState(value: unknown): HostClaimState {
+  const row = asRecord(value);
+  if (!row || !Array.isArray(row.claimed_item_ids)) {
+    throw new BillShareServiceError('FAILED', 'Could not load your items.');
+  }
+  const claimedItemIds = row.claimed_item_ids.filter((itemId): itemId is string => typeof itemId === 'string' && UUID_PATTERN.test(itemId));
+  return {
+    hostDisplayName: publicHostLabel(row.host_display_name),
+    claimedItemIds,
+    amountOwedPence: pence(row.amount_owed_pence),
+    unclaimedPence: pence(row.unclaimed_pence),
+    itemsClaimed: pence(row.items_claimed),
+    itemsTotal: pence(row.items_total),
+  };
+}
+
+function parseIsHost(row: Record<string, unknown>, displayName: string): boolean {
+  if (typeof row.is_host === 'boolean') return row.is_host;
+  return isHostParticipant({
+    isGuest: row.is_guest === true,
+    userId: typeof row.user_id === 'string' ? row.user_id : null,
+    displayName,
+  });
 }
 
 function parsePayout(value: unknown): SharePayoutDetails | null {

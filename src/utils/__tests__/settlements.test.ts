@@ -38,6 +38,21 @@ function assertTrue(value: boolean, message: string) {
 
 const members = ['alex', 'sam', 'jordan'];
 
+it('drops the payer’s own share from what anyone owes', () => {
+  const balances = calculateNetBalances(
+    [{ id: 'receipt-1', paid_by: 'sam' }],
+    [
+      { receipt_id: 'receipt-1', user_id: 'sam', amount_minor: 4000 },
+      { receipt_id: 'receipt-1', user_id: 'alex', amount_minor: 6000 },
+    ],
+    [],
+    ['alex', 'sam'],
+  );
+
+  assertEqual(balances, { alex: -6000, sam: 6000 });
+  assertEqual(simplifyDebts(balances), [{ fromUserId: 'alex', toUserId: 'sam', amountMinor: 6000 }]);
+});
+
 it('settles a two-person split in full back to zero', () => {
   const balances = calculateNetBalances(
     [{ id: 'receipt-1', paid_by: 'sam' }],
