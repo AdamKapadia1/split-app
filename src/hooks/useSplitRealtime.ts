@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
@@ -10,7 +10,9 @@ import { SPLIT_SYNC_DEBOUNCE_MS, SPLIT_SYNC_EVENT, splitSyncTopic } from '@/util
  */
 export function useSplitRealtime(shareToken: string | null, onInvalidate: () => void, receiptId?: string | null) {
   const onInvalidateRef = useRef(onInvalidate);
-  onInvalidateRef.current = onInvalidate;
+  useLayoutEffect(() => {
+    onInvalidateRef.current = onInvalidate;
+  }, [onInvalidate]);
 
   useEffect(() => {
     if (!shareToken || !supabase) return;

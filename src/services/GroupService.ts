@@ -325,7 +325,7 @@ function notifyGroupList() {
   groupListListeners.forEach((listener) => {
     try {
       listener();
-    } catch (error) {
+    } catch {
       logger.error('GroupService listener', { code: 'LISTENER_FAILED' });
     }
   });
@@ -602,7 +602,7 @@ function ledgerStatusForGroup(
       memberIds,
       currentUserId: viewerId,
     });
-  } catch (error) {
+  } catch {
     logger.error('GroupService balance', { code: 'BALANCE_FAILED' });
     const receiptCount = receipts.length;
     return {

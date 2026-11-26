@@ -215,7 +215,7 @@ export default function GroupLedgerScreen() {
       setSplits(ledger.splits);
       setSettlements(ledger.settlements);
       setMembers(memberList);
-    } catch (error) {
+    } catch {
       logger.error('group', { code: 'LEDGER_FAILED' });
       setMissing(true);
     } finally {
@@ -287,7 +287,7 @@ export default function GroupLedgerScreen() {
         })),
         memberIds,
       );
-    } catch (error) {
+    } catch {
       logger.error('group', { code: 'BALANCE_FAILED' });
       return Object.fromEntries(memberIds.map((id) => [id, 0]));
     }
@@ -318,7 +318,7 @@ export default function GroupLedgerScreen() {
         memberIds,
         currentUserId: viewerId,
       });
-    } catch (error) {
+    } catch {
       logger.error('group', { code: 'STATUS_FAILED' });
       const receiptCount = receipts.length;
       return {
@@ -491,7 +491,7 @@ export default function GroupLedgerScreen() {
     try {
       await groupService.removeMember(groupId, member.userId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
+    } catch {
       logger.error('group', { code: 'REMOVE_FAILED' });
       setMembers(previous);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

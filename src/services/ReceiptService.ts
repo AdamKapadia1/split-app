@@ -170,7 +170,7 @@ export class ReceiptService {
     try {
       const item = requireId(itemId, 'itemId');
       const user = requireId(userId, 'userId');
-      const receipt = requireId(receiptId, 'receiptId');
+      requireId(receiptId, 'receiptId');
       const client = requireClient();
 
       const existing = await client.from('splits').select('*').eq('item_id', item).eq('user_id', user).single();
@@ -315,7 +315,7 @@ export class ReceiptService {
       for (const row of receiptsResult.data ?? []) {
         try {
           parsed.push(parseReceipt(row, 'FETCH_FAILED'));
-        } catch (error) {
+        } catch {
           logger.error('ReceiptService', { method: 'fetchReceiptHistoryPage', code: 'ROW_FAILED' });
         }
       }

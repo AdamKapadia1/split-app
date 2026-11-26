@@ -243,7 +243,7 @@ export default function HistoryScreen() {
     try {
       const next = await groupService.getAccountProfile(userId);
       setProfile(next);
-    } catch (error) {
+    } catch {
       logger.error('account', { code: 'PROFILE_FAILED' });
     }
   }, [userId]);
@@ -258,7 +258,7 @@ export default function HistoryScreen() {
       const next = await groupService.listMemberGroups(userId);
       setGroups(next);
       setGroupsLoaded(true);
-    } catch (error) {
+    } catch {
       logger.error('history', { code: 'GROUPS_FAILED' });
     }
   }, [userId]);
@@ -336,7 +336,7 @@ export default function HistoryScreen() {
       }
 
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
+    } catch {
       logger.error('receipt delete', { code: 'DELETE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'Could not delete receipt from the database.');

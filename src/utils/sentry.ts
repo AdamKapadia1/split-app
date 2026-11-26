@@ -29,6 +29,8 @@ let sentrySdk: SentrySdk | null | undefined;
 function loadSentry(): SentrySdk | null {
   if (sentrySdk !== undefined) return sentrySdk;
   try {
+    // Optional native module. A static import would crash when the package is absent.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     sentrySdk = require('@sentry/react-native') as SentrySdk;
   } catch {
     sentrySdk = null;

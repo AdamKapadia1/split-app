@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
@@ -11,7 +11,9 @@ const DEBOUNCE_MS = 200;
  */
 export function useReceiptLedgerRealtime(onInvalidate: () => void, groupId?: string | null) {
   const onInvalidateRef = useRef(onInvalidate);
-  onInvalidateRef.current = onInvalidate;
+  useLayoutEffect(() => {
+    onInvalidateRef.current = onInvalidate;
+  }, [onInvalidate]);
 
   useEffect(() => {
     if (!supabase) return;

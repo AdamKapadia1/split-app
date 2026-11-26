@@ -61,7 +61,7 @@ export default function GroupsScreen() {
       const rows = await groupService.getGroupBalanceSummaries(ids, viewerId);
       if (hydrateRequest.current !== requestId) return;
       setSummaries(Object.fromEntries(rows.map((row) => [row.id, row])));
-    } catch (error) {
+    } catch {
       logger.error('groups', { code: 'BALANCES_FAILED' });
       if (hydrateRequest.current !== requestId) return;
       setSummaries((current) => {
@@ -96,7 +96,7 @@ export default function GroupsScreen() {
       const next = (data || []) as Group[];
       setGroups(next);
       void hydrateBalances(next, viewerId);
-    } catch (error) {
+    } catch {
       logger.error('groups', { code: 'FETCH_FAILED' });
     } finally {
       setLoadingGroups(false);
@@ -179,7 +179,7 @@ export default function GroupsScreen() {
       });
       void hydrateBalances(nextGroups, viewerId);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
+    } catch {
       logger.error('groups', { code: 'CREATE_FAILED' });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Transaction Failed', 'Could not create the group securely.');

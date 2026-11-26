@@ -203,7 +203,7 @@ export default function SplitScreen() {
             setPaidById(preferred);
             setGroupError(null);
             if (preferred) setSelectedId(preferred);
-          } catch (groupLoadError) {
+          } catch {
             logger.error('split', { code: 'GROUP_FAILED' });
             setMembers([]);
             setClaims({});
@@ -226,7 +226,7 @@ export default function SplitScreen() {
           });
           setClaims(initialClaims);
         }
-      } catch (error) {
+      } catch {
         logger.error('split', { code: 'LEDGER_FAILED' });
       } finally {
         setIsLoading(false);
@@ -324,7 +324,7 @@ export default function SplitScreen() {
     try {
       // Assuming selected.id is the user's UUID in a real auth setup.
       await receiptService.toggleItemClaim(itemId, selected.id, receiptId);
-    } catch (error) {
+    } catch {
       logger.error('split', { code: 'CLAIM_FAILED' });
       // If persistence fails, you could revert the optimistic state here
     }

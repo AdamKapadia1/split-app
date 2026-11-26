@@ -69,6 +69,8 @@ export function redactSensitive(value: unknown, depth = 0): unknown {
 function reportHandledError(args: unknown[]) {
   if (isDev()) return;
   try {
+    // Lazy require keeps Sentry out of the logger module cycle.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { captureSanitizedException } = require('./sentry') as typeof import('./sentry');
     const error = args.find((arg): arg is Error => arg instanceof Error);
     const summary = args.find((arg): arg is string => typeof arg === 'string');
