@@ -91,6 +91,35 @@ it('notifies only when a share moves from unpaid to paid', () => {
     decideHostPaidNotification({ ...base, record: { ...paidRecord, user_id: GUEST_ID } }, HOST_ID).action,
     'notify',
   );
+  assertEqual(
+    decideHostPaidNotification({
+      ...base,
+      record: { ...paidRecord, is_host: true, user_id: GUEST_ID },
+    }, HOST_ID).action,
+    'ignore',
+  );
+  assertEqual(
+    decideHostPaidNotification({
+      ...base,
+      record: { ...paidRecord, is_host: true, user_id: null },
+    }, HOST_ID).action,
+    'ignore',
+  );
+  assertEqual(
+    decideHostPaidNotification({
+      ...base,
+      record: { ...paidRecord, is_host: false, user_id: null },
+      oldRecord: { ...paidRecord, is_paid: false, is_host: true, user_id: HOST_ID },
+    }, HOST_ID).action,
+    'ignore',
+  );
+  assertEqual(
+    decideHostPaidNotification({
+      ...base,
+      record: { ...paidRecord, is_host: false, user_id: GUEST_ID },
+    }, HOST_ID).action,
+    'notify',
+  );
 });
 
 it('formats pence as GBP and builds the receipt deep link', () => {

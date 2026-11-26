@@ -25,6 +25,15 @@ import {
   type SharedBill,
   BillShareServiceError,
 } from '@/services/BillShareService';
+import {
+  canMarkSharePaid,
+  hostPayerPillLabel,
+  hostSettledShareCopy,
+  payerAttributionLine,
+  publicHostLabel,
+  selectNamePrompt,
+  whoAreYouPrompt,
+} from '@/utils/hostAttribution';
 import { formatPence } from '@/utils/money';
 import { reconcileSharedBill, splitEquallyDeterministic } from '@/utils/sharedSplitMath';
 import {
@@ -128,6 +137,7 @@ export default function SharedSplitScreen() {
   }, [toast]);
 
   const person = bill?.participants.find((entry) => entry.id === participantId) ?? null;
+  const hostName = publicHostLabel(bill?.owner.displayName);
 
   async function join() {
     const name = cleanGuestName(draftName);
@@ -193,7 +203,8 @@ export default function SharedSplitScreen() {
   }
 
   async function setPaid(isPaid: boolean) {
-    if (!bill || !participantId || busy.current) return;
+    if (!bill || !participantId || !person || busy.current) return;
+    if (!canMarkSharePaid(person)) return;
     const previous = bill;
     busy.current = true;
     revision.current += 1;
@@ -326,6 +337,7 @@ export default function SharedSplitScreen() {
                   {bill.bill.isReconciled ? 'UK VAT-inclusive · Totals reconciled' : 'UK VAT-inclusive · Totals need a look'}
                 </Text>
               </View>
+              <Text style={styles.payerLine}>{payerAttributionLine(hostName)}</Text>
               {bill.bill.vatPence > 0 ? <Text style={styles.meta}>Includes {formatPence(bill.bill.vatPence)} VAT</Text> : null}
               {bill.bill.serviceChargePence > 0 ? (
                 <Text style={styles.meta}>Discretionary service {formatPence(bill.bill.serviceChargePence)}</Text>
@@ -333,21 +345,24 @@ export default function SharedSplitScreen() {
             </View>
 
             <Text style={styles.section}>Who are you?</Text>
+            <Text style={styles.prompt}>{whoAreYouPrompt(hostName)}</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pills}>
               {bill.participants.map((entry) => {
                 const selected = entry.id === participantId;
+                const label = entry.isHost ? hostPayerPillLabel(hostName) : entry.displayName;
                 return (
                   <Pressable
                     key={entry.id}
                     accessibilityRole="button"
+                    accessibilityLabel={entry.isHost ? `${hostName}, paid the bill` : label}
                     accessibilityState={{ selected }}
                     onPress={() => {
                       remember(entry.id);
                       setNotice(null);
                     }}
-                    style={[styles.pill, selected && styles.pillOn]}
+                    style={[styles.pill, entry.isHost && styles.pillHost, selected && !entry.isHost && styles.pillOn, selected && entry.isHost && styles.pillHostOn]}
                   >
-                    <Text style={[styles.pillText, selected && styles.pillTextOn]}>{entry.displayName}</Text>
+                    <Text style={[styles.pillText, entry.isHost && styles.pillHostText, selected && !entry.isHost && styles.pillTextOn, selected && entry.isHost && styles.pillHostTextOn]}>{label}</Text>
                   </Pressable>
                 );
               })}
@@ -443,36 +458,45 @@ export default function SharedSplitScreen() {
                   ) : null}
                   <Row label="Your total to pay" value={formatPence(person.amountOwedPence)} strong />
                   {bill.bill.vatPence > 0 ? <Text style={styles.meta}>UK VAT included in item prices</Text> : null}
-                  <PayoutBlock
-                    rails={rails}
-                    ownerName={bill.owner.displayName}
-                    amountLabel={formatPence(person.amountOwedPence)}
-                    copiedKey={copiedKey}
-                    onOpen={(url) => { void openHttps(url); }}
-                    onCopy={(value, key) => { void copyText(value, key); }}
-                  />
-                  {person.isPaid ? (
+                  {person.isHost ? (
                     <View style={styles.paidCard}>
-                      <Text style={styles.paidTitle}>Marked as Paid · Sent to {bill.owner.displayName}</Text>
-                      <Pressable accessibilityRole="button" disabled={paying} onPress={() => { void setPaid(false); }}>
-                        <Text style={styles.undo}>Undo</Text>
-                      </Pressable>
+                      <Text style={styles.paidTitle}>{hostSettledShareCopy(formatPence(person.amountOwedPence)).title}</Text>
+                      <Text style={styles.meta}>{hostSettledShareCopy(formatPence(person.amountOwedPence)).subtitle}</Text>
                     </View>
                   ) : (
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={paying || person.amountOwedPence <= 0}
-                      onPress={() => { void setPaid(true); }}
-                      style={[styles.payButton, person.amountOwedPence <= 0 && styles.payButtonOff]}
-                    >
-                      {paying ? <ActivityIndicator color="#09090B" /> : (
-                        <Text style={styles.payButtonText}>I&apos;ve Paid {formatPence(person.amountOwedPence)}</Text>
+                    <>
+                      <PayoutBlock
+                        rails={rails}
+                        ownerName={hostName}
+                        amountLabel={formatPence(person.amountOwedPence)}
+                        copiedKey={copiedKey}
+                        onOpen={(url) => { void openHttps(url); }}
+                        onCopy={(value, key) => { void copyText(value, key); }}
+                      />
+                      {person.isPaid ? (
+                        <View style={styles.paidCard}>
+                          <Text style={styles.paidTitle}>Marked as Paid · Sent to {hostName}</Text>
+                          <Pressable accessibilityRole="button" disabled={paying} onPress={() => { void setPaid(false); }}>
+                            <Text style={styles.undo}>Undo</Text>
+                          </Pressable>
+                        </View>
+                      ) : (
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={paying || person.amountOwedPence <= 0}
+                          onPress={() => { void setPaid(true); }}
+                          style={[styles.payButton, person.amountOwedPence <= 0 && styles.payButtonOff]}
+                        >
+                          {paying ? <ActivityIndicator color="#09090B" /> : (
+                            <Text style={styles.payButtonText}>I&apos;ve Paid {formatPence(person.amountOwedPence)}</Text>
+                          )}
+                        </Pressable>
                       )}
-                    </Pressable>
+                    </>
                   )}
                 </>
               ) : (
-                <Text style={styles.meta}>Select your name to see what you owe {bill.owner.displayName}.</Text>
+                <Text style={styles.meta}>{selectNamePrompt(hostName)}</Text>
               )}
               {notice ? <Text style={styles.notice}>{notice}</Text> : null}
             </View>
@@ -587,7 +611,7 @@ function optimisticClaim(bill: SharedBill, participantId: string, itemId: string
       ...item,
       claimedBy: claimed
         ? item.claimedBy.filter((entry) => entry.id !== participantId)
-        : [...item.claimedBy, { id: person.id, displayName: person.displayName, userId: person.userId }],
+        : [...item.claimedBy, { id: person.id, displayName: person.displayName, userId: person.userId, isHost: person.isHost }],
     };
   });
   const math = reconcileSharedBill({
@@ -716,6 +740,8 @@ const styles = StyleSheet.create({
   trustTextGood: { color: '#34D399' },
   trustTextCheck: { color: '#A5B4FC' },
   meta: { color: '#A1A1AA', fontSize: 13, lineHeight: 18 },
+  payerLine: { color: '#A1A1AA', fontSize: 13, lineHeight: 18, marginTop: 2 },
+  prompt: { color: '#A1A1AA', fontSize: 13, lineHeight: 18 },
   section: { color: '#FAFAFA', fontSize: 13, fontWeight: '700', letterSpacing: 0.4, textTransform: 'uppercase' },
   pills: { gap: 8, paddingVertical: 4 },
   pill: {
@@ -727,8 +753,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   pillOn: { backgroundColor: '#818CF8', borderColor: '#818CF8' },
+  pillHost: { backgroundColor: '#101218', borderColor: '#2A2E3A' },
+  pillHostOn: { backgroundColor: '#181B24', borderColor: '#3F4454' },
   pillText: { color: '#FAFAFA', fontSize: 14, fontWeight: '600' },
   pillTextOn: { color: '#09090B' },
+  pillHostText: { color: '#71717A' },
+  pillHostTextOn: { color: '#A1A1AA' },
   joinRow: { flexDirection: 'row', gap: 8 },
   joinInput: {
     flex: 1,

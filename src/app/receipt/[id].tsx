@@ -13,6 +13,7 @@ import { groupService, type GroupMemberProfile } from '@/services/GroupService';
 import { listRecentNudgedRecipients, sendSettlementNudge } from '@/services/NotificationService';
 import { getSignedReceiptImageUrl } from '@/services/ReceiptImageService';
 import { billShareService, shareBillUrl, type SharedBill, BillShareServiceError } from '@/services/BillShareService';
+import { publicHostLabel } from '@/utils/hostAttribution';
 import { payoutService } from '@/services/PayoutService';
 import { receiptService } from '@/services/ReceiptService';
 import { theme } from '@/theme/theme';
@@ -131,6 +132,8 @@ export default function ReceiptLedgerScreen() {
   const [shareError, setShareError] = useState<string | null>(null);
   const [payoutHint, setPayoutHint] = useState(false);
   const [sharedOverlay, setSharedOverlay] = useState<SharedBill | null>(null);
+  const [, setHostDisplayName] = useState('Host');
+  const selectedItemRef = useRef<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
   const viewerGeneration = useRef(0);
   const ledgerAlive = useRef(true);
@@ -144,7 +147,7 @@ export default function ReceiptLedgerScreen() {
   }, []);
 
   const loadLedger = useCallback(async (id: string, isCurrent: () => boolean) => {
-    async function loadShare() {
+    async function loadShare(hostId: string) {
       try {
         const status = await billShareService.getShareStatus(id);
         if (!isCurrent()) return;
@@ -158,14 +161,62 @@ export default function ReceiptLedgerScreen() {
         if (!isCurrent()) return;
         setSharedOverlay(shared);
         if (!shared) return;
-        const nextClaims: Record<string, string[]> = {};
-        for (const item of shared.items) {
-          const ids = item.claimedBy.flatMap((person) => (person.userId ? [person.userId] : []));
-          if (ids.length > 0) nextClaims[item.id] = ids;
+        const hostItems = new Set<string>();
+        setClaims((current) => {
+          const next = { ...current };
+          for (const item of shared.items) {
+            const ids = item.claimedBy.flatMap((person) => {
+              if (person.isHost) {
+                hostItems.add(item.id);
+                return hostId ? [hostId] : [];
+              }
+              return person.userId ? [person.userId] : [];
+            });
+            if (ids.length === 0) continue;
+            const merged = [...(next[item.id] ?? [])];
+            for (const personId of ids) {
+              if (!merged.includes(personId)) merged.push(personId);
+            }
+            next[item.id] = merged;
+          }
+          return next;
+        });
+        if (hostItems.size > 0) {
+          setSelectedItemIds((current) => {
+            const next = new Set(current);
+            for (const itemId of hostItems) next.add(itemId);
+            selectedItemRef.current = next;
+            return next;
+          });
         }
-        setClaims(nextClaims);
+        const hostPerson = shared.participants.find((person) => person.isHost);
+        if (hostPerson) setHostDisplayName(publicHostLabel(hostPerson.displayName));
       } catch {
         if (isCurrent()) logger.error('receipt', { code: 'SHARE_STATUS_FAILED' });
+      }
+    }
+
+    async function loadHostClaims(hostId: string) {
+      try {
+        const hostClaims = await billShareService.fetchHostClaims(id);
+        if (!isCurrent() || !hostClaims) return;
+        setHostDisplayName(hostClaims.hostDisplayName);
+        const nextSelected = new Set(hostClaims.claimedItemIds);
+        selectedItemRef.current = nextSelected;
+        setSelectedItemIds(nextSelected);
+        setClaims((current) => {
+          const next = { ...current };
+          for (const itemId of hostClaims.claimedItemIds) {
+            const list = [...(next[itemId] ?? [])];
+            if (!list.includes(hostId)) list.push(hostId);
+            next[itemId] = list;
+          }
+          return next;
+        });
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (error instanceof BillShareServiceError && (error.code === 'UNAUTHORIZED' || error.code === 'INVALID')) return;
+        logger.error('receipt', { code: 'HOST_CLAIM_LOAD_FAILED' });
       }
     }
 
@@ -187,7 +238,8 @@ export default function ReceiptLedgerScreen() {
         setPaidById(null);
         setActiveMemberId(null);
         setGroupError(null);
-        await loadShare();
+        await loadHostClaims(data.receipt.host_id);
+        await loadShare(data.receipt.host_id);
         return;
       }
 
@@ -229,7 +281,8 @@ export default function ReceiptLedgerScreen() {
         setActiveMemberId(null);
         setGroupError('Could not load this group.');
       }
-      await loadShare();
+      await loadHostClaims(data.receipt.host_id);
+      await loadShare(data.receipt.host_id);
     } catch {
       if (isCurrent()) logger.error('receipt', { code: 'LEDGER_FAILED' });
     } finally {
@@ -296,28 +349,48 @@ export default function ReceiptLedgerScreen() {
   }, [nudgingId, receiptData]);
 
   const toggleItem = useCallback((itemId: string) => {
+    if (!receiptData) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setSelectedItemIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(itemId)) next.delete(itemId);
-      else next.add(itemId);
-      return next;
+    const previous = selectedItemRef.current;
+    const next = new Set(previous);
+    if (next.has(itemId)) next.delete(itemId);
+    else next.add(itemId);
+    selectedItemRef.current = next;
+    setSelectedItemIds(next);
+    if (session?.user.id !== receiptData.receipt.host_id) return;
+    void billShareService.setHostClaims(receiptData.receipt.id, [...next]).then((state) => {
+      if (state) setHostDisplayName(state.hostDisplayName);
+    }).catch(() => {
+      selectedItemRef.current = previous;
+      setSelectedItemIds(previous);
+      logger.error('receipt', { code: 'HOST_CLAIM_FAILED' });
     });
-  }, []);
+  }, [receiptData, session?.user.id]);
 
   const toggleAssignment = useCallback((itemId: string) => {
-    if (!activeMemberId) return;
+    if (!activeMemberId || !receiptData) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setSaved(false);
     setSaveError(null);
     setClaims((current) => {
       const existing = current[itemId] ?? [];
-      const next = existing.includes(activeMemberId)
+      const nextIds = existing.includes(activeMemberId)
         ? existing.filter((id) => id !== activeMemberId)
         : [...existing, activeMemberId];
-      return { ...current, [itemId]: next };
+      const next = { ...current, [itemId]: nextIds };
+      if (activeMemberId === receiptData.receipt.host_id) {
+        const hostItems = receiptData.items
+          .filter((item) => (next[item.id] ?? []).includes(activeMemberId))
+          .map((item) => item.id);
+        void billShareService.setHostClaims(receiptData.receipt.id, hostItems).then((state) => {
+          if (state) setHostDisplayName(state.hostDisplayName);
+        }).catch(() => {
+          logger.error('receipt', { code: 'HOST_CLAIM_FAILED' });
+        });
+      }
+      return next;
     });
-  }, [activeMemberId]);
+  }, [activeMemberId, receiptData]);
 
   const splitEqually = useCallback(() => {
     if (!receiptData || members.length === 0) return;

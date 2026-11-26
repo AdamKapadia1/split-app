@@ -62,6 +62,7 @@ Deno.serve(async (req) => {
     oldRecord,
   };
   if (!isSharePaidTransition(transition)) return json(200, { ok: true, ignored: true });
+  if (record?.is_host === true || oldRecord?.is_host === true) return json(200, { ok: true, ignored: true });
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
