@@ -26,6 +26,8 @@ export function GroupSelectorSheet({ visible, onSelect, onCancel }: { visible: b
           .eq('group_members.user_id', session.user.id)
           .order('created_at', { ascending: false });
         if (!error && data) setGroups(data);
+      } catch {
+        setGroups([]);
       } finally { setIsLoading(false); }
     }
     fetchGroups();

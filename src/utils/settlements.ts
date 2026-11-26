@@ -57,22 +57,28 @@ export type SimplifiedTransfer = {
 };
 
 export function calculateNetBalances(
-  receipts: readonly SettlementReceiptInput[],
-  splits: readonly SettlementSplitInput[],
-  settlements: readonly SettlementRecordInput[],
-  memberIds: readonly string[],
+  receipts: readonly SettlementReceiptInput[] | null | undefined,
+  splits: readonly SettlementSplitInput[] | null | undefined,
+  settlements: readonly SettlementRecordInput[] | null | undefined,
+  memberIds: readonly string[] | null | undefined,
 ): Record<string, number> {
   const balances: Record<string, number> = {};
-  for (const userId of memberIds) balances[userId] = 0;
+  for (const userId of Array.isArray(memberIds) ? memberIds : []) {
+    if (typeof userId === 'string' && userId) balances[userId] = 0;
+  }
 
   const receiptPayerMap = new Map<string, string | null>();
-  for (const receipt of receipts) receiptPayerMap.set(receipt.id, receipt.paid_by);
+  for (const receipt of Array.isArray(receipts) ? receipts : []) {
+    if (!receipt || typeof receipt !== 'object' || typeof receipt.id !== 'string' || !receipt.id) continue;
+    receiptPayerMap.set(receipt.id, typeof receipt.paid_by === 'string' ? receipt.paid_by : null);
+  }
 
-  for (const split of splits) {
+  for (const split of Array.isArray(splits) ? splits : []) {
+    if (!split || typeof split !== 'object') continue;
+    if (typeof split.receipt_id !== 'string' || typeof split.user_id !== 'string') continue;
+    if (typeof split.amount_minor !== 'number' || !Number.isFinite(split.amount_minor) || split.amount_minor <= 0) continue;
     const payerId = receiptPayerMap.get(split.receipt_id);
-    if (!payerId || split.amount_minor <= 0) continue;
-    // The payer already settled their own claimed share. It is not a debt.
-    if (split.user_id === payerId) continue;
+    if (!payerId || split.user_id === payerId) continue;
 
     ensureBalance(balances, payerId);
     ensureBalance(balances, split.user_id);
@@ -80,8 +86,10 @@ export function calculateNetBalances(
     balances[payerId] += split.amount_minor;
   }
 
-  for (const settlement of settlements) {
-    if (settlement.voided_at !== null) continue;
+  for (const settlement of Array.isArray(settlements) ? settlements : []) {
+    if (!settlement || typeof settlement !== 'object' || settlement.voided_at !== null) continue;
+    if (typeof settlement.from_user_id !== 'string' || typeof settlement.to_user_id !== 'string') continue;
+    if (typeof settlement.amount_minor !== 'number' || !Number.isFinite(settlement.amount_minor)) continue;
 
     ensureBalance(balances, settlement.from_user_id);
     ensureBalance(balances, settlement.to_user_id);
@@ -123,6 +131,31 @@ export type GroupLedgerReceiptInput = {
  * Empty groups and unsplit bills never take that path.
  * Balance math stays in `calculateNetBalances` and `simplifyDebts`.
  */
+export function receiptNeedsSplit(
+  receipt: { id?: string | null; status?: string | null } | null | undefined,
+  splitReceiptIds?: ReadonlySet<string> | null,
+): boolean {
+  if (!receipt || typeof receipt !== 'object') return false;
+  const id = typeof receipt.id === 'string' ? receipt.id : '';
+  if (id && splitReceiptIds?.has(id)) return false;
+  const status = typeof receipt.status === 'string' ? receipt.status.trim().toLowerCase() : '';
+  if (status === 'split' || status === 'settled') return false;
+  return true;
+}
+
+/** Badge copy for a receipt row. Unknown, empty, and missing fields stay "Unsplit". */
+export function receiptProgressLabel(
+  receipt: { settled_at?: unknown; status?: unknown } | null | undefined,
+  hasSavedSplit?: boolean,
+): 'Settled' | 'Split' | 'Unsplit' {
+  if (!receipt || typeof receipt !== 'object') return hasSavedSplit === true ? 'Split' : 'Unsplit';
+  const settledAt = typeof receipt.settled_at === 'string' ? receipt.settled_at.trim() : '';
+  const status = typeof receipt.status === 'string' ? receipt.status.trim().toLowerCase() : '';
+  if (settledAt || status === 'settled') return 'Settled';
+  if (status === 'split' || hasSavedSplit === true) return 'Split';
+  return 'Unsplit';
+}
+
 export function deriveGroupLedgerStatus({
   receipts,
   splits,
@@ -130,26 +163,43 @@ export function deriveGroupLedgerStatus({
   memberIds,
   currentUserId,
 }: {
-  receipts: readonly GroupLedgerReceiptInput[];
-  splits: readonly SettlementSplitInput[];
-  settlements: readonly WatermarkSettlementInput[];
-  memberIds: readonly string[];
+  receipts: readonly GroupLedgerReceiptInput[] | null | undefined;
+  splits: readonly SettlementSplitInput[] | null | undefined;
+  settlements: readonly WatermarkSettlementInput[] | null | undefined;
+  memberIds: readonly string[] | null | undefined;
   currentUserId: string | null | undefined;
 }): GroupLedgerStatus {
+  const receiptRows = (Array.isArray(receipts) ? receipts : []).filter((receipt): receipt is GroupLedgerReceiptInput => (
+    Boolean(receipt) && typeof receipt === 'object' && typeof receipt.id === 'string' && receipt.id.length > 0
+  ));
+  const splitRows = (Array.isArray(splits) ? splits : []).filter((split): split is SettlementSplitInput => (
+    Boolean(split)
+    && typeof split === 'object'
+    && typeof split.receipt_id === 'string'
+    && typeof split.user_id === 'string'
+    && typeof split.amount_minor === 'number'
+    && Number.isFinite(split.amount_minor)
+  ));
+  const settlementRows = (Array.isArray(settlements) ? settlements : []).filter((settlement): settlement is WatermarkSettlementInput => (
+    Boolean(settlement) && typeof settlement === 'object'
+  ));
+  const members = (Array.isArray(memberIds) ? memberIds : []).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const viewer = typeof currentUserId === 'string' && currentUserId ? currentUserId : null;
+
   const splitReceiptIds = new Set<string>();
-  for (const split of splits) {
+  for (const split of splitRows) {
     if (split.amount_minor > 0) splitReceiptIds.add(split.receipt_id);
   }
 
-  const lastSettledAt = latestZeroBalanceAt(receipts, splits, settlements);
-  const { activeReceipts, settledReceipts } = partitionGroupReceipts(receipts, splitReceiptIds, lastSettledAt);
-  const unsplitActiveCount = activeReceipts.filter((receipt) => receiptStillNeedsSplit(receipt, splitReceiptIds)).length;
-  const netBalances = calculateNetBalances(receipts, splits, settlements, memberIds);
+  const lastSettledAt = latestZeroBalanceAt(receiptRows, splitRows, settlementRows);
+  const { activeReceipts, settledReceipts } = partitionGroupReceipts(receiptRows, splitReceiptIds, lastSettledAt);
+  const unsplitActiveCount = activeReceipts.filter((receipt) => receiptNeedsSplit(receipt, splitReceiptIds)).length;
+  const netBalances = calculateNetBalances(receiptRows, splitRows, settlementRows, members);
   const simplifiedTransfers = simplifyDebts(netBalances);
-  const userNetBalanceMinor = currentUserId ? (netBalances[currentUserId] ?? 0) : 0;
+  const userNetBalanceMinor = viewer ? (netBalances[viewer] ?? 0) : 0;
 
   let kind: GroupLedgerStatusKind;
-  if (receipts.length === 0) {
+  if (receiptRows.length === 0) {
     kind = 'empty';
   } else if (simplifiedTransfers.length > 0 || Object.values(netBalances).some((balance) => balance !== 0)) {
     kind = 'balances_owed';
@@ -161,7 +211,7 @@ export function deriveGroupLedgerStatus({
 
   return {
     kind,
-    receiptCount: receipts.length,
+    receiptCount: receiptRows.length,
     activeReceiptCount: activeReceipts.length,
     settledReceiptCount: settledReceipts.length,
     unsplitActiveCount,
@@ -170,11 +220,12 @@ export function deriveGroupLedgerStatus({
   };
 }
 
-export function simplifyDebts(netBalances: Record<string, number>): SimplifiedTransfer[] {
+export function simplifyDebts(netBalances: Record<string, number> | null | undefined): SimplifiedTransfer[] {
   const debtors: { userId: string; amount: number }[] = [];
   const creditors: { userId: string; amount: number }[] = [];
 
-  for (const [userId, amount] of Object.entries(netBalances)) {
+  for (const [userId, amount] of Object.entries(netBalances ?? {})) {
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) continue;
     if (amount < 0) debtors.push({ userId, amount: -amount });
     else if (amount > 0) creditors.push({ userId, amount });
   }
@@ -217,27 +268,29 @@ export function simplifyDebts(netBalances: Record<string, number>): SimplifiedTr
  * `calculateNetBalances`.
  */
 export function partitionGroupReceipts<T extends PartitionReceiptInput>(
-  receipts: readonly T[],
-  splitReceiptIds: ReadonlySet<string>,
+  receipts: readonly T[] | null | undefined,
+  splitReceiptIds: ReadonlySet<string> | null | undefined,
   lastSettledAt: string | null,
 ): PartitionedReceipts<T> {
   const activeReceipts: T[] = [];
   const settledReceipts: T[] = [];
   const settlementSource: Record<string, SettlementSource> = {};
-  const watermark = lastSettledAt === null ? null : new Date(lastSettledAt).getTime();
+  const watermark = typeof lastSettledAt === 'string' ? new Date(lastSettledAt).getTime() : Number.NaN;
+  const knownSplits = splitReceiptIds ?? new Set<string>();
 
-  for (const receipt of receipts) {
-    if (receipt.settled_at) {
+  for (const receipt of Array.isArray(receipts) ? receipts : []) {
+    if (!receipt || typeof receipt !== 'object' || typeof receipt.id !== 'string' || !receipt.id) continue;
+    const settledAt = typeof receipt.settled_at === 'string' ? receipt.settled_at.trim() : '';
+    if (settledAt) {
       settledReceipts.push(receipt);
       settlementSource[receipt.id] = 'manual';
       continue;
     }
 
-    const createdAt = new Date(receipt.created_at).getTime();
+    const createdAt = typeof receipt.created_at === 'string' ? new Date(receipt.created_at).getTime() : Number.NaN;
     const automaticallySettled =
-      watermark !== null
-      && !Number.isNaN(watermark)
-      && splitReceiptIds.has(receipt.id)
+      !Number.isNaN(watermark)
+      && knownSplits.has(receipt.id)
       && createdAt <= watermark;
 
     if (automaticallySettled) {
@@ -258,25 +311,31 @@ export function partitionGroupReceipts<T extends PartitionReceiptInput>(
  * backwards. Returns null when no payment has cleared the group.
  */
 export function latestZeroBalanceAt(
-  receipts: readonly WatermarkReceiptInput[],
-  splits: readonly SettlementSplitInput[],
-  settlements: readonly WatermarkSettlementInput[],
+  receipts: readonly WatermarkReceiptInput[] | null | undefined,
+  splits: readonly SettlementSplitInput[] | null | undefined,
+  settlements: readonly WatermarkSettlementInput[] | null | undefined,
 ): string | null {
+  const receiptRows = Array.isArray(receipts) ? receipts : [];
+  const splitRows = Array.isArray(splits) ? splits : [];
+  const settlementRows = Array.isArray(settlements) ? settlements : [];
   const splitsByReceipt = new Map<string, SettlementSplitInput[]>();
-  for (const split of splits) {
+  for (const split of splitRows) {
+    if (!split || typeof split !== 'object' || typeof split.receipt_id !== 'string') continue;
     const existing = splitsByReceipt.get(split.receipt_id);
     if (existing) existing.push(split);
     else splitsByReceipt.set(split.receipt_id, [split]);
   }
 
   const events: { at: number; order: number; kind: 'receipt' | 'settlement'; index: number }[] = [];
-  receipts.forEach((receipt, index) => {
+  receiptRows.forEach((receipt, index) => {
+    if (!receipt || typeof receipt !== 'object' || typeof receipt.created_at !== 'string') return;
     const at = new Date(receipt.created_at).getTime();
     if (Number.isNaN(at)) return;
     events.push({ at, order: 0, kind: 'receipt', index });
   });
-  settlements.forEach((settlement, index) => {
-    if (settlement.voided_at !== null) return;
+  settlementRows.forEach((settlement, index) => {
+    if (!settlement || typeof settlement !== 'object' || settlement.voided_at !== null) return;
+    if (typeof settlement.created_at !== 'string') return;
     const at = new Date(settlement.created_at).getTime();
     if (Number.isNaN(at)) return;
     events.push({ at, order: 1, kind: 'settlement', index });
@@ -288,13 +347,13 @@ export function latestZeroBalanceAt(
 
   for (const event of events) {
     if (event.kind === 'receipt') {
-      const receipt = receipts[event.index];
+      const receipt = receiptRows[event.index];
       if (!receipt) continue;
       applyReceiptSplits(balances, receipt.paid_by, splitsByReceipt.get(receipt.id) ?? []);
       continue;
     }
 
-    const settlement = settlements[event.index];
+    const settlement = settlementRows[event.index];
     if (!settlement) continue;
     ensureBalance(balances, settlement.from_user_id);
     ensureBalance(balances, settlement.to_user_id);
@@ -313,23 +372,15 @@ function applyReceiptSplits(
   paidBy: string | null,
   splits: readonly SettlementSplitInput[],
 ) {
-  if (!paidBy) return;
-  for (const split of splits) {
-    if (split.amount_minor <= 0) continue;
+  if (typeof paidBy !== 'string' || !paidBy) return;
+  for (const split of Array.isArray(splits) ? splits : []) {
+    if (!split || typeof split !== 'object' || typeof split.user_id !== 'string') continue;
+    if (typeof split.amount_minor !== 'number' || !Number.isFinite(split.amount_minor) || split.amount_minor <= 0) continue;
     ensureBalance(balances, paidBy);
     ensureBalance(balances, split.user_id);
     balances[split.user_id] -= split.amount_minor;
     balances[paidBy] += split.amount_minor;
   }
-}
-
-function receiptStillNeedsSplit(
-  receipt: { id: string; status?: string | null },
-  splitReceiptIds: ReadonlySet<string>,
-): boolean {
-  if (splitReceiptIds.has(receipt.id)) return false;
-  if (receipt.status === 'split' || receipt.status === 'settled') return false;
-  return true;
 }
 
 function ensureBalance(balances: Record<string, number>, userId: string) {

@@ -87,8 +87,9 @@ class PayoutService {
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' })
         .select(COLUMNS)
-        .single();
+        .maybeSingle();
       if (error) throw error;
+      if (!data) throw new PayoutServiceError('SAVE_FAILED', 'Payout details were not returned.');
       return parsePayoutMethod(data);
     } catch (error) {
       throw asPayoutError(error, 'SAVE_FAILED', 'Could not save payout details.');

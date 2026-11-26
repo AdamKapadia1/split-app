@@ -52,29 +52,46 @@ type HistoryListRow = ReceiptHistoryItem & {
   sectionEnd: boolean;
 };
 
-function receiptTitle(item: Pick<ReceiptHistoryItem, 'merchant_name' | 'restaurant_name' | 'created_at'>) {
-  const merchant = item.merchant_name?.trim();
-  if (merchant) return merchant;
-  const restaurant = item.restaurant_name?.trim();
-  if (restaurant) return restaurant;
-
-  const date = new Date(item.created_at);
-  const day = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  const time = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-  return `Receipt • ${day}, ${time}`;
+function labelText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
-function flattenHistorySections(sections: readonly HistorySection<ReceiptHistoryItem>[]): HistoryListRow[] {
+function formatHistoryStamp(value: unknown, time: boolean) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return time
+      ? date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })
+      : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  } catch {
+    return '';
+  }
+}
+
+function receiptTitle(item: Pick<ReceiptHistoryItem, 'merchant_name' | 'restaurant_name' | 'created_at'> | null | undefined) {
+  const merchant = labelText(item?.merchant_name);
+  if (merchant) return merchant;
+  const restaurant = labelText(item?.restaurant_name);
+  if (restaurant) return restaurant;
+  const day = formatHistoryStamp(item?.created_at, false);
+  const time = formatHistoryStamp(item?.created_at, true);
+  if (!day) return 'Receipt';
+  return time ? `Receipt • ${day}, ${time}` : `Receipt • ${day}`;
+}
+
+function flattenHistorySections(sections: readonly HistorySection<ReceiptHistoryItem>[] | null | undefined): HistoryListRow[] {
   const rows: HistoryListRow[] = [];
-  for (const section of sections) {
-    section.data.forEach((item, index) => {
+  for (const section of Array.isArray(sections) ? sections : []) {
+    const data = Array.isArray(section?.data) ? section.data : [];
+    data.forEach((item: ReceiptHistoryItem, index: number) => {
       rows.push({
         ...item,
         sectionKey: section.key,
         sectionTitle: section.title,
         showDivider: index > 0,
         sectionStart: index === 0,
-        sectionEnd: index === section.data.length - 1,
+        sectionEnd: index === data.length - 1,
       });
     });
   }
@@ -280,13 +297,26 @@ export default function HistoryScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadGroups();
-      void loadProfile();
-      if (skipFocusRefreshRef.current) {
-        skipFocusRefreshRef.current = false;
-        return;
-      }
-      void loadFirstPage('refresh');
+      let active = true;
+      void (async () => {
+        try {
+          await loadGroups();
+          await loadProfile();
+          if (!active) return;
+          if (skipFocusRefreshRef.current) {
+            skipFocusRefreshRef.current = false;
+            return;
+          }
+          await loadFirstPage('refresh');
+        } catch (error) {
+          if (active) logger.error('history', { code: 'LOAD_FAILED', error });
+        } finally {
+          if (!active) return;
+        }
+      })();
+      return () => {
+        active = false;
+      };
     }, [loadFirstPage, loadGroups, loadProfile]),
   );
 

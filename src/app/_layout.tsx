@@ -95,8 +95,14 @@ function RootNavigator() {
     let cancelled = false;
     const stopRouting = startPaymentNotificationRouting();
     void (async () => {
-      await registerForPushNotificationsAsync(userId);
-      if (!cancelled) await registerPushToken(userId);
+      try {
+        await registerForPushNotificationsAsync(userId);
+        if (!cancelled) await registerPushToken(userId);
+      } catch (error) {
+        logger.error('notifications', { code: 'REGISTER_FAILED', error });
+      } finally {
+        if (cancelled) return;
+      }
     })();
     return () => {
       cancelled = true;
@@ -187,7 +193,16 @@ function SettlementNudgeLinks({ userId }: { userId: string | null }) {
   return null;
 }
 
-export default Sentry.wrap(RootLayout);
+function wrapRoot(component: typeof RootLayout) {
+  try {
+    return Sentry.wrap(component);
+  } catch (error) {
+    logger.error('sentry', { code: 'WRAP_FAILED', error });
+    return component;
+  }
+}
+
+export default wrapRoot(RootLayout);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.canvas },

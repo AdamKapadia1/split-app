@@ -604,7 +604,7 @@ function ledgerStatusForGroup(
     });
   } catch {
     logger.error('GroupService balance', { code: 'BALANCE_FAILED' });
-    const receiptCount = receipts.length;
+    const receiptCount = Array.isArray(receipts) ? receipts.length : 0;
     return {
       kind: receiptCount === 0 ? 'empty' : 'needs_split',
       receiptCount,

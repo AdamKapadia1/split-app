@@ -101,6 +101,9 @@ export default function ScanScreen() {
       .then((next) => {
         if (!cancelled) setGroups(next);
       })
+      .catch((error: unknown) => {
+        if (!cancelled) logger.error('scan', { code: 'GROUPS_FAILED', error });
+      })
       .finally(() => {
         if (!cancelled) setGroupsLoading(false);
       });

@@ -47,6 +47,8 @@
     "@types/react": "~19.3.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~58.0.4",
+    "react-test-renderer": "^19.3.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -54,7 +56,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "find src \\( -name '*.test.ts' -o -name '*.test.tsx' \\) -print | sort | while IFS= read -r file; do tsx \"$file\" || exit 1; done"
   },
   "private": true
 }

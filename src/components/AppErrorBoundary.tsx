@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { APP_NAME } from '@/constants/brand';
 import { theme } from '@/theme/theme';
+import { logger } from '@/utils/logger';
 import { captureSanitizedException } from '@/utils/sentry';
 
 type AppErrorBoundaryProps = {
@@ -12,28 +13,86 @@ type AppErrorBoundaryProps = {
 
 type AppErrorBoundaryState = {
   hasError: boolean;
+  error: Error | null;
+  repeat: boolean;
 };
 
-export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
-  state: AppErrorBoundaryState = { hasError: false };
+function asError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  if (typeof value === 'string' && value.trim()) return new Error(value);
+  return new Error('Unknown error');
+}
 
-  static getDerivedStateFromError(): AppErrorBoundaryState {
-    return { hasError: true };
+function diagnosticLine(error: Error | null): string {
+  const name = error && typeof error.name === 'string' && error.name.trim() ? error.name.trim() : 'Error';
+  const message = error && typeof error.message === 'string' ? error.message.slice(0, 140) : '';
+  return `Error: ${name}: ${message}`;
+}
+
+export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = { hasError: false, error: null, repeat: false };
+
+  private lastSignature: string | null = null;
+
+  static getDerivedStateFromError(error: unknown): Pick<AppErrorBoundaryState, 'hasError' | 'error'> {
+    return { hasError: true, error: asError(error) };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    captureSanitizedException(error, {
-      boundary: 'root',
-      componentStack: info.componentStack ?? '',
-    });
+    try {
+      const safe = asError(error);
+      const signature = `${safe.name}:${safe.message}`;
+      const repeat = this.lastSignature === signature;
+      this.lastSignature = signature;
+      this.setState({ repeat });
+      const componentStack = typeof info?.componentStack === 'string' ? info.componentStack : '';
+      logger.error('error boundary', { name: safe.name, message: safe.message.slice(0, 300), componentStack });
+      captureSanitizedException(safe, {
+        boundary: 'root',
+        componentStack,
+      });
+    } catch (reportError) {
+      try {
+        logger.error('error boundary', { code: 'REPORT_FAILED', error: reportError });
+      } catch {
+        // Reporting the crash must not throw again.
+      }
+    }
   }
 
   tryAgain = () => {
-    this.setState({ hasError: false });
+    this.setState({ hasError: false, error: null, repeat: false });
+  };
+
+  goHome = () => {
+    this.setState({ hasError: false, error: null, repeat: false });
+    try {
+      // Lazy require avoids a cycle with the root layout that mounts this boundary.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { router } = require('expo-router') as typeof import('expo-router');
+      router.replace('/');
+    } catch (error) {
+      logger.error('error boundary', { code: 'HOME_FAILED', error });
+    }
+  };
+
+  copyDiagnostic = () => {
+    const line = diagnosticLine(this.state.error);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const Clipboard = require('expo-clipboard') as typeof import('expo-clipboard');
+      void Promise.resolve(Clipboard.setStringAsync(line)).catch((error: unknown) => {
+        logger.error('error boundary', { code: 'COPY_FAILED', error });
+      });
+    } catch (error) {
+      logger.error('error boundary', { code: 'COPY_FAILED', error });
+    }
   };
 
   render() {
     if (!this.state.hasError) return this.props.children;
+
+    const diagnostic = diagnosticLine(this.state.error);
 
     return (
       <View style={styles.screen}>
@@ -51,6 +110,18 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
             style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
             <Text style={styles.buttonText}>Try Again</Text>
           </Pressable>
+          {this.state.repeat ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Go to Home"
+              onPress={this.goHome}
+              style={({ pressed }) => [styles.escape, pressed && styles.escapePressed]}>
+              <Text style={styles.escapeText}>Go to Home</Text>
+            </Pressable>
+          ) : null}
+          <Text selectable onPress={this.copyDiagnostic} style={styles.diagnostic}>
+            {diagnostic}
+          </Text>
         </View>
       </View>
     );
@@ -120,4 +191,23 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { backgroundColor: theme.colors.accentPressed },
   buttonText: { fontSize: 15, fontWeight: '700', color: theme.colors.accentText },
+  escape: {
+    marginTop: 10,
+    alignSelf: 'stretch',
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  escapePressed: { backgroundColor: 'rgba(255,255,255,0.04)' },
+  escapeText: { fontSize: 15, fontWeight: '600', color: theme.colors.textSecondary },
+  diagnostic: {
+    marginTop: 16,
+    fontSize: 11,
+    lineHeight: 15,
+    color: 'rgba(255,255,255,0.28)',
+    textAlign: 'center',
+  },
 });

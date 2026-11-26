@@ -56,7 +56,10 @@ function poundsLabel(pence: number) {
 }
 
 function merchantLabel(receipt: HomeFeedReceipt) {
-  return receipt.merchantName?.trim() || receipt.restaurantName?.trim() || 'Receipt';
+  const merchant = typeof receipt.merchantName === 'string' ? receipt.merchantName.trim() : '';
+  if (merchant) return merchant;
+  const restaurant = typeof receipt.restaurantName === 'string' ? receipt.restaurantName.trim() : '';
+  return restaurant || 'Receipt';
 }
 
 function relativeDate(iso: string) {
@@ -123,7 +126,19 @@ export default function HomeScreen() {
   }, [userId]);
 
   useFocusEffect(useCallback(() => {
-    void load(hasLoadedRef.current ? 'silent' : 'load');
+    let active = true;
+    void (async () => {
+      try {
+        await load(hasLoadedRef.current ? 'silent' : 'load');
+      } catch (error) {
+        if (active) logger.error('home', { code: 'LOAD_FAILED', error });
+      } finally {
+        if (!active) return;
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [load]));
 
   useReceiptLedgerRealtime(() => {

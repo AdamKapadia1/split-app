@@ -106,7 +106,19 @@ export default function GroupsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void fetchGroups('refresh');
+      let active = true;
+      void (async () => {
+        try {
+          await fetchGroups('refresh');
+        } catch (error) {
+          if (active) logger.error('groups', { code: 'FETCH_FAILED', error });
+        } finally {
+          if (!active) return;
+        }
+      })();
+      return () => {
+        active = false;
+      };
     }, [fetchGroups])
   );
 
@@ -162,9 +174,10 @@ export default function GroupsScreen() {
         .from('groups')
         .insert({ name: trimmedName, created_by: viewerId })
         .select()
-        .single();
+        .maybeSingle();
 
       if (groupError) throw groupError;
+      if (!newGroup) throw new Error('Could not create the group.');
 
       const { error: memberError } = await supabase
         .from('group_members')

@@ -77,7 +77,7 @@ type OpenShare = {
 };
 
 export function computeHomeBalances(
-  receipts: readonly HomeBalanceReceipt[],
+  receipts: readonly HomeBalanceReceipt[] | null | undefined,
   currentUserId: string | null | undefined,
 ): HomeBalances {
   const totals = computeGroupNetBalance(receipts, currentUserId);
@@ -88,10 +88,10 @@ export function computeHomeBalances(
 }
 
 export function computeGroupNetBalance(
-  receipts: readonly HomeBalanceReceipt[],
+  receipts: readonly HomeBalanceReceipt[] | null | undefined,
   currentUserId: string | null | undefined,
 ): GroupNetBalance {
-  const userId = currentUserId?.trim() ?? '';
+  const userId = text(currentUserId);
   let owedToYouPence = 0;
   let youOwePence = 0;
 
@@ -121,12 +121,14 @@ export function computeGroupNetBalance(
  * A receipt with no shares is still open: nobody has been given a balance yet.
  */
 export function isReceiptBalanceSettled(
-  receipt: Pick<HomeBalanceReceipt, 'settled' | 'hostId' | 'paidBy' | 'shares'>,
+  receipt: Pick<HomeBalanceReceipt, 'settled' | 'hostId' | 'paidBy' | 'shares'> | null | undefined,
 ): boolean {
+  if (!receipt || typeof receipt !== 'object') return false;
   if (receipt.settled) return true;
-  const creditorId = receipt.paidBy?.trim() || receipt.hostId.trim();
+  const creditorId = text(receipt.paidBy) || text(receipt.hostId);
   let comparable = false;
-  for (const share of receipt.shares) {
+  for (const share of Array.isArray(receipt.shares) ? receipt.shares : []) {
+    if (!share || typeof share !== 'object') continue;
     if (share.settled) {
       comparable = true;
       continue;
@@ -135,7 +137,7 @@ export function isReceiptBalanceSettled(
     if (amountPence === null || amountPence < 0) continue;
     comparable = true;
     if (amountPence === 0) continue;
-    const debtorId = share.userId.trim();
+    const debtorId = text(share.userId);
     if (debtorId && debtorId !== creditorId) return false;
   }
   return comparable;
@@ -155,10 +157,10 @@ export function formatPenceParts(pence: number): PenceParts {
 }
 
 function attentionItems(
-  receipts: readonly HomeBalanceReceipt[],
+  receipts: readonly HomeBalanceReceipt[] | null | undefined,
   currentUserId: string | null | undefined,
 ): AttentionItem[] {
-  const userId = currentUserId?.trim() ?? '';
+  const userId = text(currentUserId);
   if (!userId) return [];
 
   const merged = new Map<string, AttentionItem>();
@@ -193,20 +195,20 @@ function attentionItems(
   return [...merged.values()].sort(byOldestThenAmount).slice(0, HOME_ATTENTION_LIMIT);
 }
 
-function openShares(receipts: readonly HomeBalanceReceipt[]): OpenShare[] {
+function openShares(receipts: readonly HomeBalanceReceipt[] | null | undefined): OpenShare[] {
   const shares: OpenShare[] = [];
-  for (const receipt of receipts) {
-    if (receipt.settled) continue;
+  for (const receipt of Array.isArray(receipts) ? receipts : []) {
+    if (!receipt || typeof receipt !== 'object' || receipt.settled) continue;
     const creditorId = creditorOf(receipt);
     if (!creditorId) continue;
     const merchantName = label(receipt.merchantName, 'Receipt');
     const creditorName = label(receipt.creditorName, 'Someone');
 
-    for (const share of receipt.shares) {
-      if (share.settled) continue;
+    for (const share of Array.isArray(receipt.shares) ? receipt.shares : []) {
+      if (!share || typeof share !== 'object' || share.settled) continue;
       const amountPence = integerPence(share.amountPence);
       if (amountPence === null || amountPence <= 0) continue;
-      const debtorId = share.userId.trim();
+      const debtorId = text(share.userId);
       if (!debtorId || debtorId === creditorId) continue;
       shares.push({
         receiptId: receipt.id,
@@ -225,9 +227,9 @@ function openShares(receipts: readonly HomeBalanceReceipt[]): OpenShare[] {
 }
 
 function creditorOf(receipt: HomeBalanceReceipt): string {
-  const paidBy = receipt.paidBy?.trim() ?? '';
+  const paidBy = text(receipt?.paidBy);
   if (paidBy) return paidBy;
-  return receipt.hostId.trim();
+  return text(receipt?.hostId);
 }
 
 function balanceStatus(netPence: number): HomeBalanceStatus {
@@ -256,9 +258,12 @@ function integerPence(value: number): number | null {
   return value;
 }
 
-function label(value: string | null | undefined, fallback: string): string {
-  const trimmed = value?.trim() ?? '';
-  return trimmed || fallback;
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function label(value: unknown, fallback: string): string {
+  return text(value) || fallback;
 }
 
 function groupThousands(value: number): string {

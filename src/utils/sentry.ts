@@ -180,6 +180,7 @@ export function initSentry() {
   // init has not run yet.
   const dsn = readDsn();
   started = true;
+  try {
   Sentry.init({
     dsn: dsn || undefined,
     enabled: !__DEV__ && Boolean(dsn),
@@ -205,35 +206,53 @@ export function initSentry() {
     },
   });
   active = !__DEV__ && Boolean(dsn);
+  } catch (error) {
+    active = false;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { logger } = require('./logger') as typeof import('./logger');
+      logger.error('sentry', { code: 'INIT_FAILED', error });
+    } catch {
+      // Crash reporting must never take down startup.
+    }
+  }
 }
 
 export function setSentryUser(userId: string | null) {
-  if (!active) return;
-  const Sentry = loadSentry();
-  if (!Sentry) return;
-  Sentry.setUser(userId ? { id: scrubString(userId) } : null);
+  try {
+    if (!active) return;
+    const Sentry = loadSentry();
+    if (!Sentry) return;
+    Sentry.setUser(userId ? { id: scrubString(userId) } : null);
+  } catch {
+    // Identifying a user must never crash the session.
+  }
 }
 
 export function captureSanitizedException(error: unknown, context?: Record<string, unknown>) {
-  if (__DEV__ || !active) return;
-  const Sentry = loadSentry();
-  if (!Sentry) return;
+  try {
+    if (__DEV__ || !active) return;
+    const Sentry = loadSentry();
+    if (!Sentry) return;
 
-  const safeContext = context ? scrubUnknown(context) : undefined;
-  Sentry.withScope((scope) => {
-    if (safeContext && typeof safeContext === 'object' && !Array.isArray(safeContext)) {
-      scope.setContext('handled', safeContext as Record<string, unknown>);
-    }
-    if (error instanceof Error) {
-      const safe = new Error(scrubString(error.message));
-      safe.name = error.name || 'Error';
-      if (error.stack) safe.stack = scrubString(error.stack);
-      Sentry.captureException(safe);
-      return;
-    }
-    const message = typeof error === 'string' ? scrubString(error) : 'Handled application error';
-    Sentry.captureException(new Error(message));
-  });
+    const safeContext = context ? scrubUnknown(context) : undefined;
+    Sentry.withScope((scope) => {
+      if (safeContext && typeof safeContext === 'object' && !Array.isArray(safeContext)) {
+        scope.setContext('handled', safeContext as Record<string, unknown>);
+      }
+      if (error instanceof Error) {
+        const safe = new Error(scrubString(error.message));
+        safe.name = error.name || 'Error';
+        if (error.stack) safe.stack = scrubString(error.stack);
+        Sentry.captureException(safe);
+        return;
+      }
+      const message = typeof error === 'string' ? scrubString(error) : 'Handled application error';
+      Sentry.captureException(new Error(message));
+    });
+  } catch {
+    // Sentry must never take down the error boundary.
+  }
 }
 
 export type { ErrorEvent };

@@ -23,7 +23,7 @@ import { mapErrorToUserMessage } from '@/utils/errorMapper';
 import { logger } from '@/utils/logger';
 import { formatPence, toMinorUnits } from '@/utils/money';
 import { maskPhoneNumber } from '@/utils/phone';
-import { calculateNetBalances, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type GroupLedgerStatus, type SimplifiedTransfer } from '@/utils/settlements';
+import { calculateNetBalances, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, receiptProgressLabel, simplifyDebts, type GroupLedgerStatus, type SimplifiedTransfer } from '@/utils/settlements';
 
 type GroupReceipt = Receipt & {
   restaurant_name?: string | null;
@@ -43,32 +43,41 @@ function firstParam(value: string | string[] | undefined) {
   return raw?.trim() ? raw.trim() : null;
 }
 
-function receiptName(receipt: GroupReceipt) {
-  const merchant = receipt.merchant_name?.trim();
+function labelText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function formatReceiptDate(value: unknown, options: Intl.DateTimeFormatOptions) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return date.toLocaleDateString('en-GB', options);
+  } catch {
+    return '';
+  }
+}
+
+function receiptName(receipt: GroupReceipt | null | undefined) {
+  const merchant = labelText(receipt?.merchant_name);
   if (merchant) return merchant;
-  const restaurant = receipt.restaurant_name?.trim();
+  const restaurant = labelText(receipt?.restaurant_name);
   if (restaurant) return restaurant;
-  const date = new Date(receipt.created_at).toLocaleDateString('en-GB', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-  return `Receipt from ${date}`;
+  const date = formatReceiptDate(receipt?.created_at, { weekday: 'short', month: 'short', day: 'numeric' });
+  return date ? `Receipt from ${date}` : 'Receipt';
 }
 
-function receiptWhen(iso: string) {
-  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+function receiptWhen(iso: unknown) {
+  return formatReceiptDate(iso, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-function receiptProgressLabel(receipt: GroupReceipt, hasSavedSplit: boolean) {
-  if (receipt.settled_at || receipt.status === 'settled') return 'Settled';
-  if (receipt.status === 'split' || hasSavedSplit) return 'Split';
-  return 'Unsplit';
-}
-
-function monogram(name: string) {
-  const letter = name.trim().charAt(0).toUpperCase();
+function monogram(name: unknown) {
+  const letter = (typeof name === 'string' ? name : '').trim().charAt(0).toUpperCase();
   return letter || '?';
+}
+
+function rowsOf<T>(value: readonly T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value.filter((item): item is T => item != null) : [];
 }
 
 function memberById(members: GroupMemberProfile[], userId: string) {
@@ -85,13 +94,13 @@ function transferKey(transfer: SimplifiedTransfer) {
 
 function transferStillOpen(data: GroupLedgerData, memberIds: readonly string[], transfer: SimplifiedTransfer) {
   const balances = calculateNetBalances(
-    data.receipts.map((receipt) => ({ id: receipt.id, paid_by: receipt.paid_by ?? null })),
-    data.splits.map((split) => ({
+    rowsOf(data.receipts).map((receipt) => ({ id: receipt.id, paid_by: receipt.paid_by ?? null })),
+    rowsOf(data.splits).map((split) => ({
       receipt_id: split.receipt_id,
       user_id: split.user_id,
       amount_minor: split.amount_minor,
     })),
-    data.settlements.map((settlement) => ({
+    rowsOf(data.settlements).map((settlement) => ({
       from_user_id: settlement.from_user_id,
       to_user_id: settlement.to_user_id,
       amount_minor: settlement.amount_minor,
@@ -228,7 +237,19 @@ export default function GroupLedgerScreen() {
     useCallback(() => {
       const returning = loadedFor.current === groupId && groupId !== null;
       if (groupId) loadedFor.current = groupId;
-      void loadLedger(returning ? 'refresh' : 'load');
+      let active = true;
+      void (async () => {
+        try {
+          await loadLedger(returning ? 'refresh' : 'load');
+        } catch (error) {
+          if (active) logger.error('group', { code: 'LEDGER_FAILED', error });
+        } finally {
+          if (!active) return;
+        }
+      })();
+      return () => {
+        active = false;
+      };
     }, [groupId, loadLedger]),
   );
 
@@ -236,22 +257,22 @@ export default function GroupLedgerScreen() {
     void loadLedger('refresh');
   }, groupId && GROUP_ID.test(groupId) ? groupId : null);
 
-  const spent = receipts.reduce((sum, receipt) => sum + Number(receipt.total_amount || 0), 0);
+  const spent = rowsOf(receipts).reduce((sum, receipt) => sum + Number(receipt?.total_amount || 0), 0);
   const totalSpendMinor = toMinorUnits(spent);
-  const splitReceiptIds = useMemo(() => new Set(splits.map((split) => split.receipt_id)), [splits]);
+  const splitReceiptIds = useMemo(() => new Set(rowsOf(splits).map((split) => split.receipt_id)), [splits]);
   const lastSettledAt = useMemo(
     () => latestZeroBalanceAt(
-      receipts.map((receipt) => ({
+      rowsOf(receipts).map((receipt) => ({
         id: receipt.id,
         paid_by: receipt.paid_by ?? null,
         created_at: receipt.created_at,
       })),
-      splits.map((split) => ({
+      rowsOf(splits).map((split) => ({
         receipt_id: split.receipt_id,
         user_id: split.user_id,
         amount_minor: split.amount_minor,
       })),
-      settlements.map((settlement) => ({
+      rowsOf(settlements).map((settlement) => ({
         from_user_id: settlement.from_user_id,
         to_user_id: settlement.to_user_id,
         amount_minor: settlement.amount_minor,
@@ -266,20 +287,20 @@ export default function GroupLedgerScreen() {
     [lastSettledAt, receipts, splitReceiptIds],
   );
   const memberIds = useMemo(() => {
-    const ids = members.map((member) => member.userId);
+    const ids = rowsOf(members).map((member) => member.userId);
     if (viewerId && !ids.includes(viewerId)) ids.push(viewerId);
     return ids;
   }, [members, viewerId]);
   const balances = useMemo(() => {
     try {
       return calculateNetBalances(
-        receipts.map((receipt) => ({ id: receipt.id, paid_by: receipt.paid_by ?? null })),
-        splits.map((split) => ({
+        rowsOf(receipts).map((receipt) => ({ id: receipt.id, paid_by: receipt.paid_by ?? null })),
+        rowsOf(splits).map((split) => ({
           receipt_id: split.receipt_id,
           user_id: split.user_id,
           amount_minor: split.amount_minor,
         })),
-        settlements.map((settlement) => ({
+        rowsOf(settlements).map((settlement) => ({
           from_user_id: settlement.from_user_id,
           to_user_id: settlement.to_user_id,
           amount_minor: settlement.amount_minor,
@@ -296,19 +317,19 @@ export default function GroupLedgerScreen() {
   const groupStatus = useMemo(() => {
     try {
       return deriveGroupLedgerStatus({
-        receipts: receipts.map((receipt) => ({
+        receipts: rowsOf(receipts).map((receipt) => ({
           id: receipt.id,
           created_at: receipt.created_at,
           paid_by: receipt.paid_by ?? null,
           settled_at: receipt.settled_at,
           status: receipt.status,
         })),
-        splits: splits.map((split) => ({
+        splits: rowsOf(splits).map((split) => ({
           receipt_id: split.receipt_id,
           user_id: split.user_id,
           amount_minor: split.amount_minor,
         })),
-        settlements: settlements.map((settlement) => ({
+        settlements: rowsOf(settlements).map((settlement) => ({
           from_user_id: settlement.from_user_id,
           to_user_id: settlement.to_user_id,
           amount_minor: settlement.amount_minor,
@@ -320,7 +341,7 @@ export default function GroupLedgerScreen() {
       });
     } catch {
       logger.error('group', { code: 'STATUS_FAILED' });
-      const receiptCount = receipts.length;
+      const receiptCount = Array.isArray(receipts) ? receipts.length : 0;
       return {
         kind: receiptCount === 0 ? 'empty' : 'needs_split',
         receiptCount,
@@ -334,8 +355,8 @@ export default function GroupLedgerScreen() {
   }, [memberIds, receipts, settlements, splits, viewerId]);
   const personalStanding = useMemo(() => {
     const settledIds = new Set(settledReceipts.map((receipt) => receipt.id));
-    const names = new Map(members.map((member) => [member.userId, member.fullName]));
-    return computeGroupNetBalance(receipts.map((receipt) => {
+    const names = new Map(rowsOf(members).map((member) => [member.userId, member.fullName]));
+    return computeGroupNetBalance(rowsOf(receipts).map((receipt) => {
       const creditorId = receipt.paid_by?.trim() || receipt.host_id;
       return {
         id: receipt.id,
@@ -799,7 +820,7 @@ export default function GroupLedgerScreen() {
           {rosterOpen ? (
             <View style={styles.roster}>
               {members.length === 0 ? <Text style={styles.rosterEmpty}>No members yet.</Text> : null}
-              {members.map((member, index) => (
+              {rowsOf(members).map((member, index) => (
                 <View key={member.userId}>
                   {index > 0 ? <View style={styles.rosterDivider} /> : null}
                   <View style={styles.rosterRow}>
@@ -944,7 +965,7 @@ export default function GroupLedgerScreen() {
                       <View>
                         <Text style={styles.historySubLabel}>PAYMENTS</Text>
                         <View style={styles.historyCard}>
-                          {settlements.map((settlement, index) => {
+                          {rowsOf(settlements).map((settlement, index) => {
                             const voided = settlement.voided_at !== null;
                             const when = settlementWhen(settlement.created_at);
                             return (

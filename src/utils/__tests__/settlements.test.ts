@@ -1,4 +1,4 @@
-import { allocateCoClaimPence, calculateNetBalances, computeSplitLedger, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, simplifyDebts, type GroupLedgerReceiptInput, type SettlementRecordInput, type SettlementSplitInput, type SplitLedgerParticipant, type WatermarkSettlementInput } from '../settlements';
+import { allocateCoClaimPence, calculateNetBalances, computeSplitLedger, deriveGroupLedgerStatus, latestZeroBalanceAt, partitionGroupReceipts, receiptNeedsSplit, receiptProgressLabel, simplifyDebts, type GroupLedgerReceiptInput, type SettlementRecordInput, type SettlementSplitInput, type SplitLedgerParticipant, type WatermarkSettlementInput } from '../settlements';
 import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, mayApplyRemoteSnapshot, splitSyncSignal } from '../splitSync';
 
 const tests: { name: string; run: () => void }[] = [];
@@ -611,6 +611,43 @@ function settlement(fromUserId: string, toUserId: string, amountMinor: number): 
     voided_at: null,
   };
 }
+
+it('derives to-split badges for missing, empty, and unknown receipt fields', () => {
+  assertEqual(receiptNeedsSplit(null, new Set()), false);
+  assertEqual(receiptNeedsSplit(undefined, null), false);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: null }, new Set()), true);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: '' }, new Set()), true);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: 'unknown' }, new Set()), true);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: 'split' }, new Set()), false);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: ' SETTLED ' }, new Set()), false);
+  assertEqual(receiptNeedsSplit({ id: 'bill', status: 'open' }, new Set(['bill'])), false);
+
+  assertEqual(receiptProgressLabel(null, false), 'Unsplit');
+  assertEqual(receiptProgressLabel(undefined, true), 'Split');
+  assertEqual(receiptProgressLabel({ status: null, settled_at: null }, false), 'Unsplit');
+  assertEqual(receiptProgressLabel({ status: '', settled_at: '' }, false), 'Unsplit');
+  assertEqual(receiptProgressLabel({ status: 'nope' }, false), 'Unsplit');
+  assertEqual(receiptProgressLabel({ status: 'split', settled_at: null }, false), 'Split');
+  assertEqual(receiptProgressLabel({ settled_at: '2026-11-21T09:00:00.000Z' }, false), 'Settled');
+
+  const status = deriveGroupLedgerStatus({
+    receipts: [
+      null,
+      { id: 'open', created_at: '2026-11-20T19:00:00.000Z', paid_by: null, status: undefined, settled_at: undefined },
+    ] as unknown as GroupLedgerReceiptInput[],
+    splits: null,
+    settlements: undefined,
+    memberIds: null,
+    currentUserId: null,
+  });
+  assertEqual(status.kind, 'needs_split');
+  assertEqual(status.unsplitActiveCount, 1);
+  assertEqual(status.userNetBalanceMinor, 0);
+  assertEqual(calculateNetBalances(null, undefined, null, undefined), {});
+  assertEqual(simplifyDebts(null), []);
+  assertEqual(partitionGroupReceipts(null, null, null).activeReceipts, []);
+  assertEqual(latestZeroBalanceAt(null, null, null), null);
+});
 
 let failed = 0;
 for (const test of tests) {

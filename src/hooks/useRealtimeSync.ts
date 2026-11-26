@@ -1,9 +1,10 @@
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
 import * as Haptics from 'expo-haptics';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
+import { allocateRealtimeInstance } from '@/hooks/safeRealtimeChannel';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/utils/logger';
 
@@ -21,6 +22,8 @@ const CHANGE_EVENTS: readonly ChangeEvent[] = ['INSERT', 'UPDATE', 'DELETE'];
  * unmount, when `receiptId` changes, and when the app leaves the foreground.
  */
 export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) {
+  const reactId = useId();
+  const [instanceId] = useState(allocateRealtimeInstance);
   const [report, setReport] = useState<{ id: string; status: 'live' | 'error' } | null>(null);
   const [isActive, setIsActive] = useState(AppState.currentState === 'active');
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -59,37 +62,58 @@ export function useRealtimeSync(receiptId: string | null, onUpdate: () => void) 
       return;
     }
 
-    const channel = client.channel(`receipt-${receiptId}`);
-    channelRef.current = channel;
+    const topic = `receipt-${receiptId}:${reactId}:${instanceId}`;
+    let channel: RealtimeChannel | null = null;
+    let active = true;
+    try {
+      channel = client.channel(topic);
+      channelRef.current = channel;
+      watchTable(channel, 'receipts', `id=eq.${receiptId}`, handlePayload);
+      watchTable(channel, 'items', `receipt_id=eq.${receiptId}`, handlePayload);
+      watchTable(channel, 'splits', undefined, handlePayload);
+      channel.subscribe((startStatus) => {
+        if (!active) return;
+        try {
+          if (startStatus === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+            setReport({ id: receiptId, status: 'live' });
+            logger.debug('Realtime connected');
+            return;
+          }
 
-    watchTable(channel, 'receipts', `id=eq.${receiptId}`, handlePayload);
-    watchTable(channel, 'items', `receipt_id=eq.${receiptId}`, handlePayload);
-    watchTable(channel, 'splits', undefined, handlePayload);
-
-    channel.subscribe((startStatus, error) => {
-      if (startStatus === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
-        setReport({ id: receiptId, status: 'live' });
-        logger.debug('Realtime connected');
-        return;
-      }
-
-      if (startStatus === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR || startStatus === REALTIME_SUBSCRIBE_STATES.TIMED_OUT) {
-        setReport({ id: receiptId, status: 'error' });
-        logger.error('Realtime', { code: startStatus });
-      }
-    });
+          if (startStatus === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR || startStatus === REALTIME_SUBSCRIBE_STATES.TIMED_OUT) {
+            setReport({ id: receiptId, status: 'error' });
+            logger.error('Realtime', { code: startStatus });
+          }
+        } catch (error) {
+          logger.error('Realtime', { code: 'STATUS_FAILED', error });
+        }
+      });
+    } catch (error) {
+      logger.error('Realtime', { code: 'SUBSCRIBE_FAILED', error });
+    }
 
     return () => {
+      active = false;
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
         debounceRef.current = null;
       }
 
       channelRef.current = null;
-      void client.removeChannel(channel);
+      if (!channel) return;
+      try {
+        channel.unsubscribe();
+      } catch (error) {
+        logger.error('Realtime', { code: 'UNSUBSCRIBE_FAILED', error });
+      }
+      try {
+        void client.removeChannel(channel);
+      } catch (error) {
+        logger.error('Realtime', { code: 'REMOVE_CHANNEL_FAILED', error });
+      }
       logger.debug('Realtime disconnected');
     };
-  }, [handlePayload, isActive, receiptId]);
+  }, [handlePayload, instanceId, isActive, reactId, receiptId]);
 
   const status: SyncStatus =
     !receiptId || !supabase || !isActive

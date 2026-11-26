@@ -311,7 +311,15 @@ export default function ReceiptLedgerScreen() {
     if (!receiptId) return;
     let current = true;
     ledgerAlive.current = true;
-    void loadLedger(receiptId, () => current);
+    void (async () => {
+      try {
+        await loadLedger(receiptId, () => current);
+      } catch (error) {
+        if (current) logger.error('receipt', { code: 'LEDGER_FAILED', error });
+      } finally {
+        if (!current) ledgerAlive.current = false;
+      }
+    })();
     return () => {
       current = false;
       ledgerAlive.current = false;
@@ -628,7 +636,9 @@ export default function ReceiptLedgerScreen() {
     );
   }
 
-  const { receipt, items } = receiptData;
+  const { receipt } = receiptData;
+  const items = Array.isArray(receiptData.items) ? receiptData.items : [];
+  const liveParticipants = sharedOverlay && Array.isArray(sharedOverlay.participants) ? sharedOverlay.participants : [];
   const isGroup = Boolean(receipt.group_id);
   const people = members.map((member) => toAssignee(member));
   const activeMember = people.find((person) => person.id === activeMemberId) ?? null;
@@ -912,9 +922,9 @@ export default function ReceiptLedgerScreen() {
             </Pressable>
           </View>
         ) : null}
-        {sharedOverlay && sharedOverlay.participants.length > 0 ? (
+        {liveParticipants.length > 0 ? (
           <View style={styles.liveShare}>
-            {sharedOverlay.participants.map((person) => (
+            {liveParticipants.map((person) => (
               <Text key={person.id} style={styles.liveShareText}>
                 {person.displayName} · {formatPence(person.amountOwedPence)} · {person.isPaid ? 'Paid' : 'Unpaid'}
               </Text>
@@ -1100,7 +1110,7 @@ export default function ReceiptLedgerScreen() {
                 ))}
               </View>
             ) : null}
-            {adjustMode === 'add' || (adjustMode === 'edit' && editingItemId) ? (
+            {Boolean(adjustMode === 'add' || (adjustMode === 'edit' && editingItemId)) ? (
               <View style={styles.reconcileForm}>
                 {adjustMode === 'add' ? (
                   <TextInput

@@ -21,28 +21,30 @@ type AvatarBadgeProps = {
   active?: boolean;
 };
 
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+function initials(name: unknown) {
+  const parts = (typeof name === 'string' ? name : '').trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
-function tintFor(seed: string) {
+function tintFor(seed: unknown) {
+  const value = typeof seed === 'string' ? seed : '';
   let hash = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
   return TINTS[hash % TINTS.length] ?? TINTS[0];
 }
 
 export function AvatarBadge({ name, userId, size = 36, active = false }: AvatarBadgeProps) {
-  const tint = tintFor(userId || name);
-  const mark = initials(name);
+  const safeName = typeof name === 'string' ? name : '';
+  const tint = tintFor(typeof userId === 'string' && userId ? userId : safeName);
+  const mark = initials(safeName);
 
   return (
     <View
-      accessibilityLabel={name}
+      accessibilityLabel={safeName || 'Member'}
       style={[
         styles.badge,
         {

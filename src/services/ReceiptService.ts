@@ -68,9 +68,10 @@ export class ReceiptService {
           status: 'scanning' satisfies ReceiptStatus,
         })
         .select(RECEIPT_COLUMNS)
-        .single();
+        .maybeSingle();
 
       if (error) throw new ReceiptServiceError('INSERT_FAILED', error.message, error);
+      if (!data) throw new ReceiptServiceError('INSERT_FAILED', 'The new receipt was not returned.');
       return parseReceipt(data, 'INSERT_FAILED');
     } catch (caught) {
       throw logged('createEmptyReceipt', 'INSERT_FAILED', 'Could not create the receipt.', caught);
@@ -131,9 +132,10 @@ export class ReceiptService {
       const id = requireId(receiptId, 'receiptId');
       const payload = normalizeTotals(updates);
       const client = requireClient();
-      const { data, error } = await client.from('receipts').update(payload).eq('id', id).select(RECEIPT_COLUMNS).single();
+      const { data, error } = await client.from('receipts').update(payload).eq('id', id).select(RECEIPT_COLUMNS).maybeSingle();
 
       if (error) throw new ReceiptServiceError('UPDATE_FAILED', error.message, error);
+      if (!data) throw new ReceiptServiceError('UPDATE_FAILED', 'That receipt could not be found.');
       return parseReceipt(data, 'UPDATE_FAILED');
     } catch (caught) {
       throw logged('updateReceiptTotals', 'UPDATE_FAILED', 'Could not update the receipt totals.', caught);
@@ -173,8 +175,8 @@ export class ReceiptService {
       requireId(receiptId, 'receiptId');
       const client = requireClient();
 
-      const existing = await client.from('splits').select('*').eq('item_id', item).eq('user_id', user).single();
-      if (existing.error && !isMissingRow(existing.error)) throw new ReceiptServiceError('CLAIM_FAILED', existing.error.message, existing.error);
+      const existing = await client.from('splits').select('*').eq('item_id', item).eq('user_id', user).maybeSingle();
+      if (existing.error) throw new ReceiptServiceError('CLAIM_FAILED', existing.error.message, existing.error);
 
       if (existing.data && !existing.error) {
         const split = parseSplit(existing.data, 'CLAIM_FAILED');
@@ -637,10 +639,6 @@ function parseReceiptSplits(value: unknown, code: ReceiptServiceCode): ReceiptSp
       updated_at: readString(row, 'updated_at', code),
     };
   });
-}
-
-function isMissingRow(error: PostgrestError): boolean {
-  return error.code === 'PGRST116' && /0 rows/i.test(error.details);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
