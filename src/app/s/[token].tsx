@@ -19,7 +19,7 @@ import { SplitCountdownCard } from '@/components/SplitCountdownCard';
 import { VelorBrand } from '@/components/VelorBrand';
 import { APP_NAME, APP_TAGLINE } from '@/constants/brand';
 import { luxury } from '@/constants/theme';
-import { useSplitRealtime } from '@/hooks/useSplitRealtime';
+import { useWebSplitRealtime, type WebRefreshReason } from '@/hooks/useWebSplitRealtime';
 import { getWebBaseUrl } from '@/lib/url';
 import {
   billShareService,
@@ -41,6 +41,17 @@ import { formatPence } from '@/utils/money';
 import { computeSplitLedger } from '@/utils/settlements';
 import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, mayApplyRemoteSnapshot } from '@/utils/splitSync';
 import { reconcileSharedBill, splitEquallyDeterministic } from '@/utils/sharedSplitMath';
+import {
+  confirmationFailure,
+  endConfirm,
+  reconcilePendingPayment,
+  recordPendingPayment,
+  tryBeginConfirm,
+  withPaidFlag,
+  clearPendingPayment,
+  type PendingPaymentProvider,
+  type PendingPaymentRecord,
+} from '@/utils/pendingPaymentReturn';
 import {
   copyPlainText,
   isHttpsUrl,
@@ -70,6 +81,10 @@ export default function SharedSplitScreen() {
   const syncGate = useRef(createSyncGate());
   const [hostDraft, setHostDraft] = useState<string[] | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState<PendingPaymentRecord | null>(null);
+  const [confirmingPaid, setConfirmingPaid] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const confirmingRef = useRef(false);
 
   const remember = useCallback((id: string | null) => {
     setParticipantId(id);
@@ -89,7 +104,11 @@ export default function SharedSplitScreen() {
     }
   }, [token]);
 
-  const applyBill = useCallback((result: { status: 'ready' | 'invalid' | 'error'; bill: SharedBill | null }, silent: boolean) => {
+  const applyBill = useCallback((
+    result: { status: 'ready' | 'invalid' | 'error'; bill: SharedBill | null },
+    silent: boolean,
+    revealReturn = false,
+  ) => {
     if (result.status === 'ready' && result.bill) {
       const next = result.bill;
       setBill(next);
@@ -99,6 +118,22 @@ export default function SharedSplitScreen() {
         if (stored && next.participants.some((person) => person.id === stored)) return stored;
         return current && next.participants.some((person) => person.id === current) ? current : null;
       });
+      const guestId = readStoredParticipant(token);
+      if (guestId) {
+        const match = next.participants.find((entry) => entry.id === guestId);
+        const decision = reconcilePendingPayment({
+          shareToken: token,
+          guestId,
+          shareIsPaid: !match || match.isPaid,
+        });
+        setPendingPayment((current) => {
+          if (!decision.showPrompt) return null;
+          if (revealReturn) return decision.pending;
+          if (current && current.guestId === guestId) return decision.pending;
+          return current;
+        });
+        if (!decision.showPrompt) setConfirmError(null);
+      }
       return;
     }
     if (result.status === 'invalid') {
@@ -113,31 +148,27 @@ export default function SharedSplitScreen() {
     if (!usableToken) return;
     let cancelled = false;
     void fetchBill().then((result) => {
-      if (!cancelled) applyBill(result, false);
+      if (!cancelled) applyBill(result, false, true);
     });
     return () => {
       cancelled = true;
     };
   }, [applyBill, fetchBill, usableToken]);
 
-  const refreshFromSync = useCallback(() => {
+  const refreshFromSync = useCallback((isCurrent: () => boolean, reason: WebRefreshReason) => {
     const seen = captureEpoch(syncGate.current);
-    void fetchBill().then((result) => {
+    return fetchBill().then((result) => {
+      if (!isCurrent()) return;
       if (!mayApplyRemoteSnapshot(syncGate.current, seen)) return;
-      applyBill(result, true);
+      applyBill(result, true, reason === 'visible');
     });
   }, [applyBill, fetchBill]);
 
-  useSplitRealtime(phase === 'ready' && usableToken ? token : null, refreshFromSync);
-
-  useEffect(() => {
-    if (phase !== 'ready') return;
-    const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      refreshFromSync();
-    }, 20000);
-    return () => clearInterval(timer);
-  }, [phase, refreshFromSync]);
+  useWebSplitRealtime({
+    shareToken: usableToken ? token : null,
+    receiptId: bill?.bill.id ?? null,
+    onRefresh: refreshFromSync,
+  });
 
   useEffect(() => {
     if (!toast) return;
@@ -259,7 +290,7 @@ export default function SharedSplitScreen() {
   }
 
   async function setPaid(isPaid: boolean) {
-    if (!bill || !participantId || !person || busy.current) return;
+    if (!bill || !participantId || !person || busy.current || confirmingRef.current) return;
     if (!canMarkSharePaid(person)) return;
     const previous = bill;
     busy.current = true;
@@ -312,6 +343,75 @@ export default function SharedSplitScreen() {
     setNotice(null);
     setCopiedKey(key);
     setToast('Copied');
+  }
+
+  function notePending(provider: PendingPaymentProvider) {
+    if (!person || person.isPaid || person.isHost || !usableToken) return;
+    recordPendingPayment({
+      provider,
+      shareToken: token,
+      guestId: person.id,
+      amountPence: person.amountOwedPence,
+    });
+  }
+
+  function dismissReturnPrompt() {
+    if (!pendingPayment || confirmingRef.current) return;
+    clearPendingPayment(pendingPayment.shareToken, pendingPayment.guestId);
+    setPendingPayment(null);
+    setConfirmError(null);
+  }
+
+  async function confirmReturnedPayment() {
+    if (!tryBeginConfirm(confirmingRef)) return;
+    if (!bill || !pendingPayment || !usableToken) {
+      endConfirm(confirmingRef);
+      return;
+    }
+    const guestId = pendingPayment.guestId;
+    const personRow = bill.participants.find((entry) => entry.id === guestId);
+    if (!personRow || personRow.isPaid || !canMarkSharePaid(personRow)) {
+      endConfirm(confirmingRef);
+      return;
+    }
+    const previous = bill;
+    const paidAt = new Date().toISOString();
+    busy.current = true;
+    beginLocalMutation(syncGate.current);
+    setConfirmingPaid(true);
+    setConfirmError(null);
+    setBill({
+      ...bill,
+      participants: withPaidFlag(bill.participants, guestId, true, paidAt),
+    });
+    try {
+      const next = await billShareService.mutateSharedBill(token, 'set_paid_status', {
+        participant_id: guestId,
+        is_paid: true,
+      });
+      if (!next) {
+        const failure = confirmationFailure(previous, pendingPayment);
+        setBill(failure.bill);
+        setPendingPayment(failure.pending);
+        setConfirmError(failure.error);
+        setPhase('invalid');
+        return;
+      }
+      clearPendingPayment(token, guestId);
+      setPendingPayment(null);
+      setConfirmError(null);
+      setBill(next);
+    } catch {
+      const failure = confirmationFailure(previous, pendingPayment);
+      setBill(failure.bill);
+      setPendingPayment(failure.pending);
+      setConfirmError(failure.error);
+    } finally {
+      busy.current = false;
+      endConfirm(confirmingRef);
+      finishLocalMutation(syncGate.current);
+      setConfirmingPaid(false);
+    }
   }
 
   async function openHttps(url: string) {
@@ -399,15 +499,36 @@ export default function SharedSplitScreen() {
           <View style={styles.messageCard}>
             <Text style={styles.messageTitle}>Could not load this split</Text>
             <Text style={styles.messageBody}>Check the connection and try again.</Text>
-            <Pressable accessibilityRole="button" onPress={() => { void fetchBill().then((result) => applyBill(result, false)); }} style={styles.secondaryButton}>
+            <Pressable accessibilityRole="button" onPress={() => { void fetchBill().then((result) => applyBill(result, false, true)); }} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Retry</Text>
             </Pressable>
+          </View>
+        ) : null}
+
+        {phase === 'ready' && pendingPayment && person && !person.isPaid && person.id === pendingPayment.guestId ? (
+          <View style={styles.returnBar}>
+            <Text style={styles.returnCopy}>{`Back from ${pendingPayment.provider}? Confirm your £${pendingPayment.amountFormatted} payment`}</Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={confirmingPaid}
+              onPress={() => { void confirmReturnedPayment(); }}
+              style={[styles.returnPrimary, confirmingPaid && styles.payButtonOff]}
+            >
+              {confirmingPaid ? <ActivityIndicator color="#09090B" /> : (
+                <Text style={styles.returnPrimaryText}>{`Yes, I've Paid £${pendingPayment.amountFormatted}`}</Text>
+              )}
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={confirmingPaid} onPress={dismissReturnPrompt}>
+              <Text style={styles.returnSecondary}>Not yet</Text>
+            </Pressable>
+            {confirmError ? <Text style={styles.returnError}>{confirmError}</Text> : null}
           </View>
         ) : null}
 
         {phase === 'ready' && bill ? (
           <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
             <View style={styles.hero}>
+              {splitLedger?.isAllSettled ? <Text style={styles.allSettled}>All Settled</Text> : null}
               <Text style={styles.merchant}>{bill.bill.merchantName}</Text>
               <Text style={styles.date}>{formatUkDate(bill.bill.createdAt || bill.bill.billDate)}</Text>
               {bill.bill.vatPence > 0 ? <Text style={styles.meta}>Includes {formatPence(bill.bill.vatPence)} VAT</Text> : null}
@@ -551,8 +672,14 @@ export default function SharedSplitScreen() {
                         ownerName={hostName}
                         amountLabel={formatPence(person.amountOwedPence)}
                         copiedKey={copiedKey}
-                        onOpen={(url) => { void openHttps(url); }}
-                        onCopy={(value, key) => { void copyText(value, key); }}
+                        onOpen={(url, provider) => {
+                          notePending(provider);
+                          void openHttps(url);
+                        }}
+                        onCopy={(value, key) => {
+                          notePending('Bank');
+                          void copyText(value, key);
+                        }}
                       />
                       {person.isPaid ? (
                         <View style={styles.paidCard}>
@@ -580,6 +707,7 @@ export default function SharedSplitScreen() {
                 <Text style={styles.meta}>{selectNamePrompt(hostName)}</Text>
               )}
               {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+              {confirmError && !(pendingPayment && person && !person.isPaid) ? <Text style={styles.returnError}>{confirmError}</Text> : null}
             </View>
 
             <View style={styles.footer}>
@@ -616,7 +744,7 @@ function PayoutBlock({
   ownerName: string;
   amountLabel: string;
   copiedKey: string | null;
-  onOpen: (url: string) => void;
+  onOpen: (url: string, provider: PendingPaymentProvider) => void;
   onCopy: (value: string, key: string) => void;
 }) {
   if (!rails || (!rails.monzo && !rails.revolut && !rails.bank)) {
@@ -627,7 +755,7 @@ function PayoutBlock({
       <Text style={styles.railLabel}>Pay {ownerName}</Text>
       {rails.monzo ? (
         <>
-          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Monzo`} onPress={() => onOpen(rails.monzo!.url)} style={styles.primaryButton}>
+          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Monzo`} onPress={() => onOpen(rails.monzo!.url, 'Monzo')} style={styles.primaryButton}>
             <Text style={styles.primaryButtonText}>Pay {amountLabel} with Monzo</Text>
           </Pressable>
           {rails.monzo.limitWarning ? <Text style={styles.meta}>{rails.monzo.limitWarning}</Text> : null}
@@ -635,7 +763,7 @@ function PayoutBlock({
       ) : null}
       {rails.revolut ? (
         <>
-          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Revolut`} onPress={() => onOpen(rails.revolut!.url)} style={styles.primaryButton}>
+          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Revolut`} onPress={() => onOpen(rails.revolut!.url, 'Revolut')} style={styles.primaryButton}>
             <Text style={styles.primaryButtonText}>Pay {amountLabel} with Revolut</Text>
           </Pressable>
           {rails.revolut.limitWarning ? <Text style={styles.meta}>{rails.revolut.limitWarning}</Text> : null}
@@ -978,6 +1106,35 @@ const styles = StyleSheet.create({
   paidTitle: { color: '#34D399', fontSize: 15, fontWeight: '700' },
   undo: { color: '#A1A1AA', fontSize: 13, fontWeight: '600' },
   notice: { color: '#F87171', fontSize: 13, lineHeight: 18 },
+  allSettled: {
+    color: '#2EE59D',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  returnBar: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#121524',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#7C8CFF',
+    padding: 16,
+    gap: 10,
+  },
+  returnCopy: { color: '#F5F7FF', fontSize: 15, lineHeight: 21, fontWeight: '600' },
+  returnPrimary: {
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: '#7C8CFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  returnPrimaryText: { color: '#09090B', fontSize: 16, fontWeight: '700' },
+  returnSecondary: { color: '#A1A1AA', fontSize: 14, fontWeight: '600', textAlign: 'center', paddingVertical: 6 },
+  returnError: { color: '#C4C8D4', fontSize: 13, lineHeight: 18 },
   footer: {
     borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,

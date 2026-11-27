@@ -1,222 +1,168 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.119.0';
 
 import {
-  decideHostPaidNotification,
-  formatSharePaidNotification,
-  lockScreenMerchantName,
-  shouldIgnoreHostPaidWebhook,
-  type SharePaidSnapshot,
-} from '../_shared/hostPaidNotification.ts';
-import { chunk, EXPO_PUSH_CHUNK, EXPO_PUSH_SEND_URL, postExpo, safeErrorMessage, tokenKeyPrefix, type ExpoTicket } from '../_shared/expoPush.ts';
-import { secretsMatch } from '../_shared/timingSafeEqual.ts';
+  buildHostPaidEmail,
+  constantTimeEqual,
+  isUnpaidToPaidTransition,
+  type WebhookPayload,
+} from '../_shared/hostPaidEmail.ts';
 
-const TOKEN_PATTERN = /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type ReceiptRow = {
-  id: string;
-  host_id: string | null;
-  merchant_name: string | null;
-  restaurant_name: string | null;
-};
-
-type TokenRow = {
-  token: string;
-};
-
-type LogRow = {
-  id: string;
-  push_token: string | null;
-  idempotency_key: string;
-  status: string;
+type ShareRow = {
+  amount_owed_pence?: unknown;
+  is_paid?: unknown;
+  is_host?: unknown;
+  host_confirmed_at?: unknown;
 };
 
 Deno.serve(async (req) => {
-  if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
+  if (req.method !== 'POST') return json(405, { ok: false, error: 'method_not_allowed' });
 
-  const webhookSecret = Deno.env.get('WEBHOOK_SECRET');
-  if (!secretsMatch(req.headers.get('x-webhook-secret'), webhookSecret)) {
-    return json(401, { error: 'Unauthorized' });
+  const webhookSecret = readEnv('VELOR_WEBHOOK_SECRET');
+  const resendKey = readEnv('RESEND_API_KEY');
+  const supabaseUrl = readEnv('SUPABASE_URL');
+  const serviceRoleKey = readEnv('SUPABASE_SERVICE_ROLE_KEY');
+  if (!webhookSecret || !resendKey || !supabaseUrl || !serviceRoleKey) {
+    const missing = !webhookSecret
+      ? 'VELOR_WEBHOOK_SECRET'
+      : !resendKey
+        ? 'RESEND_API_KEY'
+        : !supabaseUrl
+          ? 'SUPABASE_URL'
+          : 'SUPABASE_SERVICE_ROLE_KEY';
+    console.log(JSON.stringify({ status: 'missing_env', name: missing }));
+    return json(500, { ok: false, error: 'missing_env' });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (!supabaseUrl || !serviceRoleKey) {
-    logCode('CONFIG_ERROR');
-    return json(500, { error: 'Unavailable' });
-  }
+  const provided = req.headers.get('x-velor-webhook-secret') ?? '';
+  if (!constantTimeEqual(provided, webhookSecret)) return json(401, { ok: false, error: 'unauthorized' });
 
   let payload: unknown;
   try {
     payload = await req.json();
   } catch {
-    return json(400, { error: 'Invalid payload' });
+    return json(400, { ok: false, error: 'invalid_json' });
   }
 
-  const body = asRecord(payload);
-  const record = asRecord(body?.record) as SharePaidSnapshot | null;
-  const oldRecord = asRecord(body?.old_record) as SharePaidSnapshot | null;
-  const transition = {
-    type: body?.type,
-    table: body?.table,
-    record,
-    oldRecord,
-  };
-  if (shouldIgnoreHostPaidWebhook(transition)) return json(200, { ok: true, ignored: true });
+  if (!isWebhookPayload(payload) || !isUnpaidToPaidTransition(payload)) {
+    return json(200, { ok: true, skipped: 'not_a_paid_transition' });
+  }
+
+  const share = readShare(payload);
+  if (!share || share.isHost) return json(200, { ok: true, skipped: 'not_a_paid_transition' });
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const receiptId = typeof record?.receipt_id === 'string' ? record.receipt_id : '';
-  const receipt = await admin
+  const claimed = await admin
+    .from('receipt_share_participants')
+    .update({ host_notified_at: new Date().toISOString() })
+    .eq('id', share.shareId)
+    .is('host_notified_at', null)
+    .select('id');
+
+  if (claimed.error) {
+    console.log(JSON.stringify({ status: 'claim_failed', share_id: share.shareId }));
+    return json(500, { ok: false });
+  }
+  const claimedRows = Array.isArray(claimed.data) ? claimed.data : [];
+  if (claimedRows.length === 0) return json(200, { ok: true, skipped: 'already_notified' });
+
+  const receiptResult = await admin
     .from('receipts')
-    .select('id, host_id, merchant_name, restaurant_name')
-    .eq('id', receiptId)
+    .select('id, host_id, merchant_name, restaurant_name, group_id, total_amount')
+    .eq('id', share.receiptId)
     .maybeSingle();
-  if (receipt.error) {
-    logCode('BILL_LOOKUP_FAILED');
-    return json(500, { error: 'Unavailable' });
+
+  if (receiptResult.error) {
+    await rollbackClaim(admin, share.shareId);
+    console.log(JSON.stringify({ status: 'receipt_lookup_failed', share_id: share.shareId }));
+    return json(500, { ok: false });
   }
-  const bill = receipt.data as ReceiptRow | null;
-  const hostId = bill?.host_id ?? null;
-  if (!bill || !hostId) return json(200, { ok: true, ignored: true });
 
-  const decision = decideHostPaidNotification(transition, hostId);
-  if (decision.action === 'ignore') return json(200, { ok: true, ignored: true });
-  const venue = lockScreenMerchantName(bill.merchant_name || bill.restaurant_name);
+  const receipt = asRecord(receiptResult.data);
+  const hostUserId = typeof receipt?.host_id === 'string' && UUID_PATTERN.test(receipt.host_id) ? receipt.host_id : null;
+  if (!receipt || !hostUserId) {
+    await rollbackClaim(admin, share.shareId);
+    return json(200, { ok: true, skipped: 'not_a_paid_transition' });
+  }
 
-  const message = formatSharePaidNotification({
-    guestName: decision.guestName,
-    amountPence: decision.amountPence,
-    venue,
-    receiptId: decision.receiptId,
-    shareId: decision.shareId,
+  const sharesResult = await admin
+    .from('receipt_share_participants')
+    .select('amount_owed_pence, is_paid, is_host, host_confirmed_at')
+    .eq('receipt_id', share.receiptId);
+
+  if (sharesResult.error || !Array.isArray(sharesResult.data)) {
+    await rollbackClaim(admin, share.shareId);
+    console.log(JSON.stringify({ status: 'shares_lookup_failed', share_id: share.shareId }));
+    return json(500, { ok: false });
+  }
+
+  let groupName: string | null = null;
+  const groupId = typeof receipt.group_id === 'string' && UUID_PATTERN.test(receipt.group_id) ? receipt.group_id : null;
+  if (groupId) {
+    const groupResult = await admin.from('groups').select('name').eq('id', groupId).maybeSingle();
+    if (!groupResult.error) {
+      const group = asRecord(groupResult.data);
+      groupName = typeof group?.name === 'string' ? group.name : null;
+    }
+  }
+
+  const userResult = await admin.auth.admin.getUserById(hostUserId);
+  const hostEmail = userResult.data?.user?.email;
+  if (userResult.error) {
+    await rollbackClaim(admin, share.shareId);
+    console.log(JSON.stringify({ status: 'host_lookup_failed', share_id: share.shareId }));
+    return json(500, { ok: false });
+  }
+  if (typeof hostEmail !== 'string' || hostEmail.length === 0) {
+    console.log(JSON.stringify({ status: 'skipped_no_host_email', share_id: share.shareId }));
+    return json(200, { ok: true, skipped: 'no_host_email' });
+  }
+
+  const receiptTitle = firstText(receipt.merchant_name) ?? firstText(receipt.restaurant_name) ?? 'Receipt';
+  const email = buildHostPaidEmail({
+    guestName: share.guestName,
+    receiptTitle,
+    groupName,
+    paidAmountPence: share.amountPence,
+    remainingBalancePence: remainingBalancePence(totalPence(receipt.total_amount), sharesResult.data as ShareRow[]),
   });
-  if (!message) return json(200, { ok: true, ignored: true });
+  const from = readEnv('RESEND_FROM_EMAIL') ?? 'Velor <onboarding@resend.dev>';
 
-  const tokens = await admin
-    .from('push_tokens')
-    .select('token')
-    .eq('user_id', hostId);
-  if (tokens.error) {
-    logCode('TOKEN_LOOKUP_FAILED');
-    return json(500, { error: 'Unavailable' });
-  }
-
-  const deviceTokens = ((tokens.data ?? []) as TokenRow[])
-    .map((row) => row.token)
-    .filter((token) => TOKEN_PATTERN.test(token));
-
-  if (deviceTokens.length === 0) {
-    const { error } = await admin.from('push_notification_logs').upsert({
-      idempotency_key: `share_paid:${decision.shareId}`,
-      event_type: 'share_paid',
-      bill_id: decision.receiptId,
-      share_id: decision.shareId,
-      recipient_user_id: hostId,
-      push_token: null,
-      status: 'failed',
-      error_code: 'no_tokens',
-      error_message: 'No registered device',
-    }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
-    if (error) {
-      logCode('LEDGER_WRITE_FAILED');
-      return json(500, { error: 'Unavailable' });
-    }
-    return json(200, { ok: true, delivered: 0 });
-  }
-
-  const accessToken = Deno.env.get('EXPO_ACCESS_TOKEN');
-  if (!accessToken) {
-    logCode('PUSH_NOT_CONFIGURED');
-    return json(503, { error: 'Unavailable' });
-  }
-
-  const pending: { idempotency_key: string; push_token: string }[] = [];
-  for (const token of deviceTokens) {
-    pending.push({
-      idempotency_key: `share_paid:${decision.shareId}:${await tokenKeyPrefix(token)}`,
-      push_token: token,
+  let httpStatus = 0;
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `velor-paid-${share.shareId}`,
+      },
+      body: JSON.stringify({
+        from,
+        to: [hostEmail],
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+      }),
     });
-  }
-
-  const { data: inserted, error: insertError } = await admin
-    .from('push_notification_logs')
-    .upsert(pending.map((row) => ({
-      idempotency_key: row.idempotency_key,
-      event_type: 'share_paid',
-      bill_id: decision.receiptId,
-      share_id: decision.shareId,
-      recipient_user_id: hostId,
-      push_token: row.push_token,
-      status: 'pending',
-    })), { onConflict: 'idempotency_key', ignoreDuplicates: true })
-    .select('id, idempotency_key, push_token, status');
-
-  if (insertError) {
-    logCode('LEDGER_WRITE_FAILED');
-    return json(500, { error: 'Unavailable' });
-  }
-
-  const claimed = ((inserted ?? []) as LogRow[]).filter((row) => row.status === 'pending' && row.push_token && TOKEN_PATTERN.test(row.push_token));
-  if (claimed.length === 0) return json(200, { ok: true, duplicate: true });
-
-  const tokenByKey = new Map(pending.map((row) => [row.idempotency_key, row.push_token]));
-  let delivered = 0;
-
-  for (const batch of chunk(claimed, EXPO_PUSH_CHUNK)) {
-    const messages = batch.map((row) => ({
-      to: tokenByKey.get(row.idempotency_key) ?? row.push_token,
-      title: message.title,
-      body: message.body,
-      sound: 'default',
-      priority: 'high',
-      channelId: 'payments',
-      data: message.data,
-    }));
-
-    let tickets: ExpoTicket[];
-    try {
-      const result = await postExpo<{ data?: ExpoTicket[] }>(EXPO_PUSH_SEND_URL, accessToken, messages);
-      tickets = Array.isArray(result.data) ? result.data : [];
-    } catch {
-      logCode('PUSH_SEND_FAILED');
-      await markRows(admin, batch.map((row) => row.id), {
-        status: 'failed',
-        error_code: 'push_send_failed',
-        error_message: 'Expo push request failed',
-      });
-      return json(200, { ok: true, delivered });
+    httpStatus = response.status;
+    if (response.status < 200 || response.status >= 300) {
+      await rollbackClaim(admin, share.shareId);
+      console.log(JSON.stringify({ status: 'resend_error', http_status: httpStatus, share_id: share.shareId }));
+      return json(502, { ok: false });
     }
-
-    for (let index = 0; index < batch.length; index += 1) {
-      const row = batch[index];
-      const ticket = tickets[index];
-      const token = tokenByKey.get(row.idempotency_key) ?? row.push_token ?? '';
-      if (ticket?.status === 'ok' && ticket.id) {
-        delivered += 1;
-        await markRows(admin, [row.id], { status: 'sent', expo_ticket_id: ticket.id, error_code: null, error_message: null });
-        continue;
-      }
-      const errorCode = ticket?.details?.error ?? 'ticket_error';
-      if (errorCode === 'DeviceNotRegistered') {
-        await markRows(admin, [row.id], {
-          status: 'device_not_registered',
-          error_code: errorCode,
-          error_message: safeErrorMessage(ticket?.message),
-        });
-        await deleteDeadToken(admin, token);
-        continue;
-      }
-      await markRows(admin, [row.id], {
-        status: 'failed',
-        error_code: errorCode.slice(0, 80),
-        error_message: safeErrorMessage(ticket?.message),
-      });
-    }
+  } catch {
+    await rollbackClaim(admin, share.shareId);
+    console.log(JSON.stringify({ status: 'resend_error', http_status: httpStatus, share_id: share.shareId }));
+    return json(502, { ok: false });
   }
 
-  return json(200, { ok: true, delivered });
+  console.log(JSON.stringify({ status: 'sent', share_id: share.shareId, receipt_id: share.receiptId }));
+  return json(200, { ok: true });
 });
 
 function json(status: number, body: Record<string, unknown>) {
@@ -226,29 +172,82 @@ function json(status: number, body: Record<string, unknown>) {
   });
 }
 
+function readEnv(name: string): string | null {
+  const value = Deno.env.get(name);
+  if (typeof value !== 'string' || value.length === 0) return null;
+  return value;
+}
+
+function isWebhookPayload(value: unknown): value is WebhookPayload {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readShare(payload: WebhookPayload): {
+  shareId: string;
+  receiptId: string;
+  guestName: string;
+  amountPence: number;
+  isHost: boolean;
+} | null {
+  const record = asRecord(payload.record);
+  if (!record) return null;
+  const shareId = typeof record.id === 'string' && UUID_PATTERN.test(record.id) ? record.id.toLowerCase() : null;
+  const receiptId = typeof record.receipt_id === 'string' && UUID_PATTERN.test(record.receipt_id) ? record.receipt_id.toLowerCase() : null;
+  if (!shareId || !receiptId) return null;
+  return {
+    shareId,
+    receiptId,
+    guestName: firstText(record.display_name) ?? 'Guest',
+    amountPence: readPence(record.amount_owed_pence),
+    isHost: record.is_host === true,
+  };
+}
+
+function remainingBalancePence(total: number, shares: ShareRow[]): number {
+  let host = 0;
+  let paid = 0;
+  for (const share of shares) {
+    const amount = readPence(share.amount_owed_pence);
+    const confirmed = typeof share.host_confirmed_at === 'string' && share.host_confirmed_at.length > 0;
+    if (share.is_host === true && confirmed) host += amount;
+    else if (share.is_host !== true && share.is_paid === true) paid += amount;
+  }
+  return Math.max(0, total - host - paid);
+}
+
+function totalPence(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.round(numeric * 100));
+}
+
+function readPence(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.trunc(value));
+  if (typeof value === 'string' && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? Math.max(0, parsed) : 0;
+  }
+  return 0;
+}
+
+function firstText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = value.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+  return clean.length > 0 ? clean.slice(0, 120) : null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
 
-function logCode(code: string) {
-  console.log(JSON.stringify({ code }));
-}
-
-async function markRows(
+async function rollbackClaim(
   admin: ReturnType<typeof createClient>,
-  ids: string[],
-  patch: Record<string, unknown>,
+  shareId: string,
 ) {
-  const { error } = await admin.from('push_notification_logs').update(patch).in('id', ids);
-  if (error) logCode('LEDGER_UPDATE_FAILED');
-}
-
-async function deleteDeadToken(admin: ReturnType<typeof createClient>, token: string) {
-  if (!TOKEN_PATTERN.test(token)) return;
-  const removed = await admin.from('push_tokens').delete().eq('token', token);
-  if (removed.error) logCode('DEAD_TOKEN_DELETE_FAILED');
-  else logCode('DEAD_TOKEN_REMOVED');
-  const legacy = await admin.from('user_push_tokens').delete().eq('expo_push_token', token);
-  if (legacy.error) logCode('LEGACY_TOKEN_DELETE_FAILED');
+  const { error } = await admin
+    .from('receipt_share_participants')
+    .update({ host_notified_at: null })
+    .eq('id', shareId);
+  if (error) console.log(JSON.stringify({ status: 'rollback_failed', share_id: shareId }));
 }
