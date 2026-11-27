@@ -1,3 +1,10 @@
+import {
+  buildExactAmountPaymentUrl,
+  buildProfilePaymentUrl,
+  providerLimitWarning,
+  sanitizePaymentNote,
+} from './payoutLinkEngine';
+
 export type PaymentLinkProvider = 'monzo' | 'revolut' | 'paypal';
 
 export const ALLOWED_PAYMENT_HOSTS = new Set(['monzo.me', 'revolut.me', 'paypal.me']);
@@ -5,13 +12,9 @@ export const ALLOWED_PAYMENT_HOSTS = new Set(['monzo.me', 'revolut.me', 'paypal.
 const PAYPAL_HANDLE = /^[A-Za-z0-9]{2,64}$/;
 const UK_HANDLE = /^[A-Za-z0-9._-]{2,64}$/;
 const MAX_AMOUNT_PENCE = 1_000_000;
-const REFERENCE_LIMIT = 35;
 
 const PROVIDER_PREFIX = /^(?:https?:\/\/)?(?:www\.)?(?:monzo\.me|revolut\.me|paypal\.me)\//i;
 
-const MONZO_LIMIT_WARNING =
-  'Monzo.me card payments are limited to £1–£100 for non-Monzo users. Use bank transfer if this fails.';
-const REVOLUT_LIMIT_WARNING = 'Card payments via Revolut.me are capped at £250/week.';
 
 /**
  * Turns a typed handle or a pasted provider URL into a safe path segment.
@@ -70,21 +73,13 @@ export function maskAccountNumber(digits: string): string {
  * whitespace is collapsed, and the result is capped at 35 characters.
  */
 export function sanitizeReference(raw?: string): string {
-  if (typeof raw !== 'string' || raw.length === 0) return '';
-  return raw
-    .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/[/?#&=%\\]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, REFERENCE_LIMIT);
+  return sanitizePaymentNote(raw);
 }
 
 /** Card-scheme limits for Monzo.me and Revolut.me. PayPal has no in-app warning. */
 export function getProviderLimitWarning(provider: PaymentLinkProvider, amountPence: number): string | null {
-  if (!Number.isInteger(amountPence)) return null;
-  if (provider === 'monzo' && (amountPence < 100 || amountPence > 10_000)) return MONZO_LIMIT_WARNING;
-  if (provider === 'revolut' && amountPence > 25_000) return REVOLUT_LIMIT_WARNING;
-  return null;
+  if (provider === 'paypal') return null;
+  return providerLimitWarning(provider, amountPence);
 }
 
 const PASTE_LIMIT = 256;
@@ -125,14 +120,18 @@ export function parsePastedPaymentLink(raw: string): { provider: PaymentLinkProv
  * Profile URL with no amount. The handle is sanitized again, then the host is checked.
  */
 export function buildProfilePreviewUrl(provider: PaymentLinkProvider, rawHandle: string): string {
+  if (provider === 'monzo' || provider === 'revolut') {
+    return buildProfilePaymentUrl(provider, rawHandle);
+  }
+
   const handle = sanitizePaymentHandle(provider, rawHandle);
   if (!handle) {
     throw new Error('Payment handle is not valid.');
   }
 
-  const url = `https://${provider}.me/${handle}`;
+  const url = `https://paypal.me/${handle}`;
   const parsed = new URL(url);
-  if (parsed.protocol !== 'https:' || !ALLOWED_PAYMENT_HOSTS.has(parsed.hostname)) {
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'paypal.me') {
     throw new Error('Payment URL is not allowed.');
   }
   return url;
@@ -152,24 +151,17 @@ export function buildPaymentUrl(
     throw new Error('Amount must be a whole number of pence from 1 to 1000000.');
   }
 
+  if (provider === 'monzo' || provider === 'revolut') {
+    return buildExactAmountPaymentUrl(provider, handle, amountPence, reference);
+  }
+
   const safeHandle = sanitizePaymentHandle(provider, handle);
   if (!safeHandle) {
     throw new Error('Payment handle is not valid.');
   }
 
   const amount = (amountPence / 100).toFixed(2);
-  const note = sanitizeReference(reference);
-  let url: string;
-
-  if (provider === 'monzo') {
-    url = `https://monzo.me/${safeHandle}/${amount}`;
-    if (note.length > 0) url += `?d=${encodeURIComponent(note)}`;
-  } else if (provider === 'revolut') {
-    url = `https://revolut.me/${safeHandle}?amount=${amount}&currency=GBP`;
-    if (note.length > 0) url += `&note=${encodeURIComponent(note)}`;
-  } else {
-    url = `https://paypal.me/${safeHandle}/${amount}GBP`;
-  }
+  const url = `https://paypal.me/${safeHandle}/${amount}GBP`;
 
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || !ALLOWED_PAYMENT_HOSTS.has(parsed.hostname)) {

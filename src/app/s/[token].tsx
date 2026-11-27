@@ -626,18 +626,19 @@ function PayoutBlock({
     <View style={styles.payout}>
       <Text style={styles.railLabel}>Pay {ownerName}</Text>
       {rails.monzo ? (
-        <Pressable accessibilityRole="link" onPress={() => onOpen(rails.monzo!.url)} style={styles.primaryButton}>
-          <Text style={styles.primaryButtonText}>Pay {amountLabel} with Monzo</Text>
-        </Pressable>
+        <>
+          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Monzo`} onPress={() => onOpen(rails.monzo!.url)} style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>Pay {amountLabel} with Monzo</Text>
+          </Pressable>
+          {rails.monzo.limitWarning ? <Text style={styles.meta}>{rails.monzo.limitWarning}</Text> : null}
+        </>
       ) : null}
       {rails.revolut ? (
         <>
-          <Pressable accessibilityRole="link" onPress={() => onOpen(rails.revolut!.url)} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Open Revolut</Text>
+          <Pressable accessibilityRole="link" accessibilityLabel={`Pay ${amountLabel} with Revolut`} onPress={() => onOpen(rails.revolut!.url)} style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>Pay {amountLabel} with Revolut</Text>
           </Pressable>
-          <Pressable accessibilityRole="button" onPress={() => onCopy(rails.revolut!.copyText, 'revolut')} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>{copiedKey === 'revolut' ? 'Copied' : 'Copy handle & amount'}</Text>
-          </Pressable>
+          {rails.revolut.limitWarning ? <Text style={styles.meta}>{rails.revolut.limitWarning}</Text> : null}
         </>
       ) : null}
       {rails.bank ? (

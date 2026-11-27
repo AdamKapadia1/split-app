@@ -3,7 +3,6 @@ import {
   buildMonzoPayUrl,
   buildRevolutPayUrl,
   formatBankDetailsSummary,
-  formatHandleAmountCopy,
   formatUkSortCode,
   isHttpsUrl,
   normalizeUkHandle,
@@ -49,13 +48,13 @@ it('builds a Monzo link only for a positive amount on https', () => {
   assertEqual(isHttpsUrl('javascript:alert(1)'), false);
 });
 
-it('builds a Revolut profile link and a clipboard pair', () => {
+it('builds an exact-amount Revolut link and a profile link when no amount is given', () => {
   assertEqual(buildRevolutPayUrl('@ada_name'), 'https://revolut.me/ada_name');
   assertEqual(buildRevolutPayUrl('https://revolut.me/ada_name?amount=9.99'), 'https://revolut.me/ada_name');
   assertEqual(buildRevolutPayUrl('http://revolut.me/ada_name'), 'https://revolut.me/ada_name');
-  assertEqual(buildRevolutPayUrl('http://evil.example/ada_name'), null);
-  assertTrue(isHttpsUrl(buildRevolutPayUrl('@ada_name') ?? ''), 'revolut link is https');
-  assertEqual(formatHandleAmountCopy('ada_name', '£14.50'), '@ada_name\n£14.50');
+  assertEqual(buildRevolutPayUrl('@ada_name', 1450, 'House'), 'https://revolut.me/ada_name?amount=14.50&currency=GBP&note=House');
+  assertEqual(buildRevolutPayUrl('http://evil.example/ada_name', 1450), null);
+  assertTrue(isHttpsUrl(buildRevolutPayUrl('@ada_name', 1450) ?? ''), 'revolut amount link is https');
 });
 
 it('formats sort code, account number, and an 18-character reference', () => {
@@ -95,8 +94,7 @@ it('copies a readable Faster Payments summary and exposes every configured rail'
     referenceSource: 'token_abcd12',
   });
   assertEqual(rails.monzo?.url, 'https://monzo.me/ada.m/14.50?d=VELOR-TOKENABCD12');
-  assertEqual(rails.revolut?.url, 'https://revolut.me/ada_r');
-  assertEqual(rails.revolut?.copyText, '@ada_r\n£14.50');
+  assertEqual(rails.revolut?.url, 'https://revolut.me/ada_r?amount=14.50&currency=GBP&note=VELOR-TOKENABCD12');
   assertEqual(rails.bank?.sortCodeDisplay, '12-34-56');
   assertEqual(rails.bank?.sortCodeDigits, '123456');
   assertEqual(rails.bank?.accountNumber, '12345678');
