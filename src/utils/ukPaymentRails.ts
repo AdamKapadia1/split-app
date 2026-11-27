@@ -1,4 +1,9 @@
-import { normalizeAccountNumber, normalizeSortCode, sanitizeReference } from './paymentLinks';
+import { normalizeAccountNumber, normalizeSortCode } from './paymentLinks';
+import {
+  buildExactAmountPaymentUrl,
+  buildProfilePaymentUrl,
+  providerLimitWarning,
+} from './payoutLinkEngine';
 
 const HANDLE = /^[A-Za-z0-9._-]{2,64}$/;
 const URL_PREFIX = /^(?:https?:\/\/)?(?:www\.)?(?:monzo\.me|revolut\.me)\//i;
@@ -7,12 +12,13 @@ const FASTER_REFERENCE_MAX = 18;
 export type MonzoPayLink = {
   handle: string;
   url: string;
+  limitWarning: string | null;
 };
 
 export type RevolutPayLink = {
   handle: string;
   url: string;
-  copyText: string;
+  limitWarning: string | null;
 };
 
 export type FasterPaymentDetails = {
@@ -63,33 +69,34 @@ export function buildMonzoPayUrl(
   amountPence: number,
   reference?: string,
 ): string | null {
-  const handle = normalizeUkHandle(rawHandle);
-  if (!handle) return null;
-  if (!Number.isInteger(amountPence) || amountPence <= 0 || amountPence > 1_000_000) return null;
-  const amount = (amountPence / 100).toFixed(2);
-  const note = sanitizeReference(reference);
-  let url = `https://monzo.me/${handle}/${amount}`;
-  if (note.length > 0) url += `?d=${encodeURIComponent(note)}`;
-  return isHttpsUrl(url) ? url : null;
+  if (typeof rawHandle !== 'string') return null;
+  try {
+    return buildExactAmountPaymentUrl('monzo', rawHandle, amountPence, reference);
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Revolut profile link. A pasted https://revolut.me URL is kept only when its
- * host and handle are safe. Amounts stay off the URL and go on the clipboard.
+ * Revolut.me link. With integer pence, the amount and GBP are on the query
+ * string. Without an amount, this is the profile URL only.
  */
-export function buildRevolutPayUrl(raw: string | null | undefined): string | null {
-  const fromLink = revolutUrl(raw);
-  if (fromLink) return fromLink;
-  const handle = normalizeUkHandle(raw);
-  if (!handle) return null;
-  const url = `https://revolut.me/${handle}`;
-  return isHttpsUrl(url) ? url : null;
-}
-
-export function formatHandleAmountCopy(handle: string, amountLabel: string): string {
-  const safe = normalizeUkHandle(handle);
-  if (!safe) return amountLabel;
-  return `@${safe}\n${amountLabel}`;
+export function buildRevolutPayUrl(
+  raw: string | null | undefined,
+  amountPence?: number,
+  reference?: string,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  try {
+    if (typeof amountPence === 'number') {
+      return buildExactAmountPaymentUrl('revolut', raw, amountPence, reference);
+    }
+    const handle = normalizeUkHandle(raw);
+    if (!handle) return null;
+    return buildProfilePaymentUrl('revolut', handle);
+  } catch {
+    return null;
+  }
 }
 
 /** Six digits in, `XX-XX-XX` out. Anything else is null. */
@@ -155,9 +162,12 @@ export function resolveUkPaymentRails(input: {
 }): UkPaymentRails {
   const monzoHandle = normalizeUkHandle(input.monzoHandle) ?? handleFromLink(input.paymentLink, 'monzo.me');
   const revolutHandle = normalizeUkHandle(input.revolutHandle) ?? handleFromLink(input.paymentLink, 'revolut.me');
-  const revolutUrlValue = buildRevolutPayUrl(revolutHandle) ?? buildRevolutPayUrl(input.paymentLink);
   const reference = buildFasterPaymentReference(input.referenceSource);
-  const monzoUrl = buildMonzoPayUrl(monzoHandle, input.amountPence, input.monzoNote ?? reference);
+  const note = input.monzoNote ?? reference;
+  const monzoUrl = buildMonzoPayUrl(monzoHandle, input.amountPence, note);
+  const revolutUrlValue = revolutHandle
+    ? buildRevolutPayUrl(revolutHandle, input.amountPence, note)
+    : null;
 
   const sortDisplay = formatUkSortCode(input.bankSortCode);
   const sortDigits = sortCodeDigits(input.bankSortCode);
@@ -181,9 +191,11 @@ export function resolveUkPaymentRails(input: {
     : null;
 
   return {
-    monzo: monzoHandle && monzoUrl ? { handle: monzoHandle, url: monzoUrl } : null,
+    monzo: monzoHandle && monzoUrl
+      ? { handle: monzoHandle, url: monzoUrl, limitWarning: providerLimitWarning('monzo', input.amountPence) }
+      : null,
     revolut: revolutHandle && revolutUrlValue
-      ? { handle: revolutHandle, url: revolutUrlValue, copyText: formatHandleAmountCopy(revolutHandle, input.amountLabel) }
+      ? { handle: revolutHandle, url: revolutUrlValue, limitWarning: providerLimitWarning('revolut', input.amountPence) }
       : null,
     bank,
   };
@@ -221,25 +233,6 @@ export async function copyPlainText(value: string): Promise<boolean> {
   }
   document.body.removeChild(area);
   return copied;
-}
-
-function revolutUrl(raw: string | null | undefined): string | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith('https://')) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== 'https:') return null;
-  const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-  if (host !== 'revolut.me') return null;
-  const handle = normalizeUkHandle(parsed.pathname.split('/').filter((part) => part.length > 0)[0] ?? '');
-  if (!handle) return null;
-  const url = `https://revolut.me/${handle}`;
-  return isHttpsUrl(url) ? url : null;
 }
 
 function handleFromLink(raw: string | null | undefined, host: 'monzo.me' | 'revolut.me'): string | null {
