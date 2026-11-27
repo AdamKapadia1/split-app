@@ -1,5 +1,15 @@
 import type { Breadcrumb, ErrorEvent, Event, StackFrame, User } from '@sentry/react-native';
 
+import {
+  classifyTelemetry,
+  decideBurst,
+  scrubTelemetryString,
+  TELEMETRY_BURST_LIMIT,
+  telemetryBurstKey,
+  type ClassifiedTelemetry,
+  type TelemetryHints,
+} from '@/utils/errorClassification';
+
 const MAX_DEPTH = 8;
 const REDACTED = '[REDACTED]';
 const CIRCULAR = '[Circular]';
@@ -229,30 +239,121 @@ export function setSentryUser(userId: string | null) {
   }
 }
 
-export function captureSanitizedException(error: unknown, context?: Record<string, unknown>) {
-  try {
-    if (__DEV__ || !active) return;
-    const Sentry = loadSentry();
-    if (!Sentry) return;
+type TelemetryBreadcrumb = {
+  category: 'network';
+  level: 'info';
+  data: Record<string, string | number>;
+};
 
-    const safeContext = context ? scrubUnknown(context) : undefined;
-    Sentry.withScope((scope) => {
-      if (safeContext && typeof safeContext === 'object' && !Array.isArray(safeContext)) {
-        scope.setContext('handled', safeContext as Record<string, unknown>);
-      }
-      if (error instanceof Error) {
-        const safe = new Error(scrubString(error.message));
-        safe.name = error.name || 'Error';
-        if (error.stack) safe.stack = scrubString(error.stack);
-        Sentry.captureException(safe);
-        return;
-      }
-      const message = typeof error === 'string' ? scrubString(error) : 'Handled application error';
-      Sentry.captureException(new Error(message));
+type TelemetryScope = {
+  setTag: (key: string, value: string) => void;
+  setFingerprint: (fingerprint: string[]) => void;
+};
+
+type TelemetrySink = {
+  addBreadcrumb: (breadcrumb: TelemetryBreadcrumb) => void;
+  withScope: (callback: (scope: TelemetryScope) => void) => void;
+  captureException: (error: Error) => void;
+};
+
+const bursts = new Map<string, number>();
+let sinkOverride: TelemetrySink | null = null;
+
+export function resetTelemetryForTests() {
+  bursts.clear();
+  sinkOverride = null;
+}
+
+export function setTelemetrySinkForTests(sink: TelemetrySink | null) {
+  sinkOverride = sink;
+}
+
+function allowlistedData(classified: ClassifiedTelemetry): Record<string, string | number> {
+  const data: Record<string, string | number> = {
+    scope: scrubTelemetryString(classified.scope),
+    operation: scrubTelemetryString(classified.operation),
+    error_code: scrubTelemetryString(classified.error_code),
+    error_name: scrubTelemetryString(classified.error_name),
+  };
+  if (classified.http_status != null) data.http_status = classified.http_status;
+  return data;
+}
+
+function rememberCapture(key: string, now: number): boolean {
+  const previous = bursts.get(key);
+  if (decideBurst(previous, now) === 'breadcrumb') return false;
+  if (!bursts.has(key) && bursts.size >= TELEMETRY_BURST_LIMIT) {
+    const oldest = bursts.keys().next().value;
+    if (typeof oldest === 'string') bursts.delete(oldest);
+  }
+  bursts.set(key, now);
+  return true;
+}
+
+function resolveSink(): TelemetrySink | null {
+  if (sinkOverride) return sinkOverride;
+  try {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) return null;
+    if (!active) return null;
+    const Sentry = loadSentry();
+    if (!Sentry) return null;
+    return {
+      addBreadcrumb: (breadcrumb) => {
+        Sentry.addBreadcrumb(breadcrumb);
+      },
+      withScope: (callback) => {
+        Sentry.withScope((scope) => {
+          callback(scope);
+        });
+      },
+      captureException: (error) => {
+        Sentry.captureException(error);
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function reportClassifiedError(error: unknown, hints: TelemetryHints = {}) {
+  try {
+    const classified = classifyTelemetry(error, hints);
+    if (classified.action === 'ignore') return;
+    const sink = resolveSink();
+    if (!sink) return;
+
+    const data = allowlistedData(classified);
+    if (classified.action === 'breadcrumb') {
+      sink.addBreadcrumb({ category: 'network', level: 'info', data });
+      return;
+    }
+
+    const key = telemetryBurstKey(classified);
+    if (!rememberCapture(key, Date.now())) {
+      sink.addBreadcrumb({ category: 'network', level: 'info', data });
+      return;
+    }
+
+    const synthetic = new Error(scrubTelemetryString(classified.syntheticMessage));
+    synthetic.name = scrubTelemetryString(classified.error_name);
+    sink.withScope((scope) => {
+      scope.setTag('scope', data.scope as string);
+      scope.setTag('operation', data.operation as string);
+      scope.setTag('error_code', data.error_code as string);
+      if (typeof data.http_status === 'number') scope.setTag('http_status', String(data.http_status));
+      scope.setFingerprint([...classified.fingerprint]);
+      sink.captureException(synthetic);
     });
   } catch {
-    // Sentry must never take down the error boundary.
+    // Observability must never take down a handled error path.
   }
+}
+
+export function captureSanitizedException(error: unknown, context?: Record<string, unknown>) {
+  const scope = context && typeof context.scope === 'string' ? context.scope : 'app';
+  const operation = context && typeof context.operation === 'string' ? context.operation : 'unspecified';
+  const unauthenticated = context?.unauthenticated === true;
+  reportClassifiedError(error, { scope, operation, unauthenticated });
 }
 
 export type { ErrorEvent };

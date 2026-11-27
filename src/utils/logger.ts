@@ -1,3 +1,5 @@
+import { reportClassifiedError } from '@/utils/sentry';
+
 const REDACTED = '[redacted]';
 const MAX_DEPTH = 8;
 
@@ -22,6 +24,9 @@ const SENSITIVE_KEYS = new Set([
 
 const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
+const GBP = /£\s?\d+(?:\.\d{1,2})?/g;
+const SORT_CODE = /\b\d{2}-\d{2}-\d{2}\b/g;
+const LONG_DIGITS = /\d{8,}/g;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const SIGNED_STORAGE_URL = /https?:\/\/\S*\/object\/sign\/\S*/gi;
 const TOKEN_PARAM = /([?&#]token=)[^\s&#]+/gi;
@@ -45,7 +50,10 @@ export function redactString(value: string) {
     .replace(TOKEN_PARAM, `$1${REDACTED}`)
     .replace(EMAIL, REDACTED)
     .replace(JWT, REDACTED)
-    .replace(BEARER, REDACTED);
+    .replace(BEARER, REDACTED)
+    .replace(GBP, REDACTED)
+    .replace(SORT_CODE, REDACTED)
+    .replace(LONG_DIGITS, REDACTED);
 }
 
 export function redactSensitive(value: unknown, depth = 0): unknown {
@@ -66,19 +74,38 @@ export function redactSensitive(value: unknown, depth = 0): unknown {
   return REDACTED;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Error);
+}
+
+function readLoggedError(args: unknown[]): unknown {
+  for (const arg of args) {
+    if (arg instanceof Error) return arg;
+  }
+  for (const arg of args) {
+    if (isPlainRecord(arg) && 'error' in arg && arg.error != null) return arg.error;
+  }
+  for (const arg of args) {
+    if (!isPlainRecord(arg)) continue;
+    const name = typeof arg.name === 'string' && arg.name.trim() ? arg.name.trim() : 'Error';
+    const code = typeof arg.code === 'string' || typeof arg.code === 'number' ? arg.code : undefined;
+    return code === undefined ? { name } : { name, code };
+  }
+  return { name: 'Error' };
+}
+
+function readTelemetryHints(args: unknown[]) {
+  const scope = args.find((arg): arg is string => typeof arg === 'string') ?? 'app';
+  const record = args.find((arg): arg is Record<string, unknown> => isPlainRecord(arg));
+  const operation = record && typeof record.operation === 'string' ? record.operation : 'unspecified';
+  const unauthenticated = record?.unauthenticated === true;
+  return { scope, operation, unauthenticated };
+}
+
 function reportHandledError(args: unknown[]) {
   if (isDev()) return;
   try {
-    // Lazy require keeps Sentry out of the logger module cycle.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { captureSanitizedException } = require('./sentry') as typeof import('./sentry');
-    const error = args.find((arg): arg is Error => arg instanceof Error);
-    const summary = args.find((arg): arg is string => typeof arg === 'string');
-    const reported = error ?? new Error(summary ? redactString(summary).slice(0, 300) : 'Handled application error');
-    const details = redactSensitive(
-      args.map((arg) => (arg instanceof Error ? { name: arg.name, message: arg.message } : arg)),
-    );
-    captureSanitizedException(reported, { details });
+    reportClassifiedError(readLoggedError(args), readTelemetryHints(args));
   } catch {
     // Crash reporting must never take down a handled error path.
   }

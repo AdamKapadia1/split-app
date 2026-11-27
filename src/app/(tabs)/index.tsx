@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -20,7 +20,7 @@ import { resolveMemberIdentity } from '@/lib/memberName';
 import { supabase } from '@/lib/supabase';
 import { useSupabaseSession } from '@/lib/use-session';
 import { groupService } from '@/services/GroupService';
-import { fetchHomeFeed, type HomeFeedReceipt } from '@/services/HomeFeedService';
+import { fetchHomeFeed, shouldCommitHomeFeed, type HomeFeedReceipt } from '@/services/HomeFeedService';
 import { sendSettlementNudge, unregisterPushTokenAsync } from '@/services/NotificationService';
 import { theme } from '@/theme/theme';
 import { velor, type VelorTone } from '@/theme/velorVisuals';
@@ -97,7 +97,7 @@ function toBalanceReceipt(receipt: HomeFeedReceipt): HomeBalanceReceipt {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { session } = useSupabaseSession();
+  const { session, ready } = useSupabaseSession();
   const userId = session?.user.id ?? null;
   const [feed, setFeed] = useState<HomeFeedReceipt[] | null>(null);
   const [profileFullName, setProfileFullName] = useState<string | null>(null);
@@ -108,44 +108,80 @@ export default function HomeScreen() {
   const [nudgingId, setNudgingId] = useState<string | null>(null);
   const [nudgedIds, setNudgedIds] = useState<ReadonlySet<string>>(new Set());
   const hasLoadedRef = useRef(false);
-
-  const load = useCallback(async (kind: 'load' | 'refresh' | 'silent') => {
-    if (!userId) {
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const authKey = ready ? (userId ?? '') : null;
+  const [seenAuthKey, setSeenAuthKey] = useState<string | null>(null);
+  if (authKey !== null && seenAuthKey !== authKey) {
+    setSeenAuthKey(authKey);
+    if (authKey === '') {
+      setFeed(null);
+      setProfileFullName(null);
+      setError(null);
       setIsInitialLoading(false);
+      setIsRefreshing(false);
+      setNudgedIds(new Set());
+    }
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!ready || userId) return;
+    requestIdRef.current += 1;
+    hasLoadedRef.current = false;
+  }, [ready, userId]);
+
+  const load = useCallback(async (kind: 'load' | 'refresh' | 'silent', isMounted?: () => boolean) => {
+    const mounted = isMounted ?? (() => mountedRef.current);
+    if (!ready || !userId) {
+      if (ready && !userId) setIsInitialLoading(false);
       return;
     }
+    const requestId = (requestIdRef.current += 1);
     if (kind === 'load' && !hasLoadedRef.current) setIsInitialLoading(true);
     if (kind === 'refresh') setIsRefreshing(true);
     try {
-      const receipts = await fetchHomeFeed();
+      const receipts = await fetchHomeFeed({ isCurrent: () => shouldCommitHomeFeed(requestId, requestIdRef.current, mounted()) });
+      if (!shouldCommitHomeFeed(requestId, requestIdRef.current, mounted())) return;
       const profile = await groupService.getAccountProfile(userId).catch(() => null);
+      if (!shouldCommitHomeFeed(requestId, requestIdRef.current, mounted())) return;
       setFeed(receipts);
       hasLoadedRef.current = true;
       setProfileFullName(profile?.fullName ?? null);
       setError(null);
     } catch (caught) {
+      if (!shouldCommitHomeFeed(requestId, requestIdRef.current, mounted())) return;
       setError(mapErrorToUserMessage(caught, 'Could not load your balances.'));
     } finally {
+      if (!shouldCommitHomeFeed(requestId, requestIdRef.current, mounted())) return;
       setIsInitialLoading(false);
       setIsRefreshing(false);
     }
-  }, [userId]);
+  }, [ready, userId]);
 
   useFocusEffect(useCallback(() => {
-    let active = true;
+    if (!ready || !userId) return undefined;
+    let isMounted = true;
     void (async () => {
       try {
-        await load(hasLoadedRef.current ? 'silent' : 'load');
+        await load(hasLoadedRef.current ? 'silent' : 'load', () => isMounted);
       } catch (error) {
-        if (active) logger.error('home', { code: 'LOAD_FAILED', error });
-      } finally {
-        if (!active) return;
+        if (!isMounted) return;
+        logger.error('home', { operation: 'fetchHomeFeed.session', error });
       }
     })();
     return () => {
-      active = false;
+      isMounted = false;
+      requestIdRef.current += 1;
     };
-  }, [load]));
+  }, [load, ready, userId]));
 
   useReceiptLedgerRealtime(() => {
     void load('silent');
