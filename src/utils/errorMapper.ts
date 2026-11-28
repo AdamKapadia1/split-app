@@ -10,7 +10,13 @@ type ErrorRecord = {
   originalError?: unknown;
 };
 
-const SAFE_CODE = /^(?:42501|23505|23514|22P02|28000|42883|PGRST\d{3}|[A-Z][A-Z0-9_]{1,39})$/;
+/**
+ * Codes that are safe to log: any 5-character PostgreSQL SQLSTATE
+ * (`22023`, `57014`, `40P01`), PostgREST codes (`PGRST301`), and uppercase
+ * symbolic codes (`FAILED`). Lowercase text, spaces, punctuation, and any
+ * other length are rejected, so error text and PII never pass through.
+ */
+const SAFE_CODE = /^(?:[0-9A-Z]{5}|PGRST\d{3}|[A-Z][A-Z0-9_]{1,39})$/;
 
 /**
  * A short machine code safe to log. Prefers the database SQLSTATE carried on

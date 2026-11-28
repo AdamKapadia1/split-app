@@ -15,7 +15,7 @@ import { Colors } from '@/constants/theme';
 import { theme } from '@/theme/theme';
 import { useSupabaseSession } from '@/lib/use-session';
 import { registerForPushNotificationsAsync } from '@/services/NotificationService';
-import { registerPushToken, startPaymentNotificationRouting } from '@/services/PushNotificationService';
+import { startPaymentNotificationRouting } from '@/services/PushNotificationService';
 import { logger } from '@/utils/logger';
 import { receiptIdFromNotificationData } from '@/utils/notifications';
 import { initSentry, setSentryUser } from '@/utils/sentry';
@@ -97,7 +97,6 @@ function RootNavigator() {
     void (async () => {
       try {
         await registerForPushNotificationsAsync(userId);
-        if (!cancelled) await registerPushToken(userId);
       } catch (error) {
         logger.error('notifications', { code: 'REGISTER_FAILED', error });
       } finally {

@@ -1,7 +1,6 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import { AndroidImportance } from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
@@ -9,10 +8,6 @@ import { receiptIdFromPaymentData } from '@/utils/hostPaidNotification';
 import { isExpoPushToken } from '@/utils/notifications';
 import { logger } from '@/utils/logger';
 import { captureSanitizedException } from '@/utils/sentry';
-
-const PAYMENTS_CHANNEL = 'payments';
-
-let cachedPushToken: string | null = null;
 
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
@@ -25,60 +20,13 @@ if (Platform.OS !== 'web') {
   });
 }
 
-/** Registers this device after sign-in. Simulators and web no-op. */
-export async function registerPushToken(userId: string): Promise<void> {
-  if (!canRegisterPush()) return;
-
-  try {
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(PAYMENTS_CHANNEL, {
-        name: 'Payments',
-        importance: AndroidImportance.HIGH,
-        sound: 'default',
-        vibrationPattern: [0, 250, 250, 250],
-      });
-    }
-
-    const existing = await Notifications.getPermissionsAsync();
-    let status = existing.status;
-    if (status !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
-      status = requested.status;
-    }
-    if (status !== 'granted') return;
-
-    const projectId = readProjectId();
-    if (!projectId) {
-      reportFailure(new Error('Missing EAS project id'), 'MISSING_PROJECT_ID');
-      return;
-    }
-
-    const tokenResult = await Notifications.getExpoPushTokenAsync({ projectId });
-    const token = tokenResult.data;
-    if (!isExpoPushToken(token)) return;
-
-    const client = supabase;
-    if (!client) return;
-    const { data, error: sessionError } = await client.auth.getSession();
-    if (sessionError || data.session?.user.id !== userId) return;
-
-    const platform = Platform.OS === 'ios' ? 'ios' : 'android';
-    const appVersion = typeof Constants.expoConfig?.version === 'string'
-      ? Constants.expoConfig.version.slice(0, 32)
-      : null;
-    const { error } = await client.rpc('claim_push_token', {
-      p_token: token,
-      p_platform: platform,
-      p_app_version: appVersion,
-    });
-    if (error) throw error;
-    cachedPushToken = token;
-  } catch (error) {
-    reportFailure(error, 'PUSH_REGISTER_FAILED');
-  }
-}
-
-/** Deletes this device token before the Supabase session is cleared. */
+/**
+ * Deletes this device token from the legacy `push_tokens` table before the
+ * Supabase session is cleared. Build 13 no longer registers there (the
+ * `claim_push_token` RPC is not deployed in production; device tokens live in
+ * `user_push_tokens`, see NotificationService), but rows written by earlier
+ * builds are still cleaned up on sign-out.
+ */
 export async function unregisterPushToken(): Promise<void> {
   if (Platform.OS === 'web') return;
 
@@ -89,8 +37,7 @@ export async function unregisterPushToken(): Promise<void> {
     const userId = data.session?.user.id;
     if (sessionError || !userId) return;
 
-    const token = cachedPushToken ?? await readGrantedToken();
-    cachedPushToken = null;
+    const token = await readGrantedToken();
     if (!token || !isExpoPushToken(token)) return;
 
     const { error } = await client.from('push_tokens').delete().eq('token', token).eq('user_id', userId);
