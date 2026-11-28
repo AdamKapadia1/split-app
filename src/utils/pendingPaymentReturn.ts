@@ -139,6 +139,25 @@ export function endConfirm(lock: { current: boolean }): void {
   lock.current = false;
 }
 
+export type LockRef = { current: boolean };
+
+/**
+ * Takes every lock in `acquire` only when all of them, and every lock in
+ * `mustBeFree`, are currently free. Returns a release function, or null when
+ * anything is held. The release clears only the locks this call took, and
+ * only once, so a second caller can never unlock work it does not own.
+ */
+export function tryAcquireLocks(acquire: readonly LockRef[], mustBeFree: readonly LockRef[] = []): (() => void) | null {
+  if (acquire.some((lock) => lock.current) || mustBeFree.some((lock) => lock.current)) return null;
+  for (const lock of acquire) lock.current = true;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const lock of acquire) lock.current = false;
+  };
+}
+
 export function withPaidFlag<T extends { id: string; isPaid: boolean; paidAt: string | null }>(
   rows: readonly T[],
   participantId: string,

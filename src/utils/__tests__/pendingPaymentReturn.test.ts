@@ -8,6 +8,7 @@ import {
   reconcilePendingPayment,
   resetPendingPaymentStorageForTests,
   safeSessionStorage,
+  tryAcquireLocks,
   tryBeginConfirm,
   withPaidFlag,
   writePendingPayment,
@@ -142,6 +143,61 @@ it('rolls a failed confirmation back to the previous unpaid share', () => {
   assertEqual(failure.bill[0]?.paidAt, null);
   assertEqual(failure.pending, pending);
   assertTrue(failure.error.length > 0, 'retry copy is present');
+});
+
+// These mirror the exact lock calls in src/app/s/[token].tsx:
+//   setPaid:                tryAcquireLocks([busy], [confirmingRef])
+//   confirmReturnedPayment: tryAcquireLocks([confirmingRef, busy])
+function screenLocks() {
+  return { busy: { current: false }, confirming: { current: false } };
+}
+
+it('blocks "Yes, I\'ve paid" while an Undo holds busy', () => {
+  const locks = screenLocks();
+  const undo = tryAcquireLocks([locks.busy], [locks.confirming]);
+  assertTrue(undo !== null, 'undo takes busy');
+  const confirm = tryAcquireLocks([locks.confirming, locks.busy]);
+  assertEqual(confirm, null);
+  assertEqual(locks.confirming.current, false);
+  assertEqual(locks.busy.current, true);
+  undo?.();
+  assertEqual(locks.busy.current, false);
+});
+
+it('blocks an Undo while "Yes, I\'ve paid" is in flight', () => {
+  const locks = screenLocks();
+  const confirm = tryAcquireLocks([locks.confirming, locks.busy]);
+  assertTrue(confirm !== null, 'confirm takes both locks');
+  assertEqual(locks.busy.current, true);
+  assertEqual(locks.confirming.current, true);
+  assertEqual(tryAcquireLocks([locks.busy], [locks.confirming]), null);
+  confirm?.();
+  assertEqual(locks.busy.current, false);
+  assertEqual(locks.confirming.current, false);
+});
+
+it('a refused caller can never clear a lock it does not own', () => {
+  const locks = screenLocks();
+  const owner = tryAcquireLocks([locks.busy]);
+  const refused = tryAcquireLocks([locks.confirming, locks.busy]);
+  assertEqual(refused, null);
+  assertEqual(locks.busy.current, true);
+  owner?.();
+  owner?.();
+  const next = tryAcquireLocks([locks.busy]);
+  assertTrue(next !== null, 'lock is free again after one release');
+  // A stale double release from the first owner must not free the new holder.
+  owner?.();
+  assertEqual(locks.busy.current, true);
+  next?.();
+  assertEqual(locks.busy.current, false);
+});
+
+it('takes no lock at all when only one of several is free', () => {
+  const locks = screenLocks();
+  locks.confirming.current = true;
+  assertEqual(tryAcquireLocks([locks.confirming, locks.busy]), null);
+  assertEqual(locks.busy.current, false);
 });
 
 let failed = 0;

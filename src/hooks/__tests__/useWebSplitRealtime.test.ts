@@ -1,7 +1,8 @@
 import { act, createElement, useEffect, type ReactNode } from 'react';
 
 import { resetRealtimeForTests, type RealtimeChannelLike, type RealtimeClientLike } from '../safeRealtimeChannel';
-import { useWebSplitRealtime, WEB_REALTIME_POLL_MS, type WebRealtimeStatus } from '../useWebSplitRealtime';
+import { useWebSplitRealtime, WEB_REALTIME_POLL_MS, type WebRealtimeStatus, type WebRefreshReason } from '../useWebSplitRealtime';
+import { splitSyncReceiptTopic } from '../../utils/splitSync';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as { __DEV__?: boolean }).__DEV__ = true;
@@ -139,14 +140,19 @@ function Screen({
   client,
   onRefresh,
   onStatus,
+  receiptId = RECEIPT,
+  settled = false,
 }: {
   client: RealtimeClientLike;
-  onRefresh: (isCurrent: () => boolean) => void | Promise<void>;
+  onRefresh: (isCurrent: () => boolean, reason: WebRefreshReason) => void | Promise<void>;
   onStatus?: (status: WebRealtimeStatus) => void;
+  receiptId?: string | null;
+  settled?: boolean;
 }) {
   const status = useWebSplitRealtime({
     shareToken: SHARE,
-    receiptId: RECEIPT,
+    receiptId,
+    settled,
     client,
     onRefresh,
   });
@@ -170,7 +176,7 @@ it('gives strict-mode mounts distinct topics and tears them down', async () => {
         createElement(Screen, { client: fake.client, onRefresh: () => undefined }),
       ));
     });
-    const topics = fake.calls.filter((topic) => topic.startsWith(`web-split:${SHARE}:`));
+    const topics = fake.calls.filter((topic) => topic.startsWith(`web-split:${RECEIPT}:`));
     assertTrue(topics.length >= 2, 'each mount opens its own topic');
     assertEqual(new Set(topics).size, topics.length);
     assertTrue(topics.every((topic) => topic.includes('-')), 'topic carries a random suffix');
@@ -273,9 +279,11 @@ it('coalesces a realtime burst and drops a stale response', async () => {
         }),
       }));
     });
-    const topic = fake.calls.find((entry) => entry.startsWith('web-split:'));
-    const channel = topic ? fake.channels.get(topic) : undefined;
-    assertTrue(Boolean(channel && channel.handlers.length >= 3), 'shares, claims, and the receipt are bound');
+    const probe = fake.calls.find((entry) => entry.startsWith('web-split:'));
+    const probeChannel = probe ? fake.channels.get(probe) : undefined;
+    assertEqual(probeChannel?.handlers.length, 0);
+    const channel = fake.channels.get(`split-sync:${RECEIPT}`);
+    assertTrue(Boolean(channel && channel.handlers.length === 1), 'the receipt broadcast is bound');
     await act(async () => {
       for (let index = 0; index < 5; index += 1) channel?.handlers[0]?.();
       await new Promise((resolve) => setTimeout(resolve, 220));
@@ -304,7 +312,7 @@ it('coalesces a realtime burst and drops a stale response', async () => {
   }
 });
 
-it('polls every 15s only while the tab is visible and degraded', async () => {
+it('polls every 15s while the tab is visible, degraded or subscribed', async () => {
   resetRealtimeForTests();
   const scheduled: number[] = [];
   const cleared: number[] = [];
@@ -359,7 +367,7 @@ it('polls every 15s only while the tab is visible and degraded', async () => {
           onRefresh: () => undefined,
         }));
       });
-      assertTrue(!scheduled.slice(beforeHealthy).includes(WEB_REALTIME_POLL_MS), 'a subscribed tab does not poll');
+      assertTrue(scheduled.slice(beforeHealthy).includes(WEB_REALTIME_POLL_MS), 'a subscribed, visible tab still polls');
       act(() => {
         healthyRenderer?.unmount();
       });
@@ -370,6 +378,224 @@ it('polls every 15s only while the tab is visible and degraded', async () => {
     hidden.restore();
     globalThis.setInterval = originalSet;
     globalThis.clearInterval = originalClear;
+  }
+});
+
+type FakeTimers = {
+  intervals: Map<number, { fn: () => void; ms: number }>;
+  scheduled: number[];
+  tick: () => void;
+  restore: () => void;
+};
+
+function installFakeIntervals(): FakeTimers {
+  const intervals = new Map<number, { fn: () => void; ms: number }>();
+  const scheduled: number[] = [];
+  const originalSet = globalThis.setInterval;
+  const originalClear = globalThis.clearInterval;
+  let nextId = 1000;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => {
+    const id = nextId++;
+    intervals.set(id, { fn, ms: Number(ms) });
+    scheduled.push(Number(ms));
+    return id as unknown as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  globalThis.clearInterval = ((id: number) => {
+    intervals.delete(id);
+  }) as typeof clearInterval;
+  return {
+    intervals,
+    scheduled,
+    tick() {
+      for (const entry of [...intervals.values()]) {
+        if (entry.ms === WEB_REALTIME_POLL_MS) entry.fn();
+      }
+    },
+    restore() {
+      globalThis.setInterval = originalSet;
+      globalThis.clearInterval = originalClear;
+    },
+  };
+}
+
+function livePolls(timers: FakeTimers): number {
+  return [...timers.intervals.values()].filter((entry) => entry.ms === WEB_REALTIME_POLL_MS).length;
+}
+
+it('keys every topic on the receipt id and never on the share token', async () => {
+  resetRealtimeForTests();
+  const browser = installBrowser('visible');
+  const fake = createFakeClient();
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = await renderTree(createElement(Screen, { client: fake.client, onRefresh: () => undefined }));
+    });
+    assertTrue(fake.calls.length >= 2, 'opens the probe and the broadcast topic');
+    for (const topic of fake.calls) {
+      assertTrue(!topic.includes(SHARE), `topic leaks the share token: ${topic}`);
+      assertTrue(topic.includes(RECEIPT), `topic is not keyed on the receipt: ${topic}`);
+    }
+    assertTrue(fake.calls.includes(`split-sync:${RECEIPT}`), 'listens on the receipt broadcast topic');
+    assertTrue(fake.calls.some((topic) => topic.startsWith(`web-split:${RECEIPT}:`)), 'probe is keyed on the receipt');
+    act(() => {
+      renderer?.unmount();
+    });
+  } finally {
+    browser.restore();
+  }
+});
+
+it('splitSyncReceiptTopic accepts only UUIDs and lower-cases them', () => {
+  assertEqual(splitSyncReceiptTopic(RECEIPT.toUpperCase()), `split-sync:${RECEIPT}`);
+  assertEqual(splitSyncReceiptTopic(SHARE), null);
+  assertEqual(splitSyncReceiptTopic(null), null);
+  assertEqual(splitSyncReceiptTopic(`${RECEIPT}:x`), null);
+});
+
+it('defers every subscription until the receipt id is known', async () => {
+  resetRealtimeForTests();
+  const browser = installBrowser('visible');
+  const timers = installFakeIntervals();
+  const fake = createFakeClient();
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = await renderTree(createElement(Screen, { client: fake.client, onRefresh: () => undefined, receiptId: null }));
+    });
+    assertEqual(fake.calls.length, 0);
+    assertEqual(livePolls(timers), 0);
+    const rerender = renderer as unknown as { update: (node: ReactNode) => void };
+    await act(async () => {
+      rerender.update(createElement(Screen, { client: fake.client, onRefresh: () => undefined }));
+    });
+    assertTrue(fake.calls.includes(`split-sync:${RECEIPT}`), 'subscribes once the receipt id arrives');
+    assertEqual(livePolls(timers), 1);
+    act(() => {
+      renderer?.unmount();
+    });
+  } finally {
+    timers.restore();
+    browser.restore();
+  }
+});
+
+it('polls while SUBSCRIBED and visible, pauses when hidden or settled, and clears on unmount', async () => {
+  resetRealtimeForTests();
+  const browser = installBrowser('visible');
+  const timers = installFakeIntervals();
+  const fake = createFakeClient();
+  const reasons: WebRefreshReason[] = [];
+  const seen: WebRealtimeStatus[] = [];
+  let renderer: ReactTestRenderer | undefined;
+  const render = (settled: boolean) => createElement(Screen, {
+    client: fake.client,
+    settled,
+    onRefresh: (_isCurrent, reason) => {
+      reasons.push(reason);
+    },
+    onStatus: (status) => {
+      seen.push(status);
+    },
+  });
+  try {
+    await act(async () => {
+      renderer = await renderTree(render(false));
+    });
+    assertEqual(seen[seen.length - 1], 'SUBSCRIBED');
+    assertEqual(livePolls(timers), 1);
+    await act(async () => {
+      timers.tick();
+    });
+    assertEqual(reasons.filter((reason) => reason === 'poll').length, 1);
+
+    browser.browser.visibilityState = 'hidden';
+    await act(async () => {
+      browser.browser.dispatch('visibilitychange');
+    });
+    assertEqual(livePolls(timers), 0);
+
+    browser.browser.visibilityState = 'visible';
+    await act(async () => {
+      browser.browser.dispatch('visibilitychange');
+    });
+    assertEqual(livePolls(timers), 1);
+    assertTrue(reasons.includes('visible'), 'returning to the tab refetches at once');
+
+    // Re-render the same mounted component as settled.
+    const rerender = renderer as unknown as { update: (node: ReactNode) => void };
+    await act(async () => {
+      rerender.update(render(true));
+    });
+    assertEqual(livePolls(timers), 0);
+    const pollsBefore = reasons.filter((reason) => reason === 'poll').length;
+    await act(async () => {
+      timers.tick();
+    });
+    assertEqual(reasons.filter((reason) => reason === 'poll').length, pollsBefore);
+
+    await act(async () => {
+      rerender.update(render(false));
+    });
+    assertEqual(livePolls(timers), 1);
+
+    act(() => {
+      renderer?.unmount();
+    });
+    assertEqual(livePolls(timers), 0);
+  } finally {
+    timers.restore();
+    browser.restore();
+  }
+});
+
+it('skips a poll tick while an earlier refetch is still in flight', async () => {
+  resetRealtimeForTests();
+  const browser = installBrowser('visible');
+  const timers = installFakeIntervals();
+  const fake = createFakeClient();
+  const pending: (() => void)[] = [];
+  let polls = 0;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = await renderTree(createElement(Screen, {
+        client: fake.client,
+        onRefresh: (_isCurrent, reason) => new Promise<void>((resolve) => {
+          if (reason === 'poll') polls += 1;
+          pending.push(resolve);
+        }),
+      }));
+    });
+    await act(async () => {
+      timers.tick();
+    });
+    assertEqual(polls, 1);
+    await act(async () => {
+      timers.tick();
+      timers.tick();
+    });
+    assertEqual(polls, 1);
+    await act(async () => {
+      for (const resolve of pending.splice(0)) resolve();
+    });
+    // The mount-time broadcast refresh is debounced; let it run and settle.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    await act(async () => {
+      for (const resolve of pending.splice(0)) resolve();
+    });
+    await act(async () => {
+      timers.tick();
+    });
+    assertEqual(polls, 2);
+    act(() => {
+      renderer?.unmount();
+    });
+  } finally {
+    timers.restore();
+    browser.restore();
   }
 });
 

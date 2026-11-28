@@ -46,8 +46,24 @@ export function mayApplyRemoteSnapshot(gate: SyncGate, capturedEpoch: number): b
   return gate.inFlight === 0 && gate.epoch === capturedEpoch;
 }
 
+/**
+ * Legacy token-keyed topic. The native host screen (useSplitRealtime) still
+ * listens here, so the database keeps broadcasting to it for shipped builds.
+ */
 export function splitSyncTopic(shareToken: string): string {
   return `split-sync:${shareToken}`;
+}
+
+const RECEIPT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Receipt-keyed topic for the guest web page. The bearer share token never
+ * appears in the topic name, Realtime logs, or browser inspectors.
+ * Returns null for anything that is not a UUID.
+ */
+export function splitSyncReceiptTopic(receiptId: string | null | undefined): string | null {
+  if (typeof receiptId !== 'string' || !RECEIPT_ID.test(receiptId)) return null;
+  return `split-sync:${receiptId.toLowerCase()}`;
 }
 
 /** Realtime payload whitelist. Amounts and contact fields are dropped. */

@@ -6,6 +6,12 @@ import {
   isUnpaidToPaidTransition,
   type WebhookPayload,
 } from '../_shared/hostPaidEmail.ts';
+import {
+  claimHostPaidEmail,
+  newClaimTimestamp,
+  rollbackHostPaidClaim,
+  type HostPaidClaimClient,
+} from '../_shared/hostPaidClaim.ts';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -56,19 +62,14 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const claimed = await admin
-    .from('receipt_share_participants')
-    .update({ host_notified_at: new Date().toISOString() })
-    .eq('id', share.shareId)
-    .is('host_notified_at', null)
-    .select('id');
-
-  if (claimed.error) {
+  // Unique per request. Rollbacks match on it so they only undo this claim.
+  const claimedAt = newClaimTimestamp();
+  const claim = await claimHostPaidEmail(admin as unknown as HostPaidClaimClient, share.shareId, claimedAt);
+  if (claim === 'error') {
     console.log(JSON.stringify({ status: 'claim_failed', share_id: share.shareId }));
     return json(500, { ok: false });
   }
-  const claimedRows = Array.isArray(claimed.data) ? claimed.data : [];
-  if (claimedRows.length === 0) return json(200, { ok: true, skipped: 'already_notified' });
+  if (claim === 'already_notified') return json(200, { ok: true, skipped: 'already_notified' });
 
   const receiptResult = await admin
     .from('receipts')
@@ -77,7 +78,7 @@ Deno.serve(async (req) => {
     .maybeSingle();
 
   if (receiptResult.error) {
-    await rollbackClaim(admin, share.shareId);
+    await rollbackClaim(admin, share.shareId, claimedAt);
     console.log(JSON.stringify({ status: 'receipt_lookup_failed', share_id: share.shareId }));
     return json(500, { ok: false });
   }
@@ -85,7 +86,7 @@ Deno.serve(async (req) => {
   const receipt = asRecord(receiptResult.data);
   const hostUserId = typeof receipt?.host_id === 'string' && UUID_PATTERN.test(receipt.host_id) ? receipt.host_id : null;
   if (!receipt || !hostUserId) {
-    await rollbackClaim(admin, share.shareId);
+    await rollbackClaim(admin, share.shareId, claimedAt);
     return json(200, { ok: true, skipped: 'not_a_paid_transition' });
   }
 
@@ -95,7 +96,7 @@ Deno.serve(async (req) => {
     .eq('receipt_id', share.receiptId);
 
   if (sharesResult.error || !Array.isArray(sharesResult.data)) {
-    await rollbackClaim(admin, share.shareId);
+    await rollbackClaim(admin, share.shareId, claimedAt);
     console.log(JSON.stringify({ status: 'shares_lookup_failed', share_id: share.shareId }));
     return json(500, { ok: false });
   }
@@ -113,7 +114,7 @@ Deno.serve(async (req) => {
   const userResult = await admin.auth.admin.getUserById(hostUserId);
   const hostEmail = userResult.data?.user?.email;
   if (userResult.error) {
-    await rollbackClaim(admin, share.shareId);
+    await rollbackClaim(admin, share.shareId, claimedAt);
     console.log(JSON.stringify({ status: 'host_lookup_failed', share_id: share.shareId }));
     return json(500, { ok: false });
   }
@@ -151,12 +152,12 @@ Deno.serve(async (req) => {
     });
     httpStatus = response.status;
     if (response.status < 200 || response.status >= 300) {
-      await rollbackClaim(admin, share.shareId);
+      await rollbackClaim(admin, share.shareId, claimedAt);
       console.log(JSON.stringify({ status: 'resend_error', http_status: httpStatus, share_id: share.shareId }));
       return json(502, { ok: false });
     }
   } catch {
-    await rollbackClaim(admin, share.shareId);
+    await rollbackClaim(admin, share.shareId, claimedAt);
     console.log(JSON.stringify({ status: 'resend_error', http_status: httpStatus, share_id: share.shareId }));
     return json(502, { ok: false });
   }
@@ -244,10 +245,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 async function rollbackClaim(
   admin: ReturnType<typeof createClient>,
   shareId: string,
+  claimedAt: string,
 ) {
-  const { error } = await admin
-    .from('receipt_share_participants')
-    .update({ host_notified_at: null })
-    .eq('id', shareId);
-  if (error) console.log(JSON.stringify({ status: 'rollback_failed', share_id: shareId }));
+  const ok = await rollbackHostPaidClaim(admin as unknown as HostPaidClaimClient, shareId, claimedAt);
+  if (!ok) console.log(JSON.stringify({ status: 'rollback_failed', share_id: shareId }));
 }

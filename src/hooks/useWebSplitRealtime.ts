@@ -6,7 +6,7 @@ import {
   type RealtimeClientLike,
 } from '@/hooks/safeRealtimeChannel';
 import { logger } from '@/utils/logger';
-import { SPLIT_SYNC_EVENT, splitSyncTopic } from '@/utils/splitSync';
+import { SPLIT_SYNC_EVENT, splitSyncReceiptTopic } from '@/utils/splitSync';
 
 export const WEB_REALTIME_DEBOUNCE_MS = 150;
 export const WEB_REALTIME_POLL_MS = 15_000;
@@ -27,24 +27,37 @@ function allocateWebInstance(): number {
 type RefreshHandler = (isCurrent: () => boolean, reason: WebRefreshReason) => void | Promise<void>;
 
 /**
- * Guest-web Realtime for one share token.
- * Each mount gets its own topic so Strict Mode cannot join a channel twice.
- * Browser listeners and the degraded poll exist only on web.
+ * Guest-web sync for one shared bill.
+ *
+ * Anonymous guests cannot SELECT the share tables (RLS), so Postgres row
+ * events never reach them. Sync therefore comes from three sources:
+ * - the `split-sync:<receiptId>` broadcast sent by the database trigger,
+ * - an immediate refetch on visibilitychange / bfcache pageshow / online,
+ * - a 15s poll that runs whenever the tab is visible and the bill is not
+ *   settled, even while the channel reports SUBSCRIBED.
+ *
+ * Topics are keyed on the receipt id, never the bearer share token. Nothing
+ * subscribes until the receipt id is known from the first fetch.
  */
 export function useWebSplitRealtime({
   shareToken,
   receiptId = null,
+  settled = false,
   onRefresh,
   client,
 }: {
   shareToken: string | null;
   receiptId?: string | null;
+  /** True once every share is paid. Pauses the fallback poll. */
+  settled?: boolean;
   onRefresh: RefreshHandler;
   client?: RealtimeClientLike | null;
 }): WebRealtimeStatus {
   const [instanceId] = useState(allocateWebInstance);
   const fetchSeqRef = useRef(0);
   const onRefreshRef = useRef(onRefresh);
+  const settledRef = useRef(settled);
+  const syncPollRef = useRef<(() => void) | null>(null);
   const statusRef = useRef<WebRealtimeStatus>('IDLE');
   const [status, setStatus] = useState<WebRealtimeStatus>('IDLE');
 
@@ -52,21 +65,28 @@ export function useWebSplitRealtime({
     onRefreshRef.current = onRefresh;
   }, [onRefresh]);
 
+  useLayoutEffect(() => {
+    settledRef.current = settled;
+    syncPollRef.current?.();
+  }, [settled]);
+
+  const usableToken = typeof shareToken === 'string' && TOKEN_PATTERN.test(shareToken);
+  const receiptKey = typeof receiptId === 'string' && UUID_PATTERN.test(receiptId) ? receiptId.toLowerCase() : null;
+  const active = usableToken && receiptKey !== null;
+
   useEffect(() => {
-    const usableToken = typeof shareToken === 'string' && TOKEN_PATTERN.test(shareToken) ? shareToken : null;
-    if (!usableToken) {
+    if (!active || !receiptKey) {
       statusRef.current = 'IDLE';
       return;
     }
 
     let disposed = false;
-    let mounted = true;
+    let inFlight = 0;
     let channel: RealtimeChannelLike | null = null;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     const stops: (() => void)[] = [];
     const realtime = resolveClient(client);
-    const receiptFilter = typeof receiptId === 'string' && UUID_PATTERN.test(receiptId) ? receiptId : null;
 
     function publishStatus(next: WebRealtimeStatus) {
       statusRef.current = next;
@@ -75,16 +95,20 @@ export function useWebSplitRealtime({
     }
 
     function isCurrent(seq: number) {
-      return mounted && seq === fetchSeqRef.current;
+      return !disposed && seq === fetchSeqRef.current;
     }
 
     async function runRefresh(reason: WebRefreshReason) {
+      if (disposed) return;
       const seq = fetchSeqRef.current + 1;
       fetchSeqRef.current = seq;
+      inFlight += 1;
       try {
         await onRefreshRef.current(() => isCurrent(seq), reason);
       } catch (error) {
         logger.error('web-realtime', { code: 'REFRESH_FAILED', error });
+      } finally {
+        inFlight = Math.max(0, inFlight - 1);
       }
     }
 
@@ -114,6 +138,42 @@ export function useWebSplitRealtime({
       }
     }
 
+    function stopPoll() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    function shouldPoll() {
+      return !disposed && isWebPlatform() && !settledRef.current && visibilityState() === 'visible';
+    }
+
+    /** Starts the poll when it should run and stops it when it should not. */
+    function syncPoll() {
+      try {
+        if (!shouldPoll()) {
+          stopPoll();
+          return;
+        }
+        if (pollTimer) return;
+        pollTimer = setInterval(() => {
+          try {
+            if (!shouldPoll()) {
+              stopPoll();
+              return;
+            }
+            // A slow network must not stack refetches on top of each other.
+            if (inFlight > 0) return;
+            void runRefresh('poll');
+          } catch (error) {
+            logger.error('web-realtime', { code: 'POLL_FAILED', error });
+          }
+        }, WEB_REALTIME_POLL_MS);
+      } catch (error) {
+        logger.error('web-realtime', { code: 'POLL_FAILED', error });
+      }
+    }
+
     function closeChannel() {
       const current = channel;
       channel = null;
@@ -131,76 +191,21 @@ export function useWebSplitRealtime({
       }
     }
 
-    function bindChanges(next: RealtimeChannelLike) {
-      const emit = () => {
-        try {
-          scheduleRefresh();
-        } catch (error) {
-          logger.error('web-realtime', { code: 'EVENT_FAILED', error });
-        }
-      };
-      if (!receiptFilter) return;
-      next.on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'receipt_share_participants',
-        filter: `receipt_id=eq.${receiptFilter}`,
-      }, emit);
-      next.on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'receipt_share_claims',
-        filter: `receipt_id=eq.${receiptFilter}`,
-      }, emit);
-      next.on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'receipts',
-        filter: `id=eq.${receiptFilter}`,
-      }, emit);
-    }
-
-    function syncPoll() {
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-      if (!isWebPlatform() || disposed) return;
-      if (statusRef.current !== 'DEGRADED') return;
-      if (visibilityState() !== 'visible') return;
-      try {
-        pollTimer = setInterval(() => {
-          try {
-            if (disposed || statusRef.current !== 'DEGRADED' || visibilityState() !== 'visible') return;
-            immediateRefresh('poll');
-          } catch (error) {
-            logger.error('web-realtime', { code: 'POLL_FAILED', error });
-          }
-        }, WEB_REALTIME_POLL_MS);
-      } catch (error) {
-        logger.error('web-realtime', { code: 'POLL_FAILED', error });
-      }
-    }
-
+    /**
+     * Per-mount connection probe. It carries no row bindings; its status tells
+     * us when the socket dropped so a wake-up can reconnect.
+     */
     function openChannel() {
       closeChannel();
       if (disposed) return;
       if (!realtime) {
         publishStatus('DEGRADED');
-        syncPoll();
         return;
       }
       publishStatus('CONNECTING');
       try {
-        const topic = `web-split:${usableToken}:${instanceId}-${randomSuffix()}`;
-        const next = realtime.channel(topic);
+        const next = realtime.channel(`web-split:${receiptKey}:${instanceId}-${randomSuffix()}`);
         channel = next;
-        try {
-          bindChanges(next);
-        } catch (error) {
-          logger.error('web-realtime', { code: 'BIND_FAILED', error });
-          publishStatus('DEGRADED');
-        }
         try {
           next.subscribe((nextStatus) => {
             try {
@@ -209,11 +214,9 @@ export function useWebSplitRealtime({
               else if (nextStatus === 'CHANNEL_ERROR' || nextStatus === 'TIMED_OUT' || nextStatus === 'CLOSED') {
                 publishStatus('DEGRADED');
               }
-              syncPoll();
             } catch (error) {
               logger.error('web-realtime', { code: 'STATUS_FAILED', error });
               publishStatus('DEGRADED');
-              syncPoll();
             }
           });
         } catch (error) {
@@ -225,19 +228,21 @@ export function useWebSplitRealtime({
         channel = null;
         publishStatus('DEGRADED');
       }
-      syncPoll();
     }
 
     function recover() {
       immediateRefresh('visible');
       if (statusRef.current !== 'SUBSCRIBED') openChannel();
-      else syncPoll();
+      syncPoll();
     }
+
+    syncPollRef.current = syncPoll;
 
     try {
       openChannel();
-      if (realtime) {
-        stops.push(listenSharedBroadcast(realtime, splitSyncTopic(usableToken), SPLIT_SYNC_EVENT, () => {
+      const topic = splitSyncReceiptTopic(receiptKey);
+      if (realtime && topic) {
+        stops.push(listenSharedBroadcast(realtime, topic, SPLIT_SYNC_EVENT, () => {
           try {
             scheduleRefresh();
           } catch (error) {
@@ -273,6 +278,7 @@ export function useWebSplitRealtime({
           }
         }));
       }
+      syncPoll();
     } catch (error) {
       logger.error('web-realtime', { code: 'EFFECT_FAILED', error });
       publishStatus('DEGRADED');
@@ -281,9 +287,9 @@ export function useWebSplitRealtime({
 
     return () => {
       disposed = true;
-      mounted = false;
+      if (syncPollRef.current === syncPoll) syncPollRef.current = null;
       if (debounceTimer) clearTimeout(debounceTimer);
-      if (pollTimer) clearInterval(pollTimer);
+      stopPoll();
       for (const stop of stops) {
         try {
           stop();
@@ -293,10 +299,9 @@ export function useWebSplitRealtime({
       }
       closeChannel();
     };
-  }, [client, fetchSeqRef, instanceId, onRefreshRef, receiptId, shareToken, statusRef]);
+  }, [active, client, instanceId, receiptKey]);
 
-  const usableToken = typeof shareToken === 'string' && TOKEN_PATTERN.test(shareToken);
-  return usableToken ? status : 'IDLE';
+  return active ? status : 'IDLE';
 }
 
 function resolveClient(override: RealtimeClientLike | null | undefined): RealtimeClientLike | null {

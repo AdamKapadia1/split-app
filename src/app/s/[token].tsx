@@ -43,10 +43,9 @@ import { beginLocalMutation, captureEpoch, createSyncGate, finishLocalMutation, 
 import { reconcileSharedBill, splitEquallyDeterministic } from '@/utils/sharedSplitMath';
 import {
   confirmationFailure,
-  endConfirm,
   reconcilePendingPayment,
   recordPendingPayment,
-  tryBeginConfirm,
+  tryAcquireLocks,
   withPaidFlag,
   clearPendingPayment,
   type PendingPaymentProvider,
@@ -164,12 +163,6 @@ export default function SharedSplitScreen() {
     });
   }, [applyBill, fetchBill]);
 
-  useWebSplitRealtime({
-    shareToken: usableToken ? token : null,
-    receiptId: bill?.bill.id ?? null,
-    onRefresh: refreshFromSync,
-  });
-
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => {
@@ -188,7 +181,8 @@ export default function SharedSplitScreen() {
       setNotice('Enter a first name, up to 40 characters.');
       return;
     }
-    busy.current = true;
+    const release = tryAcquireLocks([busy]);
+    if (!release) return;
     beginLocalMutation(syncGate.current);
     setJoining(true);
     setNotice(null);
@@ -207,7 +201,7 @@ export default function SharedSplitScreen() {
     } catch (error) {
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not add that name.');
     } finally {
-      busy.current = false;
+      release();
       finishLocalMutation(syncGate.current);
       setJoining(false);
     }
@@ -232,8 +226,9 @@ export default function SharedSplitScreen() {
       setNotice(null);
       return;
     }
+    const release = tryAcquireLocks([busy]);
+    if (!release) return;
     const previous = bill;
-    busy.current = true;
     beginLocalMutation(syncGate.current);
     setBusyItemId(itemId);
     setNotice(null);
@@ -253,7 +248,7 @@ export default function SharedSplitScreen() {
       setBill(previous);
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not update that item.');
     } finally {
-      busy.current = false;
+      release();
       finishLocalMutation(syncGate.current);
       setBusyItemId(null);
     }
@@ -262,7 +257,8 @@ export default function SharedSplitScreen() {
   async function confirmHostItems() {
     if (!bill || !bill.bill.viewerIsHost || confirming) return;
     const ids = hostDraft ?? hostItemIds(bill);
-    busy.current = true;
+    const release = tryAcquireLocks([busy]);
+    if (!release) return;
     beginLocalMutation(syncGate.current);
     setConfirming(true);
     setNotice(null);
@@ -283,7 +279,7 @@ export default function SharedSplitScreen() {
     } catch (error) {
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not confirm your items.');
     } finally {
-      busy.current = false;
+      release();
       finishLocalMutation(syncGate.current);
       setConfirming(false);
     }
@@ -292,8 +288,9 @@ export default function SharedSplitScreen() {
   async function setPaid(isPaid: boolean) {
     if (!bill || !participantId || !person || busy.current || confirmingRef.current) return;
     if (!canMarkSharePaid(person)) return;
+    const release = tryAcquireLocks([busy], [confirmingRef]);
+    if (!release) return;
     const previous = bill;
-    busy.current = true;
     beginLocalMutation(syncGate.current);
     setPaying(true);
     setNotice(null);
@@ -320,7 +317,7 @@ export default function SharedSplitScreen() {
       setBill(previous);
       setNotice(error instanceof BillShareServiceError ? error.message : 'Could not update payment status.');
     } finally {
-      busy.current = false;
+      release();
       finishLocalMutation(syncGate.current);
       setPaying(false);
     }
@@ -363,20 +360,16 @@ export default function SharedSplitScreen() {
   }
 
   async function confirmReturnedPayment() {
-    if (!tryBeginConfirm(confirmingRef)) return;
-    if (!bill || !pendingPayment || !usableToken) {
-      endConfirm(confirmingRef);
-      return;
-    }
+    if (confirmingRef.current || busy.current) return;
+    if (!bill || !pendingPayment || !usableToken) return;
     const guestId = pendingPayment.guestId;
     const personRow = bill.participants.find((entry) => entry.id === guestId);
-    if (!personRow || personRow.isPaid || !canMarkSharePaid(personRow)) {
-      endConfirm(confirmingRef);
-      return;
-    }
+    if (!personRow || personRow.isPaid || !canMarkSharePaid(personRow)) return;
+    // Holds both locks so an in-flight Undo and this tap can never overlap.
+    const release = tryAcquireLocks([confirmingRef, busy]);
+    if (!release) return;
     const previous = bill;
     const paidAt = new Date().toISOString();
-    busy.current = true;
     beginLocalMutation(syncGate.current);
     setConfirmingPaid(true);
     setConfirmError(null);
@@ -407,8 +400,7 @@ export default function SharedSplitScreen() {
       setPendingPayment(failure.pending);
       setConfirmError(failure.error);
     } finally {
-      busy.current = false;
-      endConfirm(confirmingRef);
+      release();
       finishLocalMutation(syncGate.current);
       setConfirmingPaid(false);
     }
@@ -442,6 +434,12 @@ export default function SharedSplitScreen() {
     hostConfirmed,
     hostPreviewItemIds: bill.bill.viewerIsHost && person?.isHost ? selectedHostItems : undefined,
   }) : null;
+  useWebSplitRealtime({
+    shareToken: usableToken ? token : null,
+    receiptId: bill?.bill.id ?? null,
+    settled: splitLedger?.isAllSettled ?? false,
+    onRefresh: refreshFromSync,
+  });
   const hostMode = hostConfirmMode({
     confirmed: hostConfirmed,
     selectedCount: selectedHostItems.length,
